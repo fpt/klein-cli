@@ -1,0 +1,19 @@
+I need you to perform a multi-step refactoring of the provided Go code. Execute these changes in separate, isolated steps:
+
+**STEP 1**: Change the User ID field from `int` to `string` type
+- Update the User struct field type
+- Update ALL functions that use ID parameters (AddUser, GetUser, UpdateUserAge)
+- Update error messages to work with string IDs (change %d to %s)
+- Update the main() function to use string IDs instead of int IDs
+- Ensure code compiles and runs correctly after this step
+
+----
+
+**STEP 2**: Refactor `UpdateUserAge` to be a method on User struct
+- Remove the `UpdateUserAge` method from UserService
+- Add an `UpdateAge(newAge int)` method to the User struct
+- Update ALL calls from `service.UpdateUserAge(id, age)` to `user.UpdateAge(age)`
+- The method should update the user's age directly since it's called on the user instance
+- Ensure code compiles and runs correctly after this step
+
+This tests your ability to plan and execute changes in isolated, sequential steps while maintaining code integrity at each stage.

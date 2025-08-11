@@ -1,0 +1,76 @@
+version: "2"
+linters:
+  enable:
+    - copyloopvar
+    - dupl
+    - errname
+    - funlen
+    - goconst
+    - gocyclo
+    - gosec
+    - lll
+    - makezero
+    - misspell
+    - nilerr
+    - paralleltest
+    - perfsprint
+    - revive
+    - sloglint
+    - sqlclosecheck
+    - tagliatelle
+    - testifylint
+    - tparallel
+    - whitespace
+    - wrapcheck
+  settings:
+    dupl:
+      threshold: 100
+    goconst:
+      min-len: 3
+      min-occurrences: 3
+    gocyclo:
+      min-complexity: 10
+    govet:
+      enable:
+        - fieldalignment
+        - shadow
+    lll:
+      line-length: 120
+    misspell:
+      locale: US
+    whitespace:
+      multi-if: true
+  exclusions:
+    generated: lax
+    presets:
+      - common-false-positives
+      - legacy
+      - std-error-handling
+    paths:
+      - vendor
+      - testdata
+      - third_party$
+      - builtin$
+      - examples$
+formatters:
+  enable:
+    - gci
+    - gofumpt
+  settings:
+    gci:
+      sections:
+        - standard
+        - default
+        - prefix(github.com/fpt)
+      custom-order: true
+    gofumpt:
+      module-path: github.com/fpt/klein-cli
+      extra-rules: true
+  exclusions:
+    generated: lax
+    paths:
+      - vendor
+      - testdata
+      - third_party$
+      - builtin$
+      - examples$

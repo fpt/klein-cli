@@ -1,0 +1,255 @@
+syntax = "proto3";
+
+package klein.agent.v1;
+
+option go_package = "github.com/fpt/klein-cli/proto/klein/agent/v1;agentv1";
+
+// This API exposes the agent over gRPC/gRPC‑Web for editor integrations.
+// Design goals:
+// - grpc‑web friendly: primary flow is unary + server streaming
+// - Support editor-initiated callbacks via a companion unary endpoint (SubmitClientEvent)
+//   so the server can request client-side actions like reading editor buffers.
+// - Stream incremental events: thinking deltas, assistant deltas, tool calls/results
+// - Preserve session state and todos per working directory
+
+// Supported backends
+enum Backend {
+  BACKEND_UNSPECIFIED = 0;
+  BACKEND_OLLAMA      = 1;
+  BACKEND_ANTHROPIC   = 2;
+  BACKEND_OPENAI      = 3;
+  BACKEND_GEMINI      = 4;
+}
+
+// Agent/LLM settings mirrored from AGENTS.md
+message Settings {
+  Backend backend        = 1;   // ollama|anthropic|openai|gemini
+  string  model          = 2;   // model identifier
+  string  base_url       = 3;   // optional provider base URL (e.g., Azure/OpenAI-compatible)
+  int32   max_tokens     = 4;   // per-generation cap (0 = provider default)
+  int32   max_iterations = 5;   // ReAct loop cap (default 10)
+  string  working_dir    = 6;   // project path
+}
+
+message Capabilities {
+  bool tool_calling      = 1;
+  bool thinking          = 2;
+  bool vision            = 3;
+  bool structured_output = 4;
+}
+
+// Session lifecycle
+message StartSessionRequest {
+  Settings settings   = 1;
+  bool     interactive = 2; // interactive vs one-shot semantics
+}
+
+message StartSessionResponse {
+  string       session_id  = 1;
+  Capabilities capabilities = 2;
+}
+
+message ClearSessionRequest { string session_id = 1; }
+message ClearSessionResponse {}
+
+// Scenario discovery
+message ListScenariosRequest {}
+message Scenario {
+  string name        = 1;
+  string description = 2;
+  string tools       = 3; // tool scope string, e.g., "default, mcp:*"
+}
+message ListScenariosResponse { repeated Scenario scenarios = 1; }
+
+// Invocation API
+message InvokeRequest {
+  string session_id      = 1;
+  string scenario        = 2; // e.g., CODE | RESPOND
+  string user_input      = 3; // raw user request
+  bool   enable_thinking = 4; // request thinking when supported
+}
+
+// Streaming events
+enum InvokeState {
+  INVOKE_STATE_UNSPECIFIED = 0;
+  STARTED                  = 1;
+  THINKING                 = 2;
+  RUN_TOOL                 = 3;
+  WAITING_TOOL_RESULT      = 4;
+  COMPLETED                = 5;
+  ERROR                    = 6;
+}
+
+message StatusEvent {
+  InvokeState state = 1;
+  int32       iteration = 2; // ReAct loop index
+  string      tool_name = 3; // when RUN_TOOL/WAITING_TOOL_RESULT
+}
+
+message ThinkingDelta { string text = 1; }
+message AssistantDelta { string text = 1; }
+
+message ToolCall {
+  string id             = 1; // call id
+  string name           = 2; // tool name
+  string arguments_json = 3; // JSON-serialized args for display
+}
+
+message ToolResult {
+  string id        = 1; // must match the ToolCall id
+  string output    = 2; // text/preview result
+  string error     = 3; // non-empty if tool failed
+  bool   truncated = 4; // true if large output was truncated
+}
+
+message TokenUsage {
+  int32 input_tokens       = 1;
+  int32 output_tokens      = 2;
+  int32 total_tokens       = 3;
+  string model_id          = 4;
+  int32 max_context_tokens = 5;
+}
+
+message FinalMessage {
+  string text     = 1; // final assistant message
+  string thinking = 2; // optional reasoning content
+  TokenUsage usage = 3;
+}
+
+message InvokeEvent {
+  oneof event {
+    StatusEvent    status         = 1;
+    ThinkingDelta  thinking_delta = 2;
+    AssistantDelta assistant_delta= 3;
+    ToolCall       tool_call      = 4;
+    ToolResult     tool_result    = 5;
+    TokenUsage     usage          = 6;
+    FinalMessage   final          = 7;
+    string         warning        = 8; // one-line warnings (e.g., streaming fallback)
+    string         error          = 9; // terminal error message
+    // Server → Client request: ask the client (editor) to provide file content
+    RequestFileRead request_file_read = 10;
+    // Server → Client request: ask the client (editor) to execute a shell command via VS Code Terminal
+    ExecuteCommandRequest execute_command_request = 11;
+  }
+}
+
+// Server → Client: request the editor/extension to provide file content
+message RequestFileRead {
+  string request_id = 1; // unique correlation id
+  string path       = 2; // file path as understood by the editor
+  int32  offset     = 3; // optional 1-based start line
+  int32  limit      = 4; // optional line count
+  string reason     = 5; // human hint for prompting UX
+}
+
+// Todos API (to power a VS Code TODO panel)
+enum TodoStatus {
+  TODO_STATUS_UNSPECIFIED = 0;
+  PENDING     = 1;
+  IN_PROGRESS = 2;
+  COMPLETED   = 3;
+}
+
+enum TodoPriority {
+  TODO_PRIORITY_UNSPECIFIED = 0;
+  LOW    = 1;
+  MEDIUM = 2;
+  HIGH   = 3;
+}
+
+message TodoItem {
+  string       id       = 1;
+  string       content  = 2;
+  TodoStatus   status   = 3;
+  TodoPriority priority = 4;
+  string       created  = 5; // RFC3339
+  string       updated  = 6; // RFC3339
+}
+
+message GetTodosRequest { string session_id = 1; }
+message GetTodosResponse { repeated TodoItem items = 1; }
+
+message WriteTodosRequest {
+  string session_id = 1;
+  repeated TodoItem items = 2; // full replacement of todo list
+}
+message WriteTodosResponse { repeated TodoItem items = 1; }
+
+// Conversation preview for quick inline display
+message GetConversationPreviewRequest {
+  string session_id  = 1;
+  int32  max_messages = 2; // default: 10
+}
+message GetConversationPreviewResponse { string preview = 1; }
+
+// Update settings for an existing session
+message SetSettingsRequest {
+  string   session_id = 1;
+  Settings settings   = 2;
+}
+message SetSettingsResponse {}
+
+// Client → Server events (editor callbacks)
+// This unary endpoint enables gRPC‑Web clients to answer server requests
+// (e.g., provide file content) without bidi streaming.
+message ClientEvent {
+  string session_id = 1;
+  oneof event {
+    FileReadResponse file_read_response = 2;
+  }
+}
+
+message FileReadResponse {
+  string request_id = 1; // must match RequestFileRead.request_id
+  string path       = 2;
+  string content    = 3; // raw text as seen by the editor (respecting encoding, unsaved buffer state if applicable)
+  string encoding   = 4; // optional, e.g., utf-8
+  string error      = 5; // optional error message
+}
+
+message SubmitClientEventResponse {
+  string request_id = 1; // echoed when available
+  string status     = 2; // OK / ERROR
+  string error      = 3; // details when status == ERROR
+}
+
+// Server → Client: request running a command in VS Code integrated terminal
+message ExecuteCommandRequest {
+  string request_id    = 1; // unique correlation id
+  string command       = 2; // full command line to send to terminal
+  string cwd           = 3; // optional working directory (client may honor or ignore)
+  string terminal_name = 4; // optional preferred terminal name (e.g., "Klein Agent")
+  bool   reveal        = 5; // show terminal to user (default true on client)
+}
+
+// Client → Server: acknowledge that a command was dispatched to terminal
+message CommandDispatchResponse {
+  string request_id = 1; // must match ExecuteCommandRequest.request_id
+  string terminal_id = 2; // optional identifier/name used by client
+  string status      = 3; // SENT / ERROR
+  string error       = 4; // present when status == ERROR
+}
+
+service AgentService {
+  rpc StartSession (StartSessionRequest) returns (StartSessionResponse);
+  rpc ClearSession (ClearSessionRequest) returns (ClearSessionResponse);
+
+  rpc ListScenarios (ListScenariosRequest) returns (ListScenariosResponse);
+
+  // Server-streaming: emits Status/Thinking/Assistant deltas, ToolCall/ToolResult, Usage, Final, and errors.
+  rpc Invoke (InvokeRequest) returns (stream InvokeEvent);
+
+  // Client callbacks for editor-provided data (e.g., file reads)
+  rpc SubmitClientEvent (ClientEvent) returns (SubmitClientEventResponse);
+
+  // Todos panel
+  rpc GetTodos    (GetTodosRequest)    returns (GetTodosResponse);
+  rpc WriteTodos  (WriteTodosRequest)  returns (WriteTodosResponse);
+
+  // Conversation
+  rpc GetConversationPreview (GetConversationPreviewRequest) returns (GetConversationPreviewResponse);
+
+  // Dynamic settings
+  rpc SetSettings (SetSettingsRequest) returns (SetSettingsResponse);
+}

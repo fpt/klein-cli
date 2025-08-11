@@ -1,0 +1,4 @@
+{
+  "skill": "respond",
+  "allowed_tools": ["todo_write"]
+}

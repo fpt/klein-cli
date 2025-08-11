@@ -1,0 +1,26 @@
+Create a complete Go program that generates and prints the first 10 Fibonacci numbers.
+
+Requirements:
+- Create exactly ONE file named "main.go"
+- Include proper package main and main() function
+- Implement the Fibonacci sequence algorithm (each number is sum of the two preceding ones)
+- Generate and print the first 10 Fibonacci numbers using the algorithm
+- Output the numbers separated by spaces on a single line
+- Do NOT create additional files like go.mod, go.sum, or test files
+- Do NOT run go mod init or other module commands
+- Focus only on creating the single main.go file
+
+Expected result: A single file "main.go" that calculates and prints the first 10 Fibonacci numbers
+
+----
+Second task: Modify the program to accept a command line argument for the number of Fibonacci numbers to generate.
+
+Requirements:
+- Modify the existing main.go file (do NOT create new files)
+- Use os.Args to read command line arguments
+- If no argument is provided, default to 10 numbers
+- If an argument is provided, use that number (handle invalid input gracefully)
+- Do NOT create additional files or run module commands
+- You can run with `go run main.go` command but only once
+
+Expected result: The same main.go file that can accept a command line argument for count.

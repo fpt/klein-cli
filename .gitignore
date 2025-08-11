@@ -1,0 +1,15 @@
+.DS_Store
+
+# env
+.env
+
+# Klein
+.klein/logs/
+logs/
+
+# Go binary
+output/
+main
+
+# Test Suite
+testsuite/results/

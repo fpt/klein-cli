@@ -1,0 +1,12 @@
+Create a simple Go function that adds two integers and returns the result.
+
+Requirements:
+- Create exactly ONE file named "add.go"
+- The file should contain a function named "add" that takes two int parameters and returns their sum
+- Include proper package declaration (package main)
+- Include a main() function for testing the add function
+- Do NOT create additional files like go.mod, go.sum, or test files
+- Do NOT run go mod init or other module commands
+- Focus only on creating the single add.go file with both the add function and main function
+
+Expected result: A single file "add.go" containing both the add function and a main function that demonstrates its usage.

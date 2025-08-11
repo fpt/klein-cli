@@ -1,0 +1,8 @@
+{
+  "name": "openai",
+  "llm": {
+    "backend": "openai",
+    "model": "gpt-5-mini",
+    "maxTokens": 2048
+  }
+}

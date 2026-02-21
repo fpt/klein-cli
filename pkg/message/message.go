@@ -169,6 +169,14 @@ func (c *ChatMessage) Metadata() map[string]any {
 	return c.metadata
 }
 
+// SetMetadata sets a key-value pair in the metadata map
+func (c *ChatMessage) SetMetadata(key string, value any) {
+	if c.metadata == nil {
+		c.metadata = make(map[string]any)
+	}
+	c.metadata[key] = value
+}
+
 // TruncatedString returns a truncated, user-friendly representation for conversation previews
 func (c *ChatMessage) TruncatedString() string {
 	content := c.content

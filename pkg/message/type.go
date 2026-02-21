@@ -4,10 +4,11 @@ import "time"
 
 // TokenUsage holds token usage information for a message
 type TokenUsage struct {
-	InputTokens  int // Tokens consumed for input (prompt + context)
-	OutputTokens int // Tokens generated in response
-	TotalTokens  int // Total tokens (input + output)
-	CachedTokens int // Input tokens served from the provider's prompt cache (subset of InputTokens)
+	InputTokens         int // Tokens consumed for input (prompt + context)
+	OutputTokens        int // Tokens generated in response
+	TotalTokens         int // Total tokens (input + output)
+	CachedTokens        int // Input tokens served from the provider's prompt cache (subset of InputTokens)
+	CacheCreationTokens int // Input tokens written into the cache this call (Anthropic only; billed at 1.25x)
 }
 
 type MessageType int

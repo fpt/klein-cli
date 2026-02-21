@@ -339,8 +339,8 @@ func printTokenUsage(llm domain.LLM) {
 	if !ok {
 		return
 	}
-	fmt.Fprintf(os.Stderr, "[usage] input=%d output=%d total=%d cached=%d\n",
-		usage.InputTokens, usage.OutputTokens, usage.TotalTokens, usage.CachedTokens)
+	fmt.Fprintf(os.Stderr, "[usage] input=%d output=%d total=%d cached=%d cache_creation=%d\n",
+		usage.InputTokens, usage.OutputTokens, usage.TotalTokens, usage.CachedTokens, usage.CacheCreationTokens)
 }
 
 // hasEnabledMCPServers checks if there are any enabled MCP servers

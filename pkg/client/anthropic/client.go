@@ -356,18 +356,24 @@ func (c *AnthropicClient) chatWithStreaming(ctx context.Context, messageParams a
 		return message.NewToolCallBatch(calls), nil
 	}
 
-	// Capture token usage if available in accumulated message
-	// Anthropic Usage includes: InputTokens, OutputTokens, CacheCreationInputTokens, CacheReadInputTokens
-	// We record input/output/total only for quick visibility; cache details can be added later if needed.
+	// Capture token usage from the accumulated message, including cache stats.
+	// CacheReadInputTokens: tokens served from cache (savings).
+	// CacheCreationInputTokens: tokens written into cache this call (billed at 1.25x).
 	c.lastUsage = message.TokenUsage{
-		InputTokens:  int(acc.Usage.InputTokens),
-		OutputTokens: int(acc.Usage.OutputTokens),
-		TotalTokens:  int(acc.Usage.InputTokens + acc.Usage.OutputTokens),
+		InputTokens:         int(acc.Usage.InputTokens),
+		OutputTokens:        int(acc.Usage.OutputTokens),
+		TotalTokens:         int(acc.Usage.InputTokens + acc.Usage.OutputTokens),
+		CachedTokens:        int(acc.Usage.CacheReadInputTokens),
+		CacheCreationTokens: int(acc.Usage.CacheCreationInputTokens),
 	}
 
 	// Create response message with thinking content if available
 	if thinkingBuilder.Len() > 0 {
-		return message.NewChatMessageWithThinking(message.MessageTypeAssistant, content, finalThinking), nil
+		msg := message.NewChatMessageWithThinking(message.MessageTypeAssistant, content, finalThinking)
+		if finalSignature != "" {
+			msg.SetMetadata("anthropic_thinking_signature", finalSignature)
+		}
+		return msg, nil
 	}
 
 	return message.NewChatMessage(message.MessageTypeAssistant, content), nil

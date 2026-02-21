@@ -150,7 +150,10 @@ func unsanitizeToolNameFromAnthropic(sanitizedName string) string {
 	return sanitizedName
 }
 
-// convertToolsToAnthropic converts domain tools to Anthropic format
+// convertToolsToAnthropic converts domain tools to Anthropic format.
+// The last tool in the list is marked with cache_control: ephemeral so that
+// Anthropic caches the entire tool list (everything up to and including the
+// marker) on the first call and serves it from cache on subsequent calls.
 func convertToolsToAnthropic(tools map[message.ToolName]message.Tool) []anthropic.ToolUnionParam {
 	var anthropicTools []anthropic.ToolUnionParam
 
@@ -181,6 +184,16 @@ func convertToolsToAnthropic(tools map[message.ToolName]message.Tool) []anthropi
 		}
 
 		anthropicTools = append(anthropicTools, anthropicTool)
+	}
+
+	// Mark the last tool with cache_control: ephemeral.
+	// Anthropic caches all content up to and including the last marked item,
+	// so this caches the full tool list across calls within the same session.
+	if len(anthropicTools) > 0 {
+		last := &anthropicTools[len(anthropicTools)-1]
+		if last.OfTool != nil {
+			last.OfTool.CacheControl = anthropic.NewCacheControlEphemeralParam()
+		}
 	}
 
 	return anthropicTools
@@ -305,10 +318,14 @@ func toAnthropicMessages(messages []message.Message) []anthropic.MessageParam {
 
 			// Add thinking block first if present (required by Anthropic when thinking is enabled)
 			if thinking := msg.Thinking(); thinking != "" {
+				thinkingBlockParam := &anthropic.ThinkingBlockParam{
+					Thinking: thinking,
+				}
+				if signature, ok := msg.Metadata()["anthropic_thinking_signature"].(string); ok && signature != "" {
+					thinkingBlockParam.Signature = signature
+				}
 				thinkingBlock := anthropic.ContentBlockParamUnion{
-					OfThinking: &anthropic.ThinkingBlockParam{
-						Thinking: thinking,
-					},
+					OfThinking: thinkingBlockParam,
 				}
 				contentBlocks = append(contentBlocks, thinkingBlock)
 			}

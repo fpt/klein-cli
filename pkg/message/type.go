@@ -7,6 +7,7 @@ type TokenUsage struct {
 	InputTokens  int // Tokens consumed for input (prompt + context)
 	OutputTokens int // Tokens generated in response
 	TotalTokens  int // Total tokens (input + output)
+	CachedTokens int // Input tokens served from the provider's prompt cache (subset of InputTokens)
 }
 
 type MessageType int

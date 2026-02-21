@@ -176,6 +176,7 @@ func (c *OpenAIClient) Chat(ctx context.Context, messages []message.Message, ena
 			InputTokens:  int(resp.Usage.InputTokens),
 			OutputTokens: int(resp.Usage.OutputTokens),
 			TotalTokens:  int(resp.Usage.TotalTokens),
+			CachedTokens: int(resp.Usage.InputTokensDetails.CachedTokens),
 		}
 	}
 
@@ -360,6 +361,7 @@ func (c *OpenAIClient) chatWithStreaming(ctx context.Context, messages []message
 					InputTokens:  int(resp.Usage.InputTokens),
 					OutputTokens: int(resp.Usage.OutputTokens),
 					TotalTokens:  int(resp.Usage.TotalTokens),
+					CachedTokens: int(resp.Usage.InputTokensDetails.CachedTokens),
 				}
 			}
 
@@ -660,6 +662,7 @@ func (c *OpenAIClient) chatWithToolChoiceStreaming(ctx context.Context, params r
 			InputTokens:  int(resp.Usage.InputTokens),
 			OutputTokens: int(resp.Usage.OutputTokens),
 			TotalTokens:  int(resp.Usage.TotalTokens),
+			CachedTokens: int(resp.Usage.InputTokensDetails.CachedTokens),
 		}
 	}
 
@@ -928,6 +931,7 @@ func (c *OpenAIClient) chatWithToolChoiceNonStreaming(ctx context.Context, param
 			InputTokens:  int(resp.Usage.InputTokens),
 			OutputTokens: int(resp.Usage.OutputTokens),
 			TotalTokens:  int(resp.Usage.TotalTokens),
+			CachedTokens: int(resp.Usage.InputTokensDetails.CachedTokens),
 		}
 	}
 

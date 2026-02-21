@@ -281,6 +281,7 @@ func executeCommand(ctx context.Context, a *app.Agent, userInput string, skillNa
 	model := a.GetLLMClient().ModelID()
 	app.WriteResponseHeader(w, model, false)
 	fmt.Fprintln(w, response.Content())
+	printTokenUsage(a.GetLLMClient())
 }
 
 func executeMultiTurnFile(ctx context.Context, a *app.Agent, filePath string, skillName string) {
@@ -320,9 +321,26 @@ func executeMultiTurnFile(ctx context.Context, a *app.Agent, filePath string, sk
 		app.WriteResponseHeader(w, model, false)
 		fmt.Fprintln(w, response.Content())
 		fmt.Fprintf(w, "%s\n\n", strings.Repeat("-", 60))
+		printTokenUsage(a.GetLLMClient())
 	}
 
 	fmt.Println("All turns completed.")
+}
+
+// printTokenUsage prints a [usage] line to stderr if the client exposes token usage.
+// The line is written to stderr so it does not pollute stdout output parsing in tests.
+// Format: [usage] input=N output=N total=N cached=N
+func printTokenUsage(llm domain.LLM) {
+	provider, ok := llm.(domain.TokenUsageProvider)
+	if !ok {
+		return
+	}
+	usage, ok := provider.LastTokenUsage()
+	if !ok {
+		return
+	}
+	fmt.Fprintf(os.Stderr, "[usage] input=%d output=%d total=%d cached=%d\n",
+		usage.InputTokens, usage.OutputTokens, usage.TotalTokens, usage.CachedTokens)
 }
 
 // hasEnabledMCPServers checks if there are any enabled MCP servers

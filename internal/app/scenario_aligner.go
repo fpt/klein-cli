@@ -13,13 +13,18 @@ import (
 var agentSituationLogger = pkgLogger.NewComponentLogger("agent-situation")
 
 // AgentSituation injects situational context messages during ReAct iterations.
-// Handles behavioral nudges (iteration limits, tool result guidance).
-// Runtime state like todos and cache is handled via ToolAnnotator instead.
-type AgentSituation struct{}
+// Handles behavioral nudges (iteration limits, tool result guidance) and
+// runtime state from tool managers (web cache, todo counts) so that tool
+// descriptions stay static and Anthropic prompt caching can hit.
+type AgentSituation struct {
+	toolState domain.ToolStateProvider // optional; nil if no state tracking needed
+}
 
 // NewAgentSituation creates a new AgentSituation.
-func NewAgentSituation() *AgentSituation {
-	return &AgentSituation{}
+// Pass a ToolStateProvider (e.g. CompositeToolManager) to include dynamic tool state
+// in situation messages; pass nil to disable state injection.
+func NewAgentSituation(toolState domain.ToolStateProvider) *AgentSituation {
+	return &AgentSituation{toolState: toolState}
 }
 
 func (a *AgentSituation) InjectMessage(state domain.State, curIter, iterLimit int) {
@@ -32,6 +37,15 @@ func (a *AgentSituation) InjectMessage(state domain.State, curIter, iterLimit in
 	}
 
 	var messages []string
+
+	// Include dynamic tool state (web cache entries, todo counts) if available.
+	// This keeps the information ephemeral (removed each iteration) and out of
+	// tool descriptions, so Anthropic can cache the stable tool list.
+	if a.toolState != nil {
+		if s := a.toolState.GetToolState(); s != "" {
+			messages = append(messages, s)
+		}
+	}
 
 	// if the last message is a tool response, we prepend a special system message
 	if lastMsg := state.GetLastMessage(); lastMsg != nil && lastMsg.Type() == message.MessageTypeToolResult {

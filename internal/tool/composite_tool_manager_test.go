@@ -5,16 +5,17 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/fpt/klein-cli/pkg/agent/domain"
 	"github.com/fpt/klein-cli/pkg/message"
 )
 
-// mockAnnotator implements domain.ToolAnnotator for testing.
-type mockAnnotator struct {
-	annotations map[message.ToolName]string
+// mockStateProvider implements domain.ToolStateProvider for testing.
+type mockStateProvider struct {
+	state string
 }
 
-func (m *mockAnnotator) AnnotateTools() map[message.ToolName]string {
-	return m.annotations
+func (m *mockStateProvider) GetToolState() string {
+	return m.state
 }
 
 // mockToolManager is a simple tool manager for testing.
@@ -48,13 +49,17 @@ func (m *mockToolManager) RegisterTool(name message.ToolName, desc message.ToolD
 	m.tools[name] = &webTool{name: name, description: desc, handler: handler}
 }
 
-// mockAnnotatingToolManager is both a ToolManager and ToolAnnotator.
-type mockAnnotatingToolManager struct {
+// mockStatefulToolManager is both a ToolManager and ToolStateProvider.
+type mockStatefulToolManager struct {
 	*mockToolManager
-	*mockAnnotator
+	*mockStateProvider
 }
 
-func TestCompositeToolManager_NoAnnotators(t *testing.T) {
+// Compile-time check that mockStatefulToolManager implements both interfaces.
+var _ domain.ToolManager = (*mockStatefulToolManager)(nil)
+var _ domain.ToolStateProvider = (*mockStatefulToolManager)(nil)
+
+func TestCompositeToolManager_NoStateProviders(t *testing.T) {
 	mgr := newMockToolManager("Read", "Write")
 	composite := NewCompositeToolManager(mgr)
 
@@ -69,85 +74,106 @@ func TestCompositeToolManager_NoAnnotators(t *testing.T) {
 			t.Errorf("expected no annotation in description, got: %s", desc)
 		}
 	}
+
+	// GetToolState should return empty string when no providers.
+	if s := composite.GetToolState(); s != "" {
+		t.Errorf("expected empty state, got: %q", s)
+	}
 }
 
-func TestCompositeToolManager_WithAnnotator(t *testing.T) {
-	mgr := &mockAnnotatingToolManager{
-		mockToolManager: newMockToolManager("WebFetch", "WebFetchBlock", "Read"),
-		mockAnnotator: &mockAnnotator{
-			annotations: map[message.ToolName]string{
-				"WebFetch":      "cached: https://example.com 30s ago",
-				"WebFetchBlock": "cached: https://example.com 30s ago",
-			},
-		},
+func TestCompositeToolManager_WithStateProvider(t *testing.T) {
+	mgr := &mockStatefulToolManager{
+		mockToolManager:   newMockToolManager("WebFetch", "WebFetchBlock", "Read"),
+		mockStateProvider: &mockStateProvider{state: "Web cache: https://example.com (30s ago)"},
 	}
 
 	composite := NewCompositeToolManager(mgr)
-	tools := composite.GetTools()
 
-	// WebFetch should have annotation.
+	// Tool descriptions must remain static — no dynamic annotations.
+	tools := composite.GetTools()
 	wf := tools["WebFetch"]
 	if wf == nil {
 		t.Fatal("WebFetch not found")
 	}
 	desc := wf.Description().String()
-	if !strings.Contains(desc, "cached: https://example.com 30s ago") {
-		t.Errorf("expected annotation in WebFetch description, got: %s", desc)
+	if strings.Contains(desc, "cached") {
+		t.Errorf("tool description should be static, got: %s", desc)
+	}
+	if desc != "Description for WebFetch" {
+		t.Errorf("expected original description, got: %s", desc)
 	}
 
-	// Read should NOT have annotation.
-	rd := tools["Read"]
-	if rd == nil {
-		t.Fatal("Read not found")
-	}
-	rdDesc := rd.Description().String()
-	if strings.Contains(rdDesc, "cached") {
-		t.Errorf("Read should not be annotated, got: %s", rdDesc)
+	// State is exposed via GetToolState, not in descriptions.
+	state := composite.GetToolState()
+	if !strings.Contains(state, "https://example.com") {
+		t.Errorf("expected state to contain URL, got: %q", state)
 	}
 }
 
-func TestCompositeToolManager_AnnotatorDynamic(t *testing.T) {
-	ann := &mockAnnotator{annotations: nil}
-	mgr := &mockAnnotatingToolManager{
-		mockToolManager: newMockToolManager("WebFetch"),
-		mockAnnotator:   ann,
+func TestCompositeToolManager_StateProviderDynamic(t *testing.T) {
+	sp := &mockStateProvider{state: ""}
+	mgr := &mockStatefulToolManager{
+		mockToolManager:   newMockToolManager("WebFetch"),
+		mockStateProvider: sp,
 	}
 
 	composite := NewCompositeToolManager(mgr)
 
-	// First call: no annotations.
-	tools1 := composite.GetTools()
-	desc1 := tools1["WebFetch"].Description().String()
-	if strings.Contains(desc1, "cached") {
-		t.Errorf("expected no annotation initially, got: %s", desc1)
+	// First call: no state.
+	if s := composite.GetToolState(); s != "" {
+		t.Errorf("expected empty state initially, got: %q", s)
+	}
+	// Tool description is unchanged regardless of state.
+	desc := composite.GetTools()["WebFetch"].Description().String()
+	if strings.Contains(desc, "cached") {
+		t.Errorf("tool description should not contain state: %s", desc)
 	}
 
-	// Change annotations dynamically.
-	ann.annotations = map[message.ToolName]string{
-		"WebFetch": "cached: https://test.com 10s ago",
-	}
+	// Update state dynamically.
+	sp.state = "Web cache: https://test.com (10s ago)"
 
-	// Second call: should now have annotation.
-	tools2 := composite.GetTools()
-	desc2 := tools2["WebFetch"].Description().String()
-	if !strings.Contains(desc2, "cached: https://test.com 10s ago") {
-		t.Errorf("expected dynamic annotation, got: %s", desc2)
+	// Second call: should now return state.
+	s2 := composite.GetToolState()
+	if !strings.Contains(s2, "https://test.com") {
+		t.Errorf("expected updated state, got: %q", s2)
+	}
+	// Tool description must still be static.
+	desc2 := composite.GetTools()["WebFetch"].Description().String()
+	if strings.Contains(desc2, "cached") {
+		t.Errorf("tool description should remain static after state update: %s", desc2)
 	}
 }
 
-func TestCompositeToolManager_CallToolUnaffectedByAnnotation(t *testing.T) {
-	mgr := &mockAnnotatingToolManager{
-		mockToolManager: newMockToolManager("WebFetch"),
-		mockAnnotator: &mockAnnotator{
-			annotations: map[message.ToolName]string{
-				"WebFetch": "cached: test",
-			},
-		},
+func TestCompositeToolManager_MultipleStateProviders(t *testing.T) {
+	mgr1 := &mockStatefulToolManager{
+		mockToolManager:   newMockToolManager("WebFetch"),
+		mockStateProvider: &mockStateProvider{state: "Web cache: https://example.com (5s ago)"},
+	}
+	mgr2 := &mockStatefulToolManager{
+		mockToolManager:   newMockToolManager("todo_write"),
+		mockStateProvider: &mockStateProvider{state: "Todo list: 3 items (1 in_progress, 2 pending)"},
+	}
+
+	composite := NewCompositeToolManager(mgr1, mgr2)
+
+	state := composite.GetToolState()
+	if !strings.Contains(state, "Web cache") {
+		t.Errorf("expected web cache state, got: %q", state)
+	}
+	if !strings.Contains(state, "Todo list") {
+		t.Errorf("expected todo state, got: %q", state)
+	}
+}
+
+func TestCompositeToolManager_CallToolUnaffectedByState(t *testing.T) {
+	mgr := &mockStatefulToolManager{
+		mockToolManager:   newMockToolManager("WebFetch"),
+		mockStateProvider: &mockStateProvider{state: "Web cache: https://test.com (10s ago)"},
 	}
 
 	composite := NewCompositeToolManager(mgr)
 
-	// CallTool should still work (uses toolsMap, not annotated wrapper).
+	// CallTool should work normally regardless of state.
 	result, err := composite.CallTool(context.Background(), "WebFetch", nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)

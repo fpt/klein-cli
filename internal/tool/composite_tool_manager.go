@@ -3,16 +3,18 @@ package tool
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"github.com/fpt/klein-cli/pkg/agent/domain"
 	"github.com/fpt/klein-cli/pkg/message"
 )
 
-// CompositeToolManager combines multiple tool managers into one
+// CompositeToolManager combines multiple tool managers into one.
+// It also implements domain.ToolStateProvider by aggregating state from child managers.
 type CompositeToolManager struct {
-	managers   []domain.ToolManager
-	annotators []domain.ToolAnnotator
-	toolsMap   map[message.ToolName]message.Tool
+	managers       []domain.ToolManager
+	stateProviders []domain.ToolStateProvider
+	toolsMap       map[message.ToolName]message.Tool
 }
 
 // NewCompositeToolManager creates a new composite tool manager from multiple managers
@@ -28,13 +30,28 @@ func NewCompositeToolManager(managers ...domain.ToolManager) *CompositeToolManag
 		for _, tool := range tools {
 			composite.toolsMap[tool.Name()] = tool
 		}
-		// Collect annotators via type assertion.
-		if ann, ok := manager.(domain.ToolAnnotator); ok {
-			composite.annotators = append(composite.annotators, ann)
+		// Collect state providers via type assertion.
+		if sp, ok := manager.(domain.ToolStateProvider); ok {
+			composite.stateProviders = append(composite.stateProviders, sp)
 		}
 	}
 
 	return composite
+}
+
+// GetToolState implements domain.ToolStateProvider.
+// Aggregates state strings from all child managers that implement ToolStateProvider.
+func (c *CompositeToolManager) GetToolState() string {
+	var parts []string
+	for _, sp := range c.stateProviders {
+		if s := sp.GetToolState(); s != "" {
+			parts = append(parts, s)
+		}
+	}
+	if len(parts) == 0 {
+		return ""
+	}
+	return strings.Join(parts, "\n")
 }
 
 // GetTool returns a tool by name from any of the managed tool managers
@@ -43,38 +60,11 @@ func (c *CompositeToolManager) GetTool(name message.ToolName) (message.Tool, boo
 	return tool, exists
 }
 
-// GetTools returns all tools, applying dynamic annotations from any ToolAnnotator managers.
+// GetTools returns all tools with their static descriptions.
+// Dynamic runtime state (cache entries, todo counts) is exposed via GetToolState()
+// and injected into situation messages to keep tool descriptions stable for prompt caching.
 func (c *CompositeToolManager) GetTools() map[message.ToolName]message.Tool {
-	if len(c.annotators) == 0 {
-		return c.toolsMap
-	}
-
-	// Collect all annotations.
-	annotations := make(map[message.ToolName]string)
-	for _, ann := range c.annotators {
-		for name, text := range ann.AnnotateTools() {
-			if text != "" {
-				annotations[name] = text
-			}
-		}
-	}
-	if len(annotations) == 0 {
-		return c.toolsMap
-	}
-
-	// Build a new map with annotated descriptions where applicable.
-	result := make(map[message.ToolName]message.Tool, len(c.toolsMap))
-	for name, tool := range c.toolsMap {
-		if ann, ok := annotations[name]; ok {
-			result[name] = &annotatedTool{
-				Tool: tool,
-				desc: message.ToolDescription(fmt.Sprintf("%s (%s)", tool.Description(), ann)),
-			}
-		} else {
-			result[name] = tool
-		}
-	}
-	return result
+	return c.toolsMap
 }
 
 // CallTool executes a tool from any of the managed tool managers
@@ -93,12 +83,3 @@ func (c *CompositeToolManager) RegisterTool(name message.ToolName, description m
 	panic("RegisterTool not supported on CompositeToolManager - register on underlying managers instead")
 }
 
-// annotatedTool wraps a Tool with a dynamically enhanced description.
-type annotatedTool struct {
-	message.Tool
-	desc message.ToolDescription
-}
-
-func (a *annotatedTool) Description() message.ToolDescription {
-	return a.desc
-}

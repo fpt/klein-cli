@@ -127,12 +127,12 @@ func (m *TodoToolManager) IsAllCompleted() bool {
 	return true
 }
 
-// AnnotateTools implements domain.ToolAnnotator.
-// Returns a compact todo status summary on the todo_write tool.
-func (m *TodoToolManager) AnnotateTools() map[message.ToolName]string {
+// GetToolState implements domain.ToolStateProvider.
+// Returns a compact todo status summary so the model knows current task progress.
+func (m *TodoToolManager) GetToolState() string {
 	items := m.todoRepository.GetItems()
 	if len(items) == 0 {
-		return nil
+		return ""
 	}
 
 	counts := map[string]int{}
@@ -145,7 +145,7 @@ func (m *TodoToolManager) AnnotateTools() map[message.ToolName]string {
 	}
 
 	total := len(items)
-	ann := fmt.Sprintf("%d items", total)
+	ann := fmt.Sprintf("Todo list: %d items", total)
 
 	var parts []string
 	for _, st := range []string{"in_progress", "pending", "completed"} {
@@ -154,16 +154,14 @@ func (m *TodoToolManager) AnnotateTools() map[message.ToolName]string {
 		}
 	}
 	if len(parts) > 0 {
-		ann += ": " + fmt.Sprintf("%s", joinParts(parts))
+		ann += " (" + joinParts(parts) + ")"
 	}
 
 	if m.IsAllCompleted() {
 		ann += " -- all completed"
 	}
 
-	return map[message.ToolName]string{
-		"todo_write": ann,
-	}
+	return ann
 }
 
 func joinParts(parts []string) string {
@@ -174,8 +172,8 @@ func joinParts(parts []string) string {
 	return result
 }
 
-// Compile-time check that TodoToolManager implements ToolAnnotator.
-var _ domain.ToolAnnotator = (*TodoToolManager)(nil)
+// Compile-time check that TodoToolManager implements ToolStateProvider.
+var _ domain.ToolStateProvider = (*TodoToolManager)(nil)
 
 // registerTodoTools registers all todo management tools
 func (m *TodoToolManager) registerTodoTools() {

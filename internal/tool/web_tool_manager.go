@@ -263,15 +263,11 @@ func (m *WebToolManager) getCachedBlocks(urlStr string) *cachedPage {
 	return cached
 }
 
-// AnnotateTools implements domain.ToolAnnotator.
-// Returns cache state annotations for WebFetch and WebFetchBlock.
-func (m *WebToolManager) AnnotateTools() map[message.ToolName]string {
+// GetToolState implements domain.ToolStateProvider.
+// Returns cached URL entries so the model knows what pages are already in cache.
+func (m *WebToolManager) GetToolState() string {
 	m.cacheMu.Lock()
 	defer m.cacheMu.Unlock()
-
-	if len(m.blockCache) == 0 {
-		return nil
-	}
 
 	var parts []string
 	for u, page := range m.blockCache {
@@ -279,21 +275,16 @@ func (m *WebToolManager) AnnotateTools() map[message.ToolName]string {
 			continue
 		}
 		ago := time.Since(page.fetchedAt).Truncate(time.Second)
-		parts = append(parts, fmt.Sprintf("%s %s ago", u, ago))
+		parts = append(parts, fmt.Sprintf("%s (%s ago)", u, ago))
 	}
 	if len(parts) == 0 {
-		return nil
+		return ""
 	}
-
-	ann := "cached: " + strings.Join(parts, ", ")
-	return map[message.ToolName]string{
-		"WebFetch":      ann,
-		"WebFetchBlock": ann,
-	}
+	return "Web cache: " + strings.Join(parts, ", ")
 }
 
-// Compile-time check that WebToolManager implements ToolAnnotator.
-var _ domain.ToolAnnotator = (*WebToolManager)(nil)
+// Compile-time check that WebToolManager implements ToolStateProvider.
+var _ domain.ToolStateProvider = (*WebToolManager)(nil)
 
 // parseBlockIndices parses a comma-separated string of 1-based indices.
 func parseBlockIndices(s string) ([]int, error) {

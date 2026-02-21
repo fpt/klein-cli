@@ -6,11 +6,12 @@ import (
 	"github.com/fpt/klein-cli/pkg/message"
 )
 
-// ToolAnnotator is optionally implemented by ToolManagers that provide
-// dynamic annotations for their tools (e.g., cache state, status info).
-// Annotations are appended to tool descriptions so the LLM can see runtime context.
-type ToolAnnotator interface {
-	AnnotateTools() map[message.ToolName]string
+// ToolStateProvider is optionally implemented by ToolManagers that have
+// runtime state worth showing to the model (e.g. web cache entries, todo counts).
+// State is injected into situation messages rather than tool descriptions, so that
+// tool descriptions remain stable across calls and Anthropic prompt caching can hit.
+type ToolStateProvider interface {
+	GetToolState() string // Returns non-empty string when there is state to report
 }
 
 type ToolManager interface {

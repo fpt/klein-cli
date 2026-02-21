@@ -23,14 +23,14 @@ func toDomainMessageFromOllama(msg api.Message, includeThinking bool) message.Me
 		toolCall := msg.ToolCalls[0]
 		return message.NewToolCallMessage(
 			message.ToolName(toolCall.Function.Name),
-			message.ToolArgumentValues(toolCall.Function.Arguments),
+			message.ToolArgumentValues(toolCall.Function.Arguments.ToMap()),
 		)
 	} else if len(msg.ToolCalls) > 1 {
 		var calls []*message.ToolCallMessage
 		for _, tc := range msg.ToolCalls {
 			calls = append(calls, message.NewToolCallMessage(
 				message.ToolName(tc.Function.Name),
-				message.ToolArgumentValues(tc.Function.Arguments),
+				message.ToolArgumentValues(tc.Function.Arguments.ToMap()),
 			))
 		}
 		return message.NewToolCallBatch(calls)
@@ -85,7 +85,10 @@ func toOllamaMessages(messages []message.Message) []api.Message {
 			// Check if this is a ToolCallMessage
 			if toolCallMsg, ok := msg.(*message.ToolCallMessage); ok {
 				// Use native tool calling format
-
+				args := api.NewToolCallFunctionArguments()
+				for k, v := range toolCallMsg.ToolArguments() {
+					args.Set(k, v)
+				}
 				ollamaMessages = append(ollamaMessages, api.Message{
 					Role:    "assistant",
 					Content: "", // Content can be empty for tool calls
@@ -93,7 +96,7 @@ func toOllamaMessages(messages []message.Message) []api.Message {
 						{
 							Function: api.ToolCallFunction{
 								Name:      string(toolCallMsg.ToolName()),
-								Arguments: api.ToolCallFunctionArguments(toolCallMsg.ToolArguments()),
+								Arguments: args,
 							},
 						},
 					},
@@ -129,15 +132,15 @@ func convertToOllamaTools(tools map[message.ToolName]message.Tool) api.Tools {
 	var ollamaTools api.Tools
 
 	for _, tool := range tools {
-		// Create parameter definitions for the tool (v0.11 typed structures)
-		properties := make(map[string]api.ToolProperty)
+		// Create parameter definitions for the tool
+		properties := api.NewToolPropertiesMap()
 		var required []string
 
 		for _, arg := range tool.Arguments() {
-			properties[string(arg.Name)] = api.ToolProperty{
+			properties.Set(string(arg.Name), api.ToolProperty{
 				Type:        api.PropertyType{arg.Type},
 				Description: string(arg.Description),
-			}
+			})
 			if arg.Required {
 				required = append(required, string(arg.Name))
 			}

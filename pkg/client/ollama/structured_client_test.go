@@ -33,7 +33,7 @@ func TestNewOllamaStructuredClient(t *testing.T) {
 	}
 
 	if client.generator == nil {
-		t.Error("Client should have a GBNF generator")
+		t.Error("Client should have a JSON schema generator")
 	}
 }
 
@@ -44,9 +44,8 @@ func TestOllamaStructuredClient_IsToolCapable(t *testing.T) {
 
 	client := NewOllamaStructuredClient[TestResponse](core)
 
-	// Structured clients using GBNF should not report as tool capable
 	if client.IsToolCapable() {
-		t.Error("GBNF-based structured client should not be tool capable")
+		t.Error("Structured client should not report as tool capable")
 	}
 }
 

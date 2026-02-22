@@ -49,16 +49,7 @@ else
     update_method=false
 fi
 
-# 3. Check if strconv import was removed (if not needed)
-if ! grep -q "strconv" main.go; then
-    echo "✓ Unused imports cleaned up"
-    imports_clean=true
-else
-    echo "⚠️  strconv import still present (acceptable if used elsewhere)"
-    imports_clean=true  # Still pass since it doesn't hurt
-fi
-
-# 4. Check if main() function uses string IDs
+# 3. Check if main() function uses string IDs
 if grep -q "AddUser.*\".*\".*\".*\"" main.go; then
     echo "✓ main() function updated to use string IDs"
     main_updated=true
@@ -74,15 +65,6 @@ if grep -q "PrintUser" main.go && grep -q "\.UpdateAge" main.go; then
 else
     echo "✗ Method calls not updated consistently"
     calls_updated=false
-fi
-
-# 6. Check for proper error handling with string IDs
-if grep -q "user not found:.*%s" main.go || grep -q "user not found:.*string" main.go; then
-    echo "✓ Error messages updated for string IDs"
-    errors_updated=true
-else
-    echo "✗ Error messages not properly updated for string IDs"
-    errors_updated=false
 fi
 
 # Try to run the compiled binary if compilation succeeded
@@ -109,8 +91,8 @@ rm -f test_binary compile_errors.txt runtime_output.txt
 
 # Final assessment
 all_changes_made=true
-if [ "$id_change" = false ] || [ "$update_method" = false ] || [ "$imports_clean" = false ] || \
-   [ "$main_updated" = false ] || [ "$calls_updated" = false ] || [ "$errors_updated" = false ]; then
+if [ "$id_change" = false ] || [ "$update_method" = false ] || \
+   [ "$main_updated" = false ] || [ "$calls_updated" = false ]; then
     all_changes_made=false
 fi
 

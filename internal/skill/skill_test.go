@@ -222,20 +222,20 @@ func TestBuildSkillCatalog_Empty(t *testing.T) {
 
 func TestBuildSkillCatalog_Multiple(t *testing.T) {
 	skills := SkillMap{
-		"code":    {Name: "code", Description: "Coding assistant"},
-		"respond": {Name: "respond", Description: "Direct responses"},
+		"code": {Name: "code", Description: "Coding assistant"},
+		"claw": {Name: "claw", Description: "Messaging assistant"},
 	}
 	result := BuildSkillCatalog(skills)
 	if !strings.Contains(result, "- **code**: Coding assistant") {
 		t.Errorf("expected code skill in catalog, got:\n%s", result)
 	}
-	if !strings.Contains(result, "- **respond**: Direct responses") {
-		t.Errorf("expected respond skill in catalog, got:\n%s", result)
+	if !strings.Contains(result, "- **claw**: Messaging assistant") {
+		t.Errorf("expected claw skill in catalog, got:\n%s", result)
 	}
-	// Verify alphabetical order: code before respond
+	// Verify alphabetical order: claw before code
+	clawIdx := strings.Index(result, "**claw**")
 	codeIdx := strings.Index(result, "**code**")
-	respondIdx := strings.Index(result, "**respond**")
-	if codeIdx >= respondIdx {
+	if clawIdx >= codeIdx {
 		t.Error("expected skills to be sorted alphabetically")
 	}
 	if !strings.Contains(result, "read_skill") {

@@ -12,8 +12,6 @@ import (
 // Package-level logger for Ollama utility operations
 var logger = pkgLogger.NewComponentLogger("ollama-util")
 
-const roleSystem = "system"
-
 // toDomainMessageFromOllama converts a final Ollama API message to our domain message.
 // When includeThinking is true and thinking text is present, it attaches thinking.
 // Tool calls are converted to ToolCall or ToolCallBatch messages regardless of includeThinking.
@@ -190,15 +188,4 @@ func convertToOllamaTools(tools map[message.ToolName]message.Tool) api.Tools {
 	}
 
 	return ollamaTools
-}
-
-// addToolUsageSystemMessage adds a system message to encourage or force tool usage
-func addToolUsageSystemMessage(messages *[]api.Message, systemContent string) {
-	if len(*messages) > 0 && (*messages)[0].Role != roleSystem {
-		systemMessage := api.Message{
-			Role:    roleSystem,
-			Content: systemContent,
-		}
-		*messages = append([]api.Message{systemMessage}, *messages...)
-	}
 }

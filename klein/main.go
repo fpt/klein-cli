@@ -6,8 +6,6 @@ import (
 	"fmt"
 	"os"
 	"strings"
-	"time"
-
 	"github.com/fpt/klein-cli/internal/app"
 	"github.com/fpt/klein-cli/internal/config"
 	connectserver "github.com/fpt/klein-cli/internal/connectrpc"
@@ -15,7 +13,6 @@ import (
 	"github.com/fpt/klein-cli/internal/mcp"
 	"github.com/fpt/klein-cli/pkg/agent/domain"
 	client "github.com/fpt/klein-cli/pkg/client"
-	"github.com/fpt/klein-cli/pkg/client/ollama"
 	pkgLogger "github.com/fpt/klein-cli/pkg/logger"
 )
 
@@ -32,7 +29,6 @@ func printUsage() {
 	fmt.Println()
 	fmt.Println("Available Skills:")
 	fmt.Println("  code                    Comprehensive coding assistant (default)")
-	fmt.Println("  respond                 Direct knowledge-based responses and tool usage")
 	fmt.Println()
 	fmt.Println("Skills are loaded from:")
 	fmt.Println("  Built-in (embedded)     Default skills bundled with the binary")
@@ -42,7 +38,6 @@ func printUsage() {
 	fmt.Println("Examples:")
 	fmt.Println("  klein                                    # Interactive mode (code skill)")
 	fmt.Println("  klein \"Create a HTTP server\"             # One-shot mode (code skill)")
-	fmt.Println("  klein -s respond \"Explain Go channels\"   # Respond skill")
 	fmt.Println("  klein -b anthropic \"Analyze this code\"   # Use Anthropic backend")
 	fmt.Println("  klein -f prompts.txt                     # Multi-turn from file (no memory)")
 	fmt.Println("  klein -v \"Debug this issue\"              # Enable verbose debug logging")
@@ -136,29 +131,6 @@ func main() {
 	if err := config.ValidateSettings(settings); err != nil {
 		logger.Error("Settings validation failed", "error", err)
 		os.Exit(1)
-	}
-
-	// Ollama-specific capability check (CLI UX only)
-	if settings.LLM.Backend == "" || settings.LLM.Backend == "ollama" {
-		if !ollama.IsModelInKnownList(settings.LLM.Model) {
-			logger.Warn("Model not in known capabilities list, testing tool calling capability",
-				"model", settings.LLM.Model)
-
-			testCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
-			defer cancel()
-
-			hasToolCapability, testErr := ollama.DynamicCapabilityCheck(testCtx, settings.LLM.Model, false)
-			if testErr != nil {
-				logger.Warn("Failed to test model capability, proceeding without tool support",
-					"model", settings.LLM.Model, "error", testErr)
-			} else if !hasToolCapability {
-				logger.Warn("Model does not support tool calling - limited functionality",
-					"model", settings.LLM.Model, "suggestion", "consider using 'gpt-oss:latest'")
-			} else {
-				logger.InfoWithIntention(pkgLogger.IntentionSuccess, "Model supports tool calling, proceeding with full functionality",
-					"model", settings.LLM.Model)
-			}
-		}
 	}
 
 	// Create LLM client based on settings

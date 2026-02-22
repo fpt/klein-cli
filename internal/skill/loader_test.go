@@ -39,22 +39,6 @@ func TestLoadBuiltinSkills_HasCodeSkill(t *testing.T) {
 	}
 }
 
-func TestLoadBuiltinSkills_HasRespondSkill(t *testing.T) {
-	skills, err := LoadBuiltinSkills()
-	if err != nil {
-		t.Fatalf("failed to load built-in skills: %v", err)
-	}
-	respond, ok := skills["respond"]
-	if !ok {
-		t.Fatal("expected 'respond' skill in built-in skills")
-	}
-	if respond.Name != "respond" {
-		t.Errorf("expected name 'respond', got %q", respond.Name)
-	}
-	if len(respond.AllowedTools) == 0 {
-		t.Error("expected respond skill to have allowed-tools")
-	}
-}
 
 func TestLoadSkillsFromDir(t *testing.T) {
 	// Create temp directory with a skill

@@ -1,0 +1,9 @@
+{
+  "name": "ollama_glm_air_q2_k",
+  "llm": {
+    "backend": "ollama",
+    "model": "MichelRosselli/GLM-4.5-Air:Q2_K",
+    "thinking": true,
+    "maxTokens": 2048
+  }
+}

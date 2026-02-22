@@ -1000,8 +1000,8 @@ func (m *FileSystemToolManager) GetToolState() string {
 
 	var parts []string
 	for path, count := range m.editFailCounts {
-		if count >= 2 {
-			parts = append(parts, fmt.Sprintf("%s (Edit failed %d times — re-read the file before retrying)", filepath.Base(path), count))
+		if count >= 1 {
+			parts = append(parts, fmt.Sprintf("%s (Edit failed %d time(s) — re-read the file before retrying)", filepath.Base(path), count))
 		}
 	}
 	if len(parts) == 0 {

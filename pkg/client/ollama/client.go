@@ -154,51 +154,22 @@ func NewOllamaClient(model string, maxTokens int, thinking bool) (domain.ToolCal
 		return nil, err
 	}
 
-	// Check if this model supports native tool calling
-	if IsToolCapableModel(model) {
-		return &OllamaClient{
-			OllamaCore: core,
-		}, nil
-	} else {
-		// For models that don't support tool calling, still create a client but with limited functionality
-		// The main application will handle capability checking and user warnings
-		return &OllamaClient{
-			OllamaCore: core,
-		}, nil
-	}
+	return &OllamaClient{OllamaCore: core}, nil
 }
 
 // NewOllamaClientFromCore creates a new Ollama client from shared core
-// Returns OllamaClient for tool-capable models, or nil for unsupported models
 func NewOllamaClientFromCore(core *OllamaCore) domain.ToolCallingLLM {
-	// Check if this model supports native tool calling
-	if IsToolCapableModel(core.model) {
-		return &OllamaClient{
-			OllamaCore: core,
-		}
-	} else {
-		// Return nil for models that don't support native tool calling (ollama_gbnf has been removed)
-		// This will cause a panic if used, but maintains interface compatibility
-		// Callers should check IsToolCapableModel before calling this function
-		return nil
-	}
+	return &OllamaClient{OllamaCore: core}
 }
 
 // IsToolCapable checks if the current model supports native tool calling
 func (c *OllamaClient) IsToolCapable() bool {
-	capable := IsToolCapableModel(c.model)
-	return capable
+	return IsToolCapableModel(c.model)
 }
 
 // SetToolManager sets the tool manager for native tool calling
 func (c *OllamaClient) SetToolManager(toolManager domain.ToolManager) {
 	c.toolManager = toolManager
-}
-
-// IsToolCapableModel checks if the current model supports native tool calling
-// Deprecated: Use IsToolCapable() instead
-func (c *OllamaClient) IsToolCapableModel() bool {
-	return c.IsToolCapable()
 }
 
 // SupportsVision checks if the current model supports vision/image analysis
@@ -241,21 +212,11 @@ func (c *OllamaClient) ChatWithToolChoice(ctx context.Context, messages []messag
 	if c.IsToolCapable() && c.toolManager != nil {
 		tools := convertToOllamaTools(c.toolManager.GetTools())
 		if len(tools) > 0 {
-			// Apply tool choice logic
 			switch toolChoice.Type {
 			case domain.ToolChoiceNone:
 				// Don't add any tools
-			case domain.ToolChoiceAuto:
-				// Add tools with encouraging system message
+			default:
 				chatRequest.Tools = tools
-				addToolUsageSystemMessage(&ollamaMessages, "You are a helpful assistant. When the user asks you to perform tasks, you should use the available tools to help them. Always use the appropriate tool when one is available for the task at hand.")
-			case domain.ToolChoiceAny:
-				// Add tools with stronger encouragement
-				chatRequest.Tools = tools
-				addToolUsageSystemMessage(&ollamaMessages, "You are a helpful assistant. You MUST use at least one of the available tools to help the user with their request. Do not provide a response without using a tool.")
-			case domain.ToolChoiceTool:
-				chatRequest.Tools = tools
-				addToolUsageSystemMessage(&ollamaMessages, fmt.Sprintf("You are a helpful assistant. You MUST use the '%s' tool to help the user with their request. Do not provide a response without using this specific tool.", toolChoice.Name))
 			}
 		}
 	}
@@ -298,23 +259,6 @@ func (c *OllamaClient) chatWithOptions(ctx context.Context, messages []message.M
 		} else {
 			// Use settings-based thinking control (from Chat)
 			chatRequest.Think = &api.ThinkValue{Value: c.thinking}
-		}
-	}
-
-	// Add tools if this is a tool-capable model and tool manager is available
-	if c.IsToolCapable() && c.toolManager != nil {
-		tools := convertToOllamaTools(c.toolManager.GetTools())
-		if len(tools) > 0 {
-			chatRequest.Tools = tools
-
-			// Add a system message to encourage tool usage
-			if len(ollamaMessages) > 0 && ollamaMessages[0].Role != "system" {
-				systemMessage := api.Message{
-					Role:    "system",
-					Content: "You are a helpful assistant. When the user asks you to perform tasks, you should use the available tools to help them. Always use the appropriate tool when one is available for the task at hand.",
-				}
-				ollamaMessages = append([]api.Message{systemMessage}, ollamaMessages...)
-			}
 		}
 	}
 

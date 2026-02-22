@@ -60,6 +60,8 @@ var ollamaModels = []OllamaModel{
 	{Name: "qwen3:32b", Tool: true, Think: true, Vision: false, Context: 40960},
 	// glm-4.7 family — uses XML tool call format, incompatible with Ollama JSON tool calling API
 	{Name: "glm-4.7", Tool: false, Think: false, Vision: false, Context: 128000},
+	// GLM-4.5-Air — claims native tool calling + thinking; unconfirmed, added for testing
+	{Name: "glm-4.5-air", Tool: true, Think: true, Vision: false, Context: 128000},
 }
 
 // IsToolCapableModel checks if a model supports native tool calling
@@ -148,8 +150,3 @@ func IsJSONSchemaCapableModel(model string) bool {
 	return true
 }
 
-// IsGBNFCapableModel is deprecated, use IsJSONSchemaCapableModel instead
-// Kept for backward compatibility
-func IsGBNFCapableModel(model string) bool {
-	return IsJSONSchemaCapableModel(model)
-}

@@ -225,21 +225,3 @@ func TestJSONSchemaCapabilityDetection(t *testing.T) {
 	}
 }
 
-func TestBackwardCompatibility_GBNF(t *testing.T) {
-	// Test that the deprecated GBNF function still works
-	models := []string{
-		"gpt-oss:latest",
-		"llama3.1:8b",
-		"codellama:13b",
-	}
-
-	for _, model := range models {
-		gbnfResult := IsGBNFCapableModel(model)
-		schemaResult := IsJSONSchemaCapableModel(model)
-
-		if gbnfResult != schemaResult {
-			t.Errorf("Backward compatibility broken for model %s: GBNF=%v, Schema=%v",
-				model, gbnfResult, schemaResult)
-		}
-	}
-}

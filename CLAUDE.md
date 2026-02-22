@@ -13,10 +13,21 @@ go run klein/main.go -b anthropic            # Interactive with Anthropic
 # One-shot mode
 go run klein/main.go "your requirements"     # Run with requirements
 
+# Connect server mode (for gateway integration)
+go run klein/main.go --serve -b anthropic    # Start Connect-gRPC server on :50051
+
+# Gateway (klein-claw)
+go run cmd/gateway/main.go --config ~/.klein/claw/config.json
+
 # Build commands
-go build -o klein ./klein                # Build binary
-go build ./...                                       # Build all packages
-go mod tidy                                          # Download/update dependencies
+go build -o output/klein ./klein             # Build agent binary
+go build -o output/klein-claw ./cmd/gateway  # Build gateway binary
+make build-all                               # Build both binaries
+go build ./...                               # Build all packages
+go mod tidy                                  # Download/update dependencies
+
+# Protobuf code generation (requires buf, protoc-gen-go, protoc-gen-connect-go)
+make proto                                   # Regenerate Connect-gRPC stubs
 ```
 
 **Interactive Mode Usage:**
@@ -141,7 +152,7 @@ Projects are stored in directories using the pattern: `{project-basename}-{path-
 This is a Go-based skill-driven coding agent that uses SKILL.md-configured skills with the ReAct (Reason and Act) pattern. It supports multiple LLM backends, secure tool management, and interactive mode. The codebase follows a clean DDD architecture with direct skill execution:
 
 **Core Structure:**
-- `klein/main.go` - Application entry point with interactive REPL
+- `klein/main.go` - Application entry point with interactive REPL and `--serve` server mode
 - `internal/app/` - Application layer (DDD) with skill execution:
   - `agent.go` - Main Agent handling direct skill execution with thinking channel management
 - `internal/config/` - Configuration management:
@@ -158,13 +169,27 @@ This is a Go-based skill-driven coding agent that uses SKILL.md-configured skill
   - Skill loading, parsing, and tool filtering logic
 - `internal/mcp/` - MCP (Model Context Protocol) integration:
   - External tool server integration and management
+- `internal/connectrpc/` - Connect-gRPC server exposing the agent via HTTP/2:
+  - `server.go` - `AgentServiceHandler` with session management and event translation
+  - `start.go` - Server startup with h2c (HTTP/2 cleartext) support
+- `internal/gateway/` - Messaging gateway (klein-claw):
+  - `gateway.go` - Orchestrator wiring bus, sessions, memory, adapters, Connect client
+  - `bus.go` - `MessageBus` decoupling channel adapters from agent routing
+  - `session.go` - Per-peer session routing mapped to Connect RPC sessions
+  - `memory.go` - MEMORY.md (long-term) and daily notes for persistent context
+  - `heartbeat.go` - Periodic prompt execution via ticker
+  - `config.go` - Gateway configuration with Discord, memory, heartbeat settings
+  - `adapter.go` - `Adapter` interface for channel integrations
+  - `discord.go` - Discord adapter using `bwmarrin/discordgo`
+- `internal/gen/agentv1/` - Generated protobuf + Connect stubs (from `internal/proto/agent.proto`)
+- `cmd/gateway/main.go` - Gateway binary entry point (`klein-claw`)
 - `pkg/agent/` - Agent domain layer:
   - `domain/` - Domain interfaces and types
   - `react/` - ReAct pattern implementation with thinking channel support
   - `state/` - Message state management and session persistence
 - `pkg/message/` - Message handling and thinking stream management
 - `pkg/client/` - LLM client implementations and abstractions:
-  - `withtool.go` - ClientWithTool wrapper for tool management
+  - `client_factory.go` - `NewLLMClient()` factory + `NewClientWithToolManager()` + `NewStructuredClient[T]()`
   - LLM client implementations (Ollama, Anthropic, OpenAI, Gemini)
 
 **Key Types:**
@@ -209,6 +234,96 @@ The system uses CLI-specified skills with embedded SKILL.md definitions. No AI-p
 - **Session Persistence**: Project-specific session storage with interactive/one-shot mode separation
 - **Security Isolation**: Skill-specific tool access prevents unauthorized operations
 - **Template-Based Prompts**: Dynamic prompt generation with variable substitution
+
+## Gateway Architecture (klein-claw)
+
+klein-claw is an OpenClaw-inspired messaging gateway that makes the agent accessible via Discord (and other platforms in the future). It runs as a separate binary communicating with the klein agent via Connect-gRPC.
+
+**Two-Process Architecture:**
+```
+Discord ──► Gateway (klein-claw) ──► Connect-gRPC ──► klein agent (--serve mode)
+                                  ◄── streaming events ◄──
+```
+
+**Running the gateway:**
+```bash
+# Terminal 1: Agent in Connect server mode
+go run ./klein --serve -b anthropic
+
+# Terminal 2: Gateway
+go run ./cmd/gateway --config ~/.klein/claw/config.json
+```
+
+**Connect-gRPC Server (`internal/connectrpc/`):**
+- `AgentServer` implements `agentv1connect.AgentServiceHandler`
+- Each `StartSession` creates an `app.Agent` with its own LLM client via `client.NewLLMClient()`
+- `Invoke` sets an external event handler on the Agent, calls `agent.Invoke()`, and translates `events.AgentEvent` into proto `InvokeEvent` stream messages
+- Uses h2c (HTTP/2 cleartext) — no TLS needed for same-host communication
+- Event translation: `EventTypeThinkingChunk` → `ThinkingDelta`, `EventTypeToolCallStart` → `ToolCall`, `EventTypeToolResult` → `ToolResult`, `EventTypeError` → Error
+
+**Gateway Core (`internal/gateway/`):**
+- **MessageBus** — Buffered Go channels (capacity 64) decoupling adapters from agent routing
+- **SessionManager** — Per-channel/peer session isolation; calls Connect RPC `StartSession` to create agent sessions on demand
+- **MemoryManager** — Reads `$HOME/.klein/claw/memory/MEMORY.md` (long-term) and `daily/YYYY-MM-DD.md` (daily notes); injects `[MEMORY CONTEXT]...[END MEMORY CONTEXT]` block into user prompts
+- **Heartbeat** — Configurable ticker (default 24h) pushing synthetic `InboundMessage` to the bus for periodic agent prompts
+- **Gateway orchestrator** — Wires bus, sessions, memory, heartbeat, and adapters; `Run(ctx)` starts everything as goroutines and processes `bus.Inbound` messages
+
+**Discord Adapter (`internal/gateway/discord.go`):**
+- Uses `github.com/bwmarrin/discordgo` with WebSocket connection
+- Allowlists: guild IDs, channel IDs, user IDs (empty = allow all)
+- `MentionOnly` mode for guild channels — only responds when bot is @mentioned
+- Strips bot mentions from message text before forwarding
+- Splits outbound messages at 2000 chars (Discord limit) on newline boundaries
+- Requires `MESSAGE_CONTENT` privileged intent in Discord Developer Portal
+
+**Gateway Configuration (`$HOME/.klein/claw/config.json`):**
+```json
+{
+  "agent_addr": "http://localhost:50051",
+  "working_dir": "/path/to/project",
+  "default_skill": "claw",
+  "default_model": "claude-sonnet-4-5-20250929",
+  "max_iterations": 15,
+  "discord": {
+    "token": "BOT_TOKEN",
+    "allowed_guild_ids": ["123"],
+    "allowed_channel_ids": ["456"],
+    "allowed_user_ids": ["789"],
+    "mention_only": true
+  },
+  "memory": {
+    "base_dir": "$HOME/.klein/claw/memory/",
+    "max_notes": 30
+  },
+  "heartbeat": {
+    "enabled": true,
+    "interval": "24h",
+    "prompt": "Review MEMORY.md and daily notes. Create today's daily note.",
+    "skill": "claw",
+    "channel_type": "discord",
+    "channel_id": "456"
+  }
+}
+```
+
+**Claw Skill (`internal/skill/skills/claw/SKILL.md`):**
+- Messaging-optimized assistant with memory awareness
+- Allowed tools: Read, Write, Edit, LS, Glob, Grep, bash, todo_write, WebFetch, WebSearch
+- Guidelines: concise responses (<2000 chars), proactive memory updates, daily notes
+- `user-invocable: false` — only used by the gateway, not directly by CLI users
+
+**Gateway Commands (Discord `!` prefix):**
+- `!clear` — Clear conversation session
+- `!skill <name>` — Switch skill (code, respond, claw)
+- `!memory` — Show stored memory content
+- `!help` — Show available commands
+
+**Protobuf + Connect Code Generation:**
+- Proto definition: `internal/proto/agent.proto`
+- Generated code: `internal/gen/agentv1/` (types) and `internal/gen/agentv1/agentv1connect/` (service stubs)
+- Build tool: `buf` with `buf.yaml` + `buf.gen.yaml` at repo root
+- Plugins: `protoc-gen-go` (types) + `protoc-gen-connect-go` (Connect stubs)
+- Regenerate: `make proto` (or `buf generate`)
 
 **Tool Support:**
 The system supports unified tool calling with automatic detection of model capabilities and sophisticated tool schema handling:
@@ -613,6 +728,7 @@ Instructions:
 Built-in skills are embedded in the binary from `internal/skill/skills/*/SKILL.md`:
 - `code` - Comprehensive coding assistant for all development tasks
 - `respond` - Direct knowledge-based responses and todo management
+- `claw` - Personal AI assistant for messaging platforms with memory (used by gateway, not directly CLI-invocable)
 
 **Custom Skills:**
 You can override or extend built-in skills by placing SKILL.md files in:
@@ -651,12 +767,16 @@ The `allowed-tools` frontmatter field controls which tools are available to a sk
 
 - Module: `github.com/fpt/klein-cli`
 - Go Version: 1.24.4
-- Dependencies: 
+- Dependencies:
   - `github.com/ollama/ollama v0.11.10`
   - `github.com/anthropics/anthropic-sdk-go v1.5.0`
   - `github.com/openai/openai-go/v2 v2.0.2`
   - `google.golang.org/genai v1.19.0`
   - `github.com/chzyer/readline v1.5.1` - Terminal interaction with cursor movement and autocomplete
+  - `connectrpc.com/connect` - Connect-gRPC framework (supports Connect, gRPC, and gRPC-Web protocols)
+  - `google.golang.org/protobuf` - Protocol Buffers runtime
+  - `github.com/bwmarrin/discordgo` - Discord API bindings (WebSocket-based)
+  - `golang.org/x/net` - h2c support for HTTP/2 cleartext
 
 ## Prerequisites
 

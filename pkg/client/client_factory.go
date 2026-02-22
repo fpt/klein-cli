@@ -3,12 +3,27 @@ package client
 import (
 	"fmt"
 
+	"github.com/fpt/klein-cli/internal/config"
 	"github.com/fpt/klein-cli/pkg/agent/domain"
 	"github.com/fpt/klein-cli/pkg/client/anthropic"
 	"github.com/fpt/klein-cli/pkg/client/gemini"
 	"github.com/fpt/klein-cli/pkg/client/ollama"
 	"github.com/fpt/klein-cli/pkg/client/openai"
 )
+
+// NewLLMClient creates an LLM client based on settings.
+func NewLLMClient(settings config.LLMSettings) (domain.LLM, error) {
+	switch settings.Backend {
+	case "anthropic", "claude":
+		return anthropic.NewAnthropicClientWithTokens(settings.Model, settings.MaxTokens)
+	case "openai":
+		return openai.NewOpenAIClient(settings.Model, settings.MaxTokens)
+	case "gemini":
+		return gemini.NewGeminiClientWithTokens(settings.Model, settings.MaxTokens)
+	default:
+		return ollama.NewOllamaClient(settings.Model, settings.MaxTokens, settings.Thinking)
+	}
+}
 
 // NewClientWithToolManager creates a tool calling client appropriate for the underlying LLM client
 // Takes a base LLM client and adds tool management capabilities to it

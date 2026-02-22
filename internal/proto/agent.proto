@@ -2,7 +2,7 @@ syntax = "proto3";
 
 package klein.agent.v1;
 
-option go_package = "github.com/fpt/klein-cli/proto/klein/agent/v1;agentv1";
+option go_package = "github.com/fpt/klein-cli/internal/gen/agentv1;agentv1";
 
 // This API exposes the agent over gRPC/gRPC‑Web for editor integrations.
 // Design goals:
@@ -146,16 +146,16 @@ message RequestFileRead {
 // Todos API (to power a VS Code TODO panel)
 enum TodoStatus {
   TODO_STATUS_UNSPECIFIED = 0;
-  PENDING     = 1;
-  IN_PROGRESS = 2;
-  COMPLETED   = 3;
+  TODO_PENDING     = 1;
+  TODO_IN_PROGRESS = 2;
+  TODO_COMPLETED   = 3;
 }
 
 enum TodoPriority {
   TODO_PRIORITY_UNSPECIFIED = 0;
-  LOW    = 1;
-  MEDIUM = 2;
-  HIGH   = 3;
+  TODO_LOW    = 1;
+  TODO_MEDIUM = 2;
+  TODO_HIGH   = 3;
 }
 
 message TodoItem {

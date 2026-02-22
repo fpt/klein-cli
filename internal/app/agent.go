@@ -46,7 +46,8 @@ type Agent struct {
 	out             io.Writer
 	thinkingStarted      bool
 	alwaysApprove        bool
-	allowedToolsOverride []string // CLI override for skill's allowed-tools
+	allowedToolsOverride []string       // CLI override for skill's allowed-tools
+	externalEventHandler events.EventHandler // optional: forward events to external consumers (e.g., Connect server)
 }
 
 // WorkingDir returns the agent's working directory.
@@ -59,6 +60,12 @@ func (a *Agent) FilesystemRepository() repository.FilesystemRepository { return 
 // When non-empty, this list is used instead of the skill's own allowed-tools field.
 func (a *Agent) SetAllowedToolsOverride(tools []string) {
 	a.allowedToolsOverride = tools
+}
+
+// SetEventHandler sets an external event handler that receives all agent events.
+// Used by the Connect server to translate events into streaming RPC responses.
+func (a *Agent) SetEventHandler(handler events.EventHandler) {
+	a.externalEventHandler = handler
 }
 
 // NewAgent creates a new Agent with MCP tools and settings.
@@ -508,6 +515,11 @@ func (a *Agent) setupEventHandlers(emitter events.EventEmitter) {
 			if data, ok := event.Data.(events.ErrorData); ok {
 				fmt.Fprintf(writer, "Error: %v\n", data.Error)
 			}
+		}
+
+		// Forward to external handler if set (e.g., Connect server)
+		if a.externalEventHandler != nil {
+			a.externalEventHandler(event)
 		}
 	})
 }

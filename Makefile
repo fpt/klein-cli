@@ -13,8 +13,17 @@ run-gemini: ## Run the application with Gemini backend
 build: ## Build the application
 	go build -o output/klein ./klein
 
+build-gateway: ## Build the gateway binary (klein-claw)
+	go build -o output/klein-claw ./cmd/gateway
+
+build-all: build build-gateway ## Build all binaries
+
 install: ## Install the application
 	go install ./klein
+
+proto: ## Generate protobuf + Connect-gRPC Go code
+	rm -rf internal/gen
+	buf generate
 
 test: ## Run tests
 	go test ./...

@@ -17,6 +17,7 @@ The name KLEIN is inspired by the Klein bottle, a topological surface with no di
 - **MCP Server Support**: MCP Servers can be configured in settings.json
 - **Conversation State Management**: Automatic handling of conversation history and context
 - **AGENTS.md support**: Includes content of AGENTS.md to system prompt automatically
+- **Messaging Gateway (klein-claw)**: Discord integration for using the agent as a personal AI assistant via messaging
 
 ## Quick Start
 
@@ -168,6 +169,117 @@ klein --settings ./my-settings.json "Create a simple web server in Golang."
   }
 }
 ```
+
+## Gateway (klein-claw)
+
+klein-claw is an OpenClaw-inspired messaging gateway that makes the agent accessible via Discord. It runs as a separate binary communicating with the klein agent over Connect-gRPC.
+
+```
+Discord ──► klein-claw (gateway) ──► Connect-gRPC ──► klein agent (--serve)
+                                  ◄── streaming events ◄──
+```
+
+### Quick Start
+
+**1. Start the agent in server mode:**
+```bash
+# With Anthropic Claude
+klein --serve -b anthropic
+
+# Or build and run
+make build
+./output/klein --serve -b anthropic --serve-addr :50051
+```
+
+**2. Create a gateway config:**
+
+Create `~/.klein/claw/config.json`:
+```json
+{
+  "agent_addr": "http://localhost:50051",
+  "working_dir": "/path/to/your/project",
+  "default_skill": "claw",
+  "discord": {
+    "token": "YOUR_DISCORD_BOT_TOKEN",
+    "allowed_user_ids": ["YOUR_DISCORD_USER_ID"],
+    "mention_only": true
+  }
+}
+```
+
+**3. Start the gateway:**
+```bash
+# From source
+go run ./cmd/gateway --config ~/.klein/claw/config.json
+
+# Or build and run
+make build-gateway
+./output/klein-claw --config ~/.klein/claw/config.json
+```
+
+### Discord Bot Setup
+
+1. Go to the [Discord Developer Portal](https://discord.com/developers/applications)
+2. Create a new application and add a Bot
+3. Enable the **MESSAGE CONTENT** privileged intent under Bot settings
+4. Generate an invite URL with `bot` scope and `Send Messages` + `Read Message History` permissions
+5. Invite the bot to your server
+6. Copy the bot token into your gateway config
+
+### Gateway Commands
+
+In Discord, use `!` prefix for gateway commands:
+
+| Command | Description |
+|---------|-------------|
+| `!clear` | Clear conversation and start fresh |
+| `!skill <name>` | Switch skill (code, respond, claw) |
+| `!memory` | Show stored memory content |
+| `!help` | Show available commands |
+
+### Memory System
+
+The gateway includes a persistent memory system at `~/.klein/claw/memory/`:
+- **MEMORY.md** — Long-term facts about the user (preferences, projects, etc.)
+- **daily/YYYY-MM-DD.md** — Daily journal notes for significant events
+
+Memory context is automatically injected into each conversation. The agent can read and update these files using its standard filesystem tools.
+
+### Heartbeat
+
+Optional periodic prompt execution. Configure in `config.json`:
+```json
+{
+  "heartbeat": {
+    "enabled": true,
+    "interval": "24h",
+    "prompt": "Review MEMORY.md and create today's daily note.",
+    "skill": "claw",
+    "channel_type": "discord",
+    "channel_id": "YOUR_CHANNEL_ID"
+  }
+}
+```
+
+### Configuration Reference
+
+| Field | Default | Description |
+|-------|---------|-------------|
+| `agent_addr` | `http://localhost:50051` | Connect-gRPC server address |
+| `working_dir` | `.` | Agent working directory |
+| `default_skill` | `claw` | Skill used for message handling |
+| `default_model` | `claude-sonnet-4-5-20250929` | LLM model |
+| `max_iterations` | `15` | ReAct loop cap per invocation |
+| `discord.token` | | Discord bot token (required) |
+| `discord.allowed_guild_ids` | `[]` | Guild allowlist (empty = all) |
+| `discord.allowed_channel_ids` | `[]` | Channel allowlist (empty = all) |
+| `discord.allowed_user_ids` | `[]` | User allowlist (empty = all) |
+| `discord.mention_only` | `false` | Only respond when @mentioned in guilds |
+| `memory.base_dir` | `~/.klein/claw/memory/` | Memory storage directory |
+| `memory.max_notes` | `30` | Maximum daily notes to retain |
+| `heartbeat.enabled` | `false` | Enable periodic prompts |
+| `heartbeat.interval` | `24h` | Go duration string |
+| `heartbeat.prompt` | | Prompt text to execute |
 
 ## Development
 

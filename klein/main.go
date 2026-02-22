@@ -10,13 +10,12 @@ import (
 
 	"github.com/fpt/klein-cli/internal/app"
 	"github.com/fpt/klein-cli/internal/config"
+	connectserver "github.com/fpt/klein-cli/internal/connectrpc"
 	"github.com/fpt/klein-cli/internal/infra"
 	"github.com/fpt/klein-cli/internal/mcp"
 	"github.com/fpt/klein-cli/pkg/agent/domain"
-	"github.com/fpt/klein-cli/pkg/client/anthropic"
-	"github.com/fpt/klein-cli/pkg/client/gemini"
+	client "github.com/fpt/klein-cli/pkg/client"
 	"github.com/fpt/klein-cli/pkg/client/ollama"
-	"github.com/fpt/klein-cli/pkg/client/openai"
 	pkgLogger "github.com/fpt/klein-cli/pkg/logger"
 )
 
@@ -69,6 +68,8 @@ func main() {
 	var verbose = flag.Bool("v", false, "Enable verbose logging (debug level)")
 	var verboseLong = flag.Bool("verbose", false, "Enable verbose logging (debug level)")
 	var allowedTools = flag.String("allowed-tools", "", "Comma-separated list of allowed tools (overrides skill's allowed-tools)")
+	var serve = flag.Bool("serve", false, "Start Connect-gRPC server mode for gateway integration")
+	var serveAddr = flag.String("serve-addr", ":50051", "Connect server listen address")
 	var help = flag.Bool("h", false, "Show this help message")
 	var helpLong = flag.Bool("help", false, "Show this help message")
 
@@ -137,28 +138,8 @@ func main() {
 		os.Exit(1)
 	}
 
-	// Create LLM client based on settings
-	var llmClient domain.LLM
-	switch settings.LLM.Backend {
-	case "anthropic", "claude":
-		llmClient, err = anthropic.NewAnthropicClientWithTokens(settings.LLM.Model, settings.LLM.MaxTokens)
-		if err != nil {
-			logger.Error("Failed to create Anthropic client", "error", err)
-			os.Exit(1)
-		}
-	case "openai":
-		llmClient, err = openai.NewOpenAIClient(settings.LLM.Model, settings.LLM.MaxTokens)
-		if err != nil {
-			logger.Error("Failed to create OpenAI client", "error", err)
-			os.Exit(1)
-		}
-	case "gemini":
-		llmClient, err = gemini.NewGeminiClientWithTokens(settings.LLM.Model, settings.LLM.MaxTokens)
-		if err != nil {
-			logger.Error("Failed to create Gemini client", "error", err)
-			os.Exit(1)
-		}
-	default:
+	// Ollama-specific capability check (CLI UX only)
+	if settings.LLM.Backend == "" || settings.LLM.Backend == "ollama" {
 		if !ollama.IsModelInKnownList(settings.LLM.Model) {
 			logger.Warn("Model not in known capabilities list, testing tool calling capability",
 				"model", settings.LLM.Model)
@@ -178,12 +159,13 @@ func main() {
 					"model", settings.LLM.Model)
 			}
 		}
+	}
 
-		llmClient, err = ollama.NewOllamaClient(settings.LLM.Model, settings.LLM.MaxTokens, settings.LLM.Thinking)
-		if err != nil {
-			logger.Error("Failed to create Ollama client", "error", err)
-			os.Exit(1)
-		}
+	// Create LLM client based on settings
+	llmClient, err := client.NewLLMClient(settings.LLM)
+	if err != nil {
+		logger.Error("Failed to create LLM client", "error", err)
+		os.Exit(1)
 	}
 
 	// Determine working directory
@@ -223,6 +205,16 @@ func main() {
 		for _, serverName := range serverNames {
 			mcpToolManagers[serverName] = toolManager
 		}
+	}
+
+	// Handle Connect-gRPC server mode
+	if *serve {
+		logger.Info("Starting Connect-gRPC server", "addr", *serveAddr)
+		if err := connectserver.StartServer(ctx, *serveAddr, settings, mcpToolManagers, logger); err != nil {
+			logger.Error("Server failed", "error", err)
+			os.Exit(1)
+		}
+		return
 	}
 
 	a := app.NewAgentWithOptions(llmClient, workingDirectory, mcpToolManagers, settings, logger, out, skipSessionRestore, isInteractiveMode, fsRepo)

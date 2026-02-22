@@ -1,0 +1,9 @@
+{
+  "name": "ollama_lfm25_thinking",
+  "llm": {
+    "backend": "ollama",
+    "model": "lfm2.5-thinking",
+    "thinking": false,
+    "maxTokens": 2048
+  }
+}

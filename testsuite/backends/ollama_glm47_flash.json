@@ -1,0 +1,9 @@
+{
+  "name": "ollama_glm47_flash",
+  "llm": {
+    "backend": "ollama",
+    "model": "glm-4.7-flash",
+    "thinking": false,
+    "maxTokens": 2048
+  }
+}

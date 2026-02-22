@@ -469,10 +469,30 @@ func (m *FileSystemToolManager) handleEnhancedEdit(ctx context.Context, args mes
 
 	fileContent := string(content)
 
-	// Validate exact string matching
+	// Validate exact string matching, with indentation normalization fallback
 	if !strings.Contains(fileContent, oldString) {
-		// Provide helpful debugging information
-		return message.NewToolResultError(fmt.Sprintf("old_string not found in file %s. Please ensure exact whitespace and formatting match.", absPath)), nil
+		// Try indentation normalization: detect whether the file uses tabs or 4-spaces and
+		// normalize old_string/new_string to match.  This handles the common case where a
+		// model writes a file with one style (e.g. tabs from gofmt) and then provides an
+		// old_string with the other style (e.g. 4-spaces).
+		fileUsesTabs := strings.Contains(fileContent, "\n\t") || strings.HasPrefix(fileContent, "\t")
+		var normalizedOld string
+		if fileUsesTabs {
+			normalizedOld = strings.ReplaceAll(oldString, "    ", "\t")
+		} else {
+			normalizedOld = strings.ReplaceAll(oldString, "\t", "    ")
+		}
+		if normalizedOld != oldString && strings.Contains(fileContent, normalizedOld) {
+			// Apply the same normalization to new_string so the replacement is consistent
+			if fileUsesTabs {
+				newString = strings.ReplaceAll(newString, "    ", "\t")
+			} else {
+				newString = strings.ReplaceAll(newString, "\t", "    ")
+			}
+			oldString = normalizedOld
+		} else {
+			return message.NewToolResultError(fmt.Sprintf("old_string not found in file %s. Please ensure exact whitespace and formatting match.", absPath)), nil
+		}
 	}
 
 	// Count occurrences for safety

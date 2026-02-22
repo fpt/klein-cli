@@ -7,6 +7,7 @@ import (
 
 	"github.com/fpt/klein-cli/pkg/agent/domain"
 	"github.com/fpt/klein-cli/pkg/message"
+	"github.com/ollama/ollama/api"
 )
 
 // TestResult represents the result of a capability test
@@ -49,38 +50,42 @@ func (c *CapabilityChecker) TestOllamaToolCalling(ctx context.Context, model str
 		return result
 	}
 
-	// Create a basic Ollama client for testing
-	testClient := &OllamaClient{
-		OllamaCore: ollamaCore,
-	}
-
 	// Create dummy tool manager with a basic test tool
 	toolManager := newDummyToolManager()
-
-	// Set tool manager
-	testClient.SetToolManager(toolManager)
-
-	// Test tool calling with a simple request
-	messages := []message.Message{
-		message.NewChatMessage(message.MessageTypeUser, "Please test the capability by using the test_tool. Call the test_tool to verify it works."),
-	}
-
-	// Try tool calling with explicit tool choice
-	toolChoice := domain.ToolChoice{
-		Type: domain.ToolChoiceAny, // Force tool usage
-	}
 
 	if c.verbose {
 		fmt.Printf("🧪 Testing tool calling capability for model: %s\n", model)
 	}
 
-	response, err := testClient.ChatWithToolChoice(ctx, messages, toolChoice, false, nil)
+	// Build the request directly (bypassing ChatWithToolChoice which gates on IsToolCapable()).
+	// ChatWithToolChoice skips sending tools for models not in the static list, creating a
+	// circular dependency: unknown model → no tools sent → no tool call → check fails → stays unknown.
+	tools := convertToOllamaTools(toolManager.GetTools())
+	userMsg := message.NewChatMessage(message.MessageTypeUser,
+		"Please test the capability by using the test_tool. Call the test_tool to verify it works.")
+	ollamaMessages := toOllamaMessages([]message.Message{userMsg})
+	addToolUsageSystemMessage(&ollamaMessages,
+		"You MUST use at least one of the available tools. Do not respond without calling a tool.")
+
+	chatRequest := &api.ChatRequest{
+		Model:    model,
+		Messages: ollamaMessages,
+		Tools:    tools,
+		Options: map[string]any{
+			"temperature": 0.1,
+			"num_predict": 512,
+		},
+	}
+
+	rawResult, err := ollamaCore.chat(ctx, chatRequest, nil)
 	result.Duration = time.Since(start)
 
 	if err != nil {
 		result.Error = fmt.Sprintf("Tool calling failed: %v", err)
 		return result
 	}
+
+	response := toDomainMessageFromOllama(rawResult, false)
 
 	// Check if we got a tool call response
 	if response.Type() == message.MessageTypeToolCall {

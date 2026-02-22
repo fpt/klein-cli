@@ -68,6 +68,9 @@ func (c *OllamaCore) chat(ctx context.Context, chatRequest *api.ChatRequest, thi
 	var result api.Message
 	var contentBuilder strings.Builder
 	var thinkingBuilder strings.Builder
+	// Accumulate tool calls across all chunks: some models (e.g. qwen3) send tool_calls
+	// in intermediate streaming chunks (done=false) rather than in the final done=true chunk.
+	var accumulatedToolCalls []api.ToolCall
 
 	err := c.client.Chat(ctx, chatRequest, func(resp api.ChatResponse) error {
 		// Accumulate content and thinking from streaming responses
@@ -82,6 +85,13 @@ func (c *OllamaCore) chat(ctx context.Context, chatRequest *api.ChatRequest, thi
 			}
 
 			thinkingBuilder.WriteString(resp.Message.Thinking)
+		}
+
+		// Collect tool calls from every chunk (intermediate or final).
+		// qwen3 sends the full tool_calls list in the first streaming chunk (done=false);
+		// other models (gpt-oss) send them in the final done=true chunk.
+		if len(resp.Message.ToolCalls) > 0 {
+			accumulatedToolCalls = append(accumulatedToolCalls, resp.Message.ToolCalls...)
 		}
 
 		if resp.Done {
@@ -107,9 +117,10 @@ func (c *OllamaCore) chat(ctx context.Context, chatRequest *api.ChatRequest, thi
 				Content:  contentBuilder.String(),
 				Thinking: thinkingBuilder.String(),
 			}
-			// Copy other fields from the final response
-			if len(resp.Message.ToolCalls) > 0 {
-				result.ToolCalls = resp.Message.ToolCalls
+			// Use all accumulated tool calls (works for both qwen3-style intermediate
+			// chunks and gpt-oss-style final-chunk tool calls)
+			if len(accumulatedToolCalls) > 0 {
+				result.ToolCalls = accumulatedToolCalls
 			}
 		}
 
@@ -249,13 +260,20 @@ func (c *OllamaClient) ChatWithToolChoice(ctx context.Context, messages []messag
 		}
 	}
 
+	// Apply thinking parameter for models that declare thinking capability.
+	// Use c.thinking (from settings JSON) rather than the enableThinking caller arg,
+	// because the ReAct agent always passes enableThinking=true regardless of settings.
+	if IsThinkingCapableModel(c.model) {
+		chatRequest.Think = &api.ThinkValue{Value: c.thinking}
+	}
+
+	includeThinking := c.thinking && IsThinkingCapableModel(c.model)
 	result, err := c.chat(ctx, chatRequest, thinkingChan)
 	if err != nil {
 		return nil, fmt.Errorf("ollama chat error: %w", err)
 	}
 
-	// Centralized conversion (ChatWithToolChoice previously did not include thinking)
-	return toDomainMessageFromOllama(result, false), nil
+	return toDomainMessageFromOllama(result, includeThinking), nil
 }
 
 // chatWithOptions is a private helper that consolidates chat logic

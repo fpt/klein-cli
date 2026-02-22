@@ -21,17 +21,26 @@ func toDomainMessageFromOllama(msg api.Message, includeThinking bool) message.Me
 	// Handle tool calls from the model first
 	if len(msg.ToolCalls) == 1 {
 		toolCall := msg.ToolCalls[0]
-		return message.NewToolCallMessage(
+		tcMsg := message.NewToolCallMessage(
 			message.ToolName(toolCall.Function.Name),
 			message.ToolArgumentValues(toolCall.Function.Arguments.ToMap()),
 		)
+		// Store the native Ollama tool call ID for round-tripping in conversation history
+		if toolCall.ID != "" {
+			tcMsg.SetMetadata("ollama_tool_call_id", toolCall.ID)
+		}
+		return tcMsg
 	} else if len(msg.ToolCalls) > 1 {
 		var calls []*message.ToolCallMessage
 		for _, tc := range msg.ToolCalls {
-			calls = append(calls, message.NewToolCallMessage(
+			tcMsg := message.NewToolCallMessage(
 				message.ToolName(tc.Function.Name),
 				message.ToolArgumentValues(tc.Function.Arguments.ToMap()),
-			))
+			)
+			if tc.ID != "" {
+				tcMsg.SetMetadata("ollama_tool_call_id", tc.ID)
+			}
+			calls = append(calls, tcMsg)
 		}
 		return message.NewToolCallBatch(calls)
 	}
@@ -50,6 +59,10 @@ func toDomainMessageFromOllama(msg api.Message, includeThinking bool) message.Me
 // toOllamaMessages converts neutral messages to Ollama format
 func toOllamaMessages(messages []message.Message) []api.Message {
 	var ollamaMessages []api.Message
+
+	// Track tool calls by their internal message ID so tool results can reference them
+	// (ToolResultMessage.ID() equals the ToolCallMessage.ID() used as callID in handleToolCall)
+	toolCallsByID := make(map[string]*message.ToolCallMessage)
 
 	for _, msg := range messages {
 		switch msg.Type() {
@@ -84,39 +97,51 @@ func toOllamaMessages(messages []message.Message) []api.Message {
 		case message.MessageTypeToolCall:
 			// Check if this is a ToolCallMessage
 			if toolCallMsg, ok := msg.(*message.ToolCallMessage); ok {
+				// Track by internal ID for matching tool results
+				toolCallsByID[toolCallMsg.ID()] = toolCallMsg
+
 				// Use native tool calling format
 				args := api.NewToolCallFunctionArguments()
 				for k, v := range toolCallMsg.ToolArguments() {
 					args.Set(k, v)
 				}
-				ollamaMessages = append(ollamaMessages, api.Message{
-					Role:    "assistant",
-					Content: "", // Content can be empty for tool calls
-					ToolCalls: []api.ToolCall{
-						{
-							Function: api.ToolCallFunction{
-								Name:      string(toolCallMsg.ToolName()),
-								Arguments: args,
-							},
-						},
+				ollamaToolCall := api.ToolCall{
+					Function: api.ToolCallFunction{
+						Name:      string(toolCallMsg.ToolName()),
+						Arguments: args,
 					},
+				}
+				// Restore the original Ollama tool call ID for conversation reconstruction
+				if id, ok := toolCallMsg.Metadata()["ollama_tool_call_id"].(string); ok {
+					ollamaToolCall.ID = id
+				}
+				ollamaMessages = append(ollamaMessages, api.Message{
+					Role:      "assistant",
+					Content:   "", // Content can be empty for tool calls
+					ToolCalls: []api.ToolCall{ollamaToolCall},
 				})
 			}
 		case message.MessageTypeToolResult:
 			// Check if this is a ToolResultMessage
 			if toolResultMsg, ok := msg.(*message.ToolResultMessage); ok {
-				// For native tool calling, tool results should be sent as a special message
-				// with the tool name indicating which tool the result is for
 				content := toolResultMsg.Result
 				if toolResultMsg.Error != "" {
 					content = fmt.Sprintf("Error: %s", toolResultMsg.Error)
 				}
-				// For now, just send as a regular user message
-				// TODO: Implement proper tool result handling when API supports it
-				ollamaMessages = append(ollamaMessages, api.Message{
-					Role:    "user", // Tool results come from user/tool perspective
+				// Use the proper "tool" role for native tool calling.
+				// The ToolResultMessage.ID() equals the corresponding ToolCallMessage.ID(),
+				// so we can look up the original call to get the tool name and native ID.
+				toolMsg := api.Message{
+					Role:    "tool",
 					Content: content,
-				})
+				}
+				if toolCallMsg, found := toolCallsByID[toolResultMsg.ID()]; found {
+					toolMsg.ToolName = string(toolCallMsg.ToolName())
+					if id, ok := toolCallMsg.Metadata()["ollama_tool_call_id"].(string); ok {
+						toolMsg.ToolCallID = id
+					}
+				}
+				ollamaMessages = append(ollamaMessages, toolMsg)
 			}
 		case message.MessageTypeToolCallBatch:
 			// Skip batch container in request reconstruction; individual calls/results are present

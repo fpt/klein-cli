@@ -49,6 +49,17 @@ var ollamaModels = []OllamaModel{
 		Vision:  true,  // Has vision capability
 		Context: 8192,  // Standard context for Gemma models
 	},
+	// qwen3 family — confirmed tool-capable via Ollama native tool calling API
+	// Think: true so ChatWithToolChoice honours c.thinking (settings JSON) to disable by default
+	{Name: "qwen3:0.6b", Tool: true, Think: true, Vision: false, Context: 40960},
+	{Name: "qwen3:1.7b", Tool: true, Think: true, Vision: false, Context: 40960},
+	{Name: "qwen3:4b", Tool: true, Think: true, Vision: false, Context: 40960},
+	{Name: "qwen3:8b", Tool: true, Think: true, Vision: false, Context: 40960},
+	{Name: "qwen3:14b", Tool: true, Think: true, Vision: false, Context: 40960},
+	{Name: "qwen3:30b", Tool: true, Think: true, Vision: false, Context: 40960},
+	{Name: "qwen3:32b", Tool: true, Think: true, Vision: false, Context: 40960},
+	// glm-4.7 family — uses XML tool call format, incompatible with Ollama JSON tool calling API
+	{Name: "glm-4.7", Tool: false, Think: false, Vision: false, Context: 128000},
 }
 
 // IsToolCapableModel checks if a model supports native tool calling

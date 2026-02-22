@@ -1,9 +1,0 @@
-{
-  "name": "ollama_rnj1_8b",
-  "llm": {
-    "backend": "ollama",
-    "model": "rnj-1:8b",
-    "thinking": false,
-    "maxTokens": 2048
-  }
-}

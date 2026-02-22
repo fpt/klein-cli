@@ -40,6 +40,10 @@ fix: ## Fix code issues
 integ: build ## Matrix integration test (testcases × backends)
 	CLI=output/klein ./testsuite/matrix_runner.sh
 
+integ-ollama: build
+	CLI=output/klein BACKENDS="ollama_gpt_oss_20b,ollama_qwen3_4b,ollama_qwen3_8b,ollama_qwen3_14b" \
+	TESTS="coding,fibonacci,research_scenario,web_search" ./testsuite/matrix_runner.sh
+
 test-capabilities: ## Capability testing
 	go build -o output/test-capabilities ./cmd/test-capabilities
 	./output/test-capabilities

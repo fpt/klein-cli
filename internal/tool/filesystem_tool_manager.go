@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/fpt/klein-cli/internal/repository"
+	"github.com/fpt/klein-cli/pkg/agent/domain"
 	pkgLogger "github.com/fpt/klein-cli/pkg/logger"
 	"github.com/fpt/klein-cli/pkg/message"
 	"github.com/pkg/errors"
@@ -34,6 +35,9 @@ type FileSystemToolManager struct {
 	fileReadTimestamps map[string]time.Time // Track when files were last read
 	mu                 sync.RWMutex         // Thread safety for timestamp tracking
 
+	// Edit failure tracking (for ToolStateProvider)
+	editFailCounts map[string]int // Consecutive old_string-not-found failures per abs path
+
 	// Tool registry
 	tools map[message.ToolName]message.Tool
 }
@@ -54,6 +58,7 @@ func NewFileSystemToolManager(fsRepo repository.FilesystemRepository, config rep
 		blacklistedFiles:   config.BlacklistedFiles,
 		workingDir:         absWorkingDir,
 		fileReadTimestamps: make(map[string]time.Time),
+		editFailCounts:     make(map[string]int),
 		tools:              make(map[message.ToolName]message.Tool),
 	}
 
@@ -491,6 +496,9 @@ func (m *FileSystemToolManager) handleEnhancedEdit(ctx context.Context, args mes
 			}
 			oldString = normalizedOld
 		} else {
+			m.mu.Lock()
+			m.editFailCounts[absPath]++
+			m.mu.Unlock()
 			return message.NewToolResultError(fmt.Sprintf("old_string not found in file %s. Please ensure exact whitespace and formatting match.", absPath)), nil
 		}
 	}
@@ -498,6 +506,9 @@ func (m *FileSystemToolManager) handleEnhancedEdit(ctx context.Context, args mes
 	// Count occurrences for safety
 	occurrences := strings.Count(fileContent, oldString)
 	if occurrences == 0 {
+		m.mu.Lock()
+		m.editFailCounts[absPath]++
+		m.mu.Unlock()
 		return message.NewToolResultError(fmt.Sprintf("old_string not found in file %s", absPath)), nil
 	}
 
@@ -528,6 +539,11 @@ func (m *FileSystemToolManager) handleEnhancedEdit(ctx context.Context, args mes
 
 	// Update read timestamp after successful edit to allow sequential edits
 	m.recordFileRead(absPath)
+
+	// Reset consecutive Edit failure counter now that the edit succeeded
+	m.mu.Lock()
+	delete(m.editFailCounts, absPath)
+	m.mu.Unlock()
 
 	// Calculate change statistics for feedback
 	oldLines := strings.Count(oldString, "\n") + 1
@@ -575,8 +591,11 @@ func (m *FileSystemToolManager) handleRead(ctx context.Context, args message.Too
 		return message.NewToolResultError(fmt.Sprintf("failed to read file: %v", err)), nil
 	}
 
-	// Record successful read
+	// Record successful read and clear any Edit failure history for this file
 	m.recordFileRead(path)
+	m.mu.Lock()
+	delete(m.editFailCounts, path)
+	m.mu.Unlock()
 
 	content := string(contentBytes)
 	lines := strings.Split(content, "\n")
@@ -971,3 +990,25 @@ func (m *FileSystemToolManager) formatValidationResults(results []ValidationResu
 
 	return output.String()
 }
+
+// GetToolState implements domain.ToolStateProvider.
+// Reports files with consecutive Edit failures so the situation message can
+// advise the model to re-read before retrying, without inspecting raw error text.
+func (m *FileSystemToolManager) GetToolState() string {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	var parts []string
+	for path, count := range m.editFailCounts {
+		if count >= 2 {
+			parts = append(parts, fmt.Sprintf("%s (Edit failed %d times — re-read the file before retrying)", filepath.Base(path), count))
+		}
+	}
+	if len(parts) == 0 {
+		return ""
+	}
+	return "Edit failures requiring re-read: " + strings.Join(parts, ", ")
+}
+
+// Compile-time check that FileSystemToolManager implements ToolStateProvider.
+var _ domain.ToolStateProvider = (*FileSystemToolManager)(nil)

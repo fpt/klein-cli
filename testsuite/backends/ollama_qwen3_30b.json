@@ -1,8 +1,8 @@
 {
-  "name": "ollama_glm47_flash",
+  "name": "ollama_qwen3_30b",
   "llm": {
     "backend": "ollama",
-    "model": "glm-4.7-flash",
+    "model": "qwen3:30b",
     "thinking": false,
     "maxTokens": 2048
   }

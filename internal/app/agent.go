@@ -190,7 +190,7 @@ func (a *Agent) Invoke(ctx context.Context, userInput string, skillName string) 
 		return nil, fmt.Errorf("failed to create LLM client with tools: %w", err)
 	}
 
-	situation := NewAgentSituation(a.allToolManagers)
+	situation := NewIterationAdvisor(a.allToolManagers)
 
 	maxIterations := DefaultAgentMaxIterations
 	if a.settings != nil && a.settings.Agent.MaxIterations > 0 {
@@ -375,7 +375,7 @@ func (a *Agent) InvokeWithOptions(ctx context.Context, prompt string) (message.M
 		return nil, fmt.Errorf("failed to create LLM client with tools: %w", err)
 	}
 
-	situation := NewAgentSituation(a.allToolManagers)
+	situation := NewIterationAdvisor(a.allToolManagers)
 
 	maxIterations := DefaultAgentMaxIterations
 	if a.settings != nil && a.settings.Agent.MaxIterations > 0 {

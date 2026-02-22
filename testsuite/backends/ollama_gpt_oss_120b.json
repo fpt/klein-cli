@@ -1,0 +1,9 @@
+{
+  "name": "ollama_gpt_oss_120b",
+  "llm": {
+    "backend": "ollama",
+    "model": "gpt-oss:120b",
+    "thinking": true,
+    "maxTokens": 2048
+  }
+}

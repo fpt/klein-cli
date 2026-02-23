@@ -4,6 +4,9 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"os"
+	"path/filepath"
+	"regexp"
 	"strings"
 
 	"connectrpc.com/connect"
@@ -113,20 +116,12 @@ func (gw *Gateway) handleInbound(ctx context.Context, msg InboundMessage) {
 		_ = a.SendTyping(ctx, msg.ChannelID)
 	}
 
-	// Inject Discord thread context on first invoke of a new session
-	session.mu.Lock()
-	needsContext := !session.ContextInjected
-	session.ContextInjected = true
-	session.mu.Unlock()
-
+	// Inject session log file path if available
 	enrichedText := msg.Text
-	if needsContext {
-		if cp, ok := gw.adapters[msg.ChannelType].(ContextProvider); ok {
-			if threadCtx, err := cp.FetchChannelContext(ctx, msg.ChannelID, gw.config.ThreadContextMessages); err == nil && threadCtx != "" {
-				enrichedText = threadCtx + enrichedText
-			} else if err != nil {
-				gw.logger.Warn("Failed to fetch channel context", "error", err)
-			}
+	if gw.config.SessionsDir != "" {
+		sessionFile := gw.sessionFilePath(key)
+		if _, err := os.Stat(sessionFile); err == nil {
+			enrichedText = fmt.Sprintf("[SESSION LOG: %s]\n", sessionFile) + enrichedText
 		}
 	}
 
@@ -262,6 +257,18 @@ func (gw *Gateway) sendError(orig InboundMessage, text string) {
 		Text:        text,
 		ReplyToID:   orig.ReplyToID,
 	}
+}
+
+var gwNonAlphanumericRe = regexp.MustCompile(`[^a-zA-Z0-9]+`)
+
+// sessionFilePath computes the session persistence file path for a given key.
+// Must match the sanitization logic in internal/connectrpc/server.go.
+func (gw *Gateway) sessionFilePath(key SessionKey) string {
+	safe := gwNonAlphanumericRe.ReplaceAllString(key.PersistenceKeyString(), "_")
+	if len(safe) > 128 {
+		safe = safe[:128]
+	}
+	return filepath.Join(gw.config.SessionsDir, safe+".json")
 }
 
 // Close shuts down all adapters.

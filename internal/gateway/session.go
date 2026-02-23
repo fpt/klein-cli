@@ -26,12 +26,11 @@ func (k SessionKey) PersistenceKeyString() string {
 
 // Session holds per-peer state.
 type Session struct {
-	Key             SessionKey
-	AgentSessionID  string // Connect RPC session ID
-	Skill           string
-	LastActivity    time.Time
-	ContextInjected bool // true after first-invoke thread context has been injected
-	mu              sync.Mutex
+	Key            SessionKey
+	AgentSessionID string // Connect RPC session ID
+	Skill          string
+	LastActivity   time.Time
+	mu             sync.Mutex
 }
 
 // SessionManager manages per-peer sessions with inactivity timeout.

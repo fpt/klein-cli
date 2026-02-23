@@ -13,9 +13,3 @@ type Adapter interface {
 	// SendTyping shows a typing indicator in the channel.
 	SendTyping(ctx context.Context, channelID string) error
 }
-
-// ContextProvider is optionally implemented by adapters that can fetch channel history.
-// Used to inject thread/channel context on session creation (e.g., after server restart).
-type ContextProvider interface {
-	FetchChannelContext(ctx context.Context, channelID string, limit int) (string, error)
-}

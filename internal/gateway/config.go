@@ -15,8 +15,9 @@ type GatewayConfig struct {
 	DefaultModel   string          `json:"default_model"`   // LLM model
 	MaxIterations  int             `json:"max_iterations"`  // ReAct loop cap
 	SessionTimeout string          `json:"session_timeout"` // Inactivity timeout for sessions (Go duration, default: "30m")
-	SessionsDir    string          `json:"sessions_dir"`    // Directory for per-session persistence files (default: ~/.klein/claw/sessions/)
-	Discord        DiscordConfig   `json:"discord"`
+	SessionsDir           string          `json:"sessions_dir"`            // Directory for per-session persistence files (default: ~/.klein/claw/sessions/)
+	ThreadContextMessages int             `json:"thread_context_messages"` // Number of recent messages to fetch for thread context (default: 10)
+	Discord               DiscordConfig   `json:"discord"`
 	Memory         MemoryConfig    `json:"memory"`
 	Heartbeat      HeartbeatConfig `json:"heartbeat"`
 }
@@ -66,7 +67,8 @@ func DefaultGatewayConfig() *GatewayConfig {
 		DefaultModel:   "claude-sonnet-4-5-20250929",
 		MaxIterations:  15,
 		SessionTimeout: "30m",
-		SessionsDir:    filepath.Join(home, ".klein", "claw", "sessions"),
+		SessionsDir:           filepath.Join(home, ".klein", "claw", "sessions"),
+		ThreadContextMessages: 10,
 		Memory: MemoryConfig{
 			BaseDir:  filepath.Join(home, ".klein", "claw", "memory"),
 			MaxNotes: 30,

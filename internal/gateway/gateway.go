@@ -113,8 +113,24 @@ func (gw *Gateway) handleInbound(ctx context.Context, msg InboundMessage) {
 		_ = a.SendTyping(ctx, msg.ChannelID)
 	}
 
-	// Inject memory context
+	// Inject Discord thread context on first invoke of a new session
+	session.mu.Lock()
+	needsContext := !session.ContextInjected
+	session.ContextInjected = true
+	session.mu.Unlock()
+
 	enrichedText := msg.Text
+	if needsContext {
+		if cp, ok := gw.adapters[msg.ChannelType].(ContextProvider); ok {
+			if threadCtx, err := cp.FetchChannelContext(ctx, msg.ChannelID, gw.config.ThreadContextMessages); err == nil && threadCtx != "" {
+				enrichedText = threadCtx + enrichedText
+			} else if err != nil {
+				gw.logger.Warn("Failed to fetch channel context", "error", err)
+			}
+		}
+	}
+
+	// Inject memory context
 	if memoryPrompt := gw.memory.BuildMemoryPrompt(); memoryPrompt != "" {
 		enrichedText = memoryPrompt + enrichedText
 	}

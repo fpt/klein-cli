@@ -363,6 +363,20 @@ func (a *Agent) handleApprovalWorkflow(ctx context.Context, reactClient domain.R
 	}
 }
 
+// EnablePersistence upgrades an in-memory agent to file-backed session persistence.
+// Must be called before any Invoke. Loads existing history if the file exists.
+func (a *Agent) EnablePersistence(filePath string) error {
+	messageRepo := infra.NewMessageHistoryRepository(filePath)
+	newState := state.NewMessageStateWithRepository(messageRepo)
+	if err := newState.LoadFromFile(); err != nil {
+		a.logger.Warn("Could not load existing session, starting fresh",
+			"file", filePath, "error", err)
+	}
+	a.sharedState = newState
+	a.sessionFilePath = filePath
+	return nil
+}
+
 // ClearHistory clears the conversation history.
 func (a *Agent) ClearHistory() {
 	a.sharedState.Clear()

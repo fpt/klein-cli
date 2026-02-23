@@ -65,6 +65,7 @@ func main() {
 	var allowedTools = flag.String("allowed-tools", "", "Comma-separated list of allowed tools (overrides skill's allowed-tools)")
 	var serve = flag.Bool("serve", false, "Start Connect-gRPC server mode for gateway integration")
 	var serveAddr = flag.String("serve-addr", ":50051", "Connect server listen address")
+	var sessionsDir = flag.String("sessions-dir", "", "Directory for per-session persistence files (default: ~/.klein/claw/sessions/)")
 	var help = flag.Bool("h", false, "Show this help message")
 	var helpLong = flag.Bool("help", false, "Show this help message")
 
@@ -182,7 +183,7 @@ func main() {
 	// Handle Connect-gRPC server mode
 	if *serve {
 		logger.Info("Starting Connect-gRPC server", "addr", *serveAddr)
-		if err := connectserver.StartServer(ctx, *serveAddr, settings, mcpToolManagers, logger); err != nil {
+		if err := connectserver.StartServer(ctx, *serveAddr, settings, mcpToolManagers, logger, *sessionsDir); err != nil {
 			logger.Error("Server failed", "error", err)
 			os.Exit(1)
 		}

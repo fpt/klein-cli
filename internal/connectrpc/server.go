@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"path/filepath"
+	"regexp"
 	"sync"
 
 	"connectrpc.com/connect"
@@ -33,6 +35,7 @@ type AgentServer struct {
 	settings        *config.Settings
 	mcpToolManagers map[string]domain.ToolManager
 	logger          *pkgLogger.Logger
+	sessionsDir     string // Directory for per-session persistence files
 }
 
 type sessionState struct {
@@ -40,12 +43,13 @@ type sessionState struct {
 }
 
 // NewAgentServer creates a Connect AgentService handler.
-func NewAgentServer(settings *config.Settings, mcpToolManagers map[string]domain.ToolManager, logger *pkgLogger.Logger) *AgentServer {
+func NewAgentServer(settings *config.Settings, mcpToolManagers map[string]domain.ToolManager, logger *pkgLogger.Logger, sessionsDir string) *AgentServer {
 	return &AgentServer{
 		sessions:        make(map[string]*sessionState),
 		settings:        settings,
 		mcpToolManagers: mcpToolManagers,
 		logger:          logger.WithComponent("connect-server"),
+		sessionsDir:     sessionsDir,
 	}
 }
 
@@ -77,10 +81,21 @@ func (s *AgentServer) StartSession(ctx context.Context, req *connect.Request[age
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to create LLM client: %w", err))
 	}
 
-	// In Connect/gRPC mode: no session restore, always-approve, interactive semantics for persistence
+	// In Connect/gRPC mode: auto-approve all tool calls, each session gets isolated in-memory state.
+	// Persistence is enabled per-session via X-Persistence-Key header.
 	fsRepo := infra.NewOSFilesystemRepository()
 	out := io.Discard
-	agent := app.NewAgentWithOptions(llmClient, workingDir, s.mcpToolManagers, settings, s.logger, out, true, true, fsRepo)
+	agent := app.NewAgentWithOptions(llmClient, workingDir, s.mcpToolManagers, settings, s.logger, out, true, false, fsRepo)
+
+	// Enable file-backed persistence if a persistence key is provided
+	persistenceKey := req.Header().Get("X-Persistence-Key")
+	if persistenceKey != "" && s.sessionsDir != "" {
+		safeName := sanitizeFilename(persistenceKey)
+		filePath := filepath.Join(s.sessionsDir, safeName+".json")
+		if err := agent.EnablePersistence(filePath); err != nil {
+			s.logger.Warn("Failed to enable persistence", "key", persistenceKey, "error", err)
+		}
+	}
 
 	s.mu.Lock()
 	s.nextID++
@@ -88,7 +103,7 @@ func (s *AgentServer) StartSession(ctx context.Context, req *connect.Request[age
 	s.sessions[sessionID] = &sessionState{agent: agent}
 	s.mu.Unlock()
 
-	s.logger.Info("Session started", "session_id", sessionID, "working_dir", workingDir)
+	s.logger.Info("Session started", "session_id", sessionID, "working_dir", workingDir, "persistence_key", persistenceKey)
 
 	return connect.NewResponse(&agentv1.StartSessionResponse{
 		SessionId: sessionID,
@@ -206,6 +221,17 @@ func (s *AgentServer) getSession(sessionID string) (*sessionState, error) {
 		return nil, connect.NewError(connect.CodeNotFound, fmt.Errorf("session %q not found", sessionID))
 	}
 	return session, nil
+}
+
+var nonAlphanumericRe = regexp.MustCompile(`[^a-zA-Z0-9]+`)
+
+// sanitizeFilename converts a persistence key to a safe filename component.
+func sanitizeFilename(key string) string {
+	safe := nonAlphanumericRe.ReplaceAllString(key, "_")
+	if len(safe) > 128 {
+		safe = safe[:128]
+	}
+	return safe
 }
 
 // translateEvent converts an events.AgentEvent to a proto InvokeEvent.

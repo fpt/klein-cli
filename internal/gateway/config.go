@@ -9,14 +9,16 @@ import (
 
 // GatewayConfig is the top-level configuration for klein-claw.
 type GatewayConfig struct {
-	AgentAddr     string         `json:"agent_addr"`     // Connect server address, e.g., "http://localhost:50051"
-	WorkingDir    string         `json:"working_dir"`    // Agent working directory
-	DefaultSkill  string         `json:"default_skill"`  // Default skill (default: "claw")
-	DefaultModel  string         `json:"default_model"`  // LLM model
-	MaxIterations int            `json:"max_iterations"` // ReAct loop cap
-	Discord       DiscordConfig  `json:"discord"`
-	Memory        MemoryConfig   `json:"memory"`
-	Heartbeat     HeartbeatConfig `json:"heartbeat"`
+	AgentAddr      string          `json:"agent_addr"`      // Connect server address, e.g., "http://localhost:50051"
+	WorkingDir     string          `json:"working_dir"`     // Agent working directory
+	DefaultSkill   string          `json:"default_skill"`   // Default skill (default: "claw")
+	DefaultModel   string          `json:"default_model"`   // LLM model
+	MaxIterations  int             `json:"max_iterations"`  // ReAct loop cap
+	SessionTimeout string          `json:"session_timeout"` // Inactivity timeout for sessions (Go duration, default: "30m")
+	SessionsDir    string          `json:"sessions_dir"`    // Directory for per-session persistence files (default: ~/.klein/claw/sessions/)
+	Discord        DiscordConfig   `json:"discord"`
+	Memory         MemoryConfig    `json:"memory"`
+	Heartbeat      HeartbeatConfig `json:"heartbeat"`
 }
 
 // DiscordConfig holds Discord bot configuration.
@@ -46,6 +48,12 @@ func LoadGatewayConfig(path string) (*GatewayConfig, error) {
 		cfg.Memory.BaseDir = filepath.Join(home, ".klein", "claw", "memory")
 	}
 
+	// Expand $HOME in sessions_dir
+	if cfg.SessionsDir == "" {
+		home, _ := os.UserHomeDir()
+		cfg.SessionsDir = filepath.Join(home, ".klein", "claw", "sessions")
+	}
+
 	return cfg, nil
 }
 
@@ -53,10 +61,12 @@ func LoadGatewayConfig(path string) (*GatewayConfig, error) {
 func DefaultGatewayConfig() *GatewayConfig {
 	home, _ := os.UserHomeDir()
 	return &GatewayConfig{
-		AgentAddr:     "http://localhost:50051",
-		DefaultSkill:  "claw",
-		DefaultModel:  "claude-sonnet-4-5-20250929",
-		MaxIterations: 15,
+		AgentAddr:      "http://localhost:50051",
+		DefaultSkill:   "claw",
+		DefaultModel:   "claude-sonnet-4-5-20250929",
+		MaxIterations:  15,
+		SessionTimeout: "30m",
+		SessionsDir:    filepath.Join(home, ".klein", "claw", "sessions"),
 		Memory: MemoryConfig{
 			BaseDir:  filepath.Join(home, ".klein", "claw", "memory"),
 			MaxNotes: 30,

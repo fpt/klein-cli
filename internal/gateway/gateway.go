@@ -29,7 +29,7 @@ func NewGateway(cfg *GatewayConfig, logger *pkgLogger.Logger) (*Gateway, error) 
 	client := agentv1connect.NewAgentServiceClient(http.DefaultClient, cfg.AgentAddr)
 
 	bus := NewMessageBus(64)
-	sessions := NewSessionManager(client, cfg)
+	sessions := NewSessionManager(client, cfg, logger)
 	memory := NewMemoryManager(cfg.Memory)
 
 	if err := memory.EnsureDirectories(); err != nil {

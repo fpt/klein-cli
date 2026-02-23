@@ -16,8 +16,8 @@ import (
 )
 
 // StartServer starts the Connect-gRPC HTTP/2 server and blocks until ctx is cancelled.
-func StartServer(ctx context.Context, addr string, settings *config.Settings, mcpToolManagers map[string]domain.ToolManager, logger *pkgLogger.Logger) error {
-	server := NewAgentServer(settings, mcpToolManagers, logger)
+func StartServer(ctx context.Context, addr string, settings *config.Settings, mcpToolManagers map[string]domain.ToolManager, logger *pkgLogger.Logger, sessionsDir string) error {
+	server := NewAgentServer(settings, mcpToolManagers, logger, sessionsDir)
 
 	path, handler := agentv1connect.NewAgentServiceHandler(server)
 	mux := http.NewServeMux()

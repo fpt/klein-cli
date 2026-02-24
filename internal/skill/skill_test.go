@@ -14,7 +14,7 @@ func TestParseSkillMD_WithFrontmatter(t *testing.T) {
 	data := []byte(`---
 name: test-skill
 description: A test skill
-allowed-tools: Read, Write, Grep
+allowed-tools: read_file, write_file, grep
 argument-hint: "[filename]"
 disable-model-invocation: true
 ---
@@ -37,7 +37,7 @@ Second paragraph.
 	if len(s.AllowedTools) != 3 {
 		t.Fatalf("expected 3 allowed tools, got %d", len(s.AllowedTools))
 	}
-	if s.AllowedTools[0] != "Read" || s.AllowedTools[1] != "Write" || s.AllowedTools[2] != "Grep" {
+	if s.AllowedTools[0] != "read_file" || s.AllowedTools[1] != "write_file" || s.AllowedTools[2] != "grep" {
 		t.Errorf("unexpected allowed tools: %v", s.AllowedTools)
 	}
 	if s.ArgumentHint != "[filename]" {
@@ -287,7 +287,7 @@ func newMockToolManager(names ...string) *mockToolManager {
 
 func TestFilteredToolManager_AllTools(t *testing.T) {
 	s := &Skill{AllowedTools: nil} // empty = all tools
-	source := newMockToolManager("Read", "Write", "Grep")
+	source := newMockToolManager("read_file", "write_file", "grep")
 	result := s.FilterTools(source)
 	if result != source {
 		t.Error("expected source manager returned directly when no allowed-tools")
@@ -295,26 +295,26 @@ func TestFilteredToolManager_AllTools(t *testing.T) {
 }
 
 func TestFilteredToolManager_SubsetTools(t *testing.T) {
-	source := newMockToolManager("Read", "Write", "Grep", "bash")
-	fm := NewFilteredToolManager(source, []string{"Read", "Grep"})
+	source := newMockToolManager("read_file", "write_file", "grep", "bash")
+	fm := NewFilteredToolManager(source, []string{"read_file", "grep"})
 	tools := fm.GetTools()
 	if len(tools) != 2 {
 		t.Fatalf("expected 2 tools, got %d", len(tools))
 	}
-	if _, ok := tools["Read"]; !ok {
-		t.Error("expected Read in filtered tools")
+	if _, ok := tools["read_file"]; !ok {
+		t.Error("expected read_file in filtered tools")
 	}
-	if _, ok := tools["Grep"]; !ok {
-		t.Error("expected Grep in filtered tools")
+	if _, ok := tools["grep"]; !ok {
+		t.Error("expected grep in filtered tools")
 	}
-	if _, ok := tools["Write"]; ok {
-		t.Error("Write should not be in filtered tools")
+	if _, ok := tools["write_file"]; ok {
+		t.Error("write_file should not be in filtered tools")
 	}
 }
 
 func TestFilteredToolManager_UnknownToolIgnored(t *testing.T) {
-	source := newMockToolManager("Read", "Write")
-	fm := NewFilteredToolManager(source, []string{"Read", "NonExistent"})
+	source := newMockToolManager("read_file", "write_file")
+	fm := NewFilteredToolManager(source, []string{"read_file", "NonExistent"})
 	tools := fm.GetTools()
 	if len(tools) != 1 {
 		t.Fatalf("expected 1 tool, got %d", len(tools))
@@ -322,23 +322,23 @@ func TestFilteredToolManager_UnknownToolIgnored(t *testing.T) {
 }
 
 func TestFilteredToolManager_CallTool(t *testing.T) {
-	source := newMockToolManager("Read", "Write")
-	fm := NewFilteredToolManager(source, []string{"Read"})
+	source := newMockToolManager("read_file", "write_file")
+	fm := NewFilteredToolManager(source, []string{"read_file"})
 
-	result, err := fm.CallTool(context.Background(), "Read", nil)
+	result, err := fm.CallTool(context.Background(), "read_file", nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if result.Text != "called:Read" {
+	if result.Text != "called:read_file" {
 		t.Errorf("unexpected result: %q", result.Text)
 	}
 }
 
 func TestFilteredToolManager_CallToolDenied(t *testing.T) {
-	source := newMockToolManager("Read", "Write")
-	fm := NewFilteredToolManager(source, []string{"Read"})
+	source := newMockToolManager("read_file", "write_file")
+	fm := NewFilteredToolManager(source, []string{"read_file"})
 
-	result, err := fm.CallTool(context.Background(), "Write", nil)
+	result, err := fm.CallTool(context.Background(), "write_file", nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}

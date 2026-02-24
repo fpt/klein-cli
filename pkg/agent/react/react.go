@@ -295,7 +295,7 @@ func (r *ReAct) runInternal(ctx context.Context) (message.Message, error) {
 			toolName := string(toolCall.ToolName())
 
 			// Check for file operations that require approval
-			requiresApproval := toolName == "Write" || toolName == "Edit" || toolName == "MultiEdit"
+			requiresApproval := toolName == "write_file" || toolName == "edit_file" || toolName == "multi_edit"
 
 			// Check for bash commands that may require approval
 			if !requiresApproval && (toolName == "bash") {

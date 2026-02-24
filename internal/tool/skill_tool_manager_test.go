@@ -19,7 +19,7 @@ func newTestSkillMap() skill.SkillMap {
 		"respond": {
 			Name:         "respond",
 			Description:  "Direct knowledge-based responses",
-			AllowedTools: []string{"Read", "Write", "read_skill"},
+			AllowedTools: []string{"read_file", "write_file", "read_skill"},
 			Content:      "Provide a direct response.",
 		},
 	}

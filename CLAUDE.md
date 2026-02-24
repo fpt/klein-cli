@@ -308,7 +308,7 @@ go run ./cmd/gateway --config ~/.klein/claw/config.json
 
 **Claw Skill (`internal/skill/skills/claw/SKILL.md`):**
 - Messaging-optimized assistant with memory awareness
-- Allowed tools: Read, Write, Edit, LS, Glob, Grep, bash, todo_write, WebFetch, WebSearch
+- Allowed tools: read_file, write_file, edit_file, list_directory, glob, grep, bash, todo_write, web_fetch, web_search
 - Guidelines: concise responses (<2000 chars), proactive memory updates, daily notes
 - `user-invocable: false` — only used by the gateway, not directly by CLI users
 
@@ -623,7 +623,7 @@ if toolCall, ok := resp.(*message.ToolCallMessage); ok {
     toolName := string(toolCall.ToolName())
     
     // Only require approval for potentially destructive file operations
-    requiresApproval := toolName == "Write" || toolName == "Edit" || toolName == "MultiEdit"
+    requiresApproval := toolName == "write_file" || toolName == "edit_file" || toolName == "multi_edit"
     
     if requiresApproval && !s.autoApprove {
         r.pendingToolCall = toolCall

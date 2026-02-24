@@ -253,11 +253,11 @@ func TestFileSystemToolManager_ToolRegistration(t *testing.T) {
 
 	// Verify expected tools
 	expectedTools := []string{
-		"Read",
-		"Write",
-		"Edit",
-		"LS",
-		"MultiEdit",
+		"read_file",
+		"write_file",
+		"edit_file",
+		"list_directory",
+		"multi_edit",
 	}
 
 	toolsMap := manager.GetTools()

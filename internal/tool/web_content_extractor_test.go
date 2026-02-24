@@ -202,8 +202,8 @@ func TestFormatBlockSummary(t *testing.T) {
 	if !strings.Contains(result, "...") {
 		t.Error("expected truncation indicator for long block")
 	}
-	if !strings.Contains(result, "WebFetchBlock") {
-		t.Error("expected WebFetchBlock usage hint")
+	if !strings.Contains(result, "web_fetch_block") {
+		t.Error("expected web_fetch_block usage hint")
 	}
 }
 

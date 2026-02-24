@@ -199,8 +199,8 @@ func (m *TodoToolManager) registerTaskTools() {
 			{Name: "plan", Description: "Concise implementation plan", Required: true, Type: "string"},
 		}, m.handleExitPlanMode)
 
-	// Task: sub-agent launcher (stub)
-	m.RegisterTool("Task", "Launch a sub-agent (stub). Not supported; use Glob/Grep/Read/WebFetch directly.",
+	// task: sub-agent launcher (stub)
+	m.RegisterTool("task", "Launch a sub-agent (stub). Not supported; use glob/grep/read_file/web_fetch directly.",
 		[]message.ToolArgument{
 			{Name: "description", Description: "Short task description", Required: true, Type: "string"},
 			{Name: "prompt", Description: "Detailed task for the agent", Required: true, Type: "string"},
@@ -220,9 +220,9 @@ func (m *TodoToolManager) handleExitPlanMode(ctx context.Context, args message.T
 // handleTaskStub informs that the Task sub-agent is not supported
 func (m *TodoToolManager) handleTaskStub(ctx context.Context, args message.ToolArgumentValues) (message.ToolResult, error) {
 	desc, _ := args["description"].(string)
-	msg := "Task sub-agent is not supported in this build. Use Glob/Grep to search, Read/LS/Edit/Write for files, and WebFetch for URLs."
+	msg := "Task sub-agent is not supported in this build. Use glob/grep to search, read_file/list_directory/edit_file/write_file for files, and web_fetch for URLs."
 	if desc != "" {
-		msg = fmt.Sprintf("Task not supported. Description: %q. Use Glob/Grep/Read/WebFetch directly.", desc)
+		msg = fmt.Sprintf("Task not supported. Description: %q. Use glob/grep/read_file/web_fetch directly.", desc)
 	}
 	return message.NewToolResultText(msg), nil
 }

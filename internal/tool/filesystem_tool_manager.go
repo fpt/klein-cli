@@ -130,8 +130,8 @@ func (m *FileSystemToolManager) RegisterTool(name message.ToolName, description 
 
 // registerFileSystemTools registers all secure filesystem tools
 func (m *FileSystemToolManager) registerFileSystemTools() {
-	// Read with optional offset/limit and line-numbered output
-	m.RegisterTool("Read", "Read a file with optional offset/limit and line-numbered output",
+	// read_file with optional offset/limit and line-numbered output
+	m.RegisterTool("read_file", "Read a file with optional offset/limit and line-numbered output",
 		[]message.ToolArgument{
 			{Name: "file_path", Description: "Path to the file to read", Required: true, Type: "string"},
 			{Name: "offset", Description: "1-based line start (optional)", Required: false, Type: "number"},
@@ -139,16 +139,16 @@ func (m *FileSystemToolManager) registerFileSystemTools() {
 		},
 		m.handleRead)
 
-	// Write
-	m.RegisterTool("Write", "Write full content to a file",
+	// write_file
+	m.RegisterTool("write_file", "Write full content to a file",
 		[]message.ToolArgument{
 			{Name: "file_path", Description: "Path to the file to write", Required: true, Type: "string"},
 			{Name: "content", Description: "Full file content", Required: true, Type: "string"},
 		},
 		m.handleWrite)
 
-	// Edit
-	m.RegisterTool("Edit", "Exact string replacement in a file (requires read-before-write semantics)",
+	// edit_file
+	m.RegisterTool("edit_file", "Exact string replacement in a file (requires read-before-write semantics)",
 		[]message.ToolArgument{
 			{Name: "file_path", Description: "Path to the file to edit", Required: true, Type: "string"},
 			{Name: "old_string", Description: "Exact string to replace (unique unless replace_all)", Required: true, Type: "string"},
@@ -157,16 +157,16 @@ func (m *FileSystemToolManager) registerFileSystemTools() {
 		},
 		m.handleEdit)
 
-	// LS with ignore globs
-	m.RegisterTool("LS", "List directory contents with optional ignore globs",
+	// list_directory with ignore globs
+	m.RegisterTool("list_directory", "List directory contents with optional ignore globs",
 		[]message.ToolArgument{
 			{Name: "path", Description: "Directory path to list", Required: true, Type: "string"},
 			{Name: "ignore", Description: "Array of glob patterns to ignore", Required: false, Type: "array"},
 		},
 		m.handleLS)
 
-	// MultiEdit: apply multiple precise edits across files in one call
-	m.RegisterTool("MultiEdit", "Apply multiple exact string replacements across files in a single, atomic batch. Requires prior Read of target files.",
+	// multi_edit: apply multiple precise edits across files in one call
+	m.RegisterTool("multi_edit", "Apply multiple exact string replacements across files in a single, atomic batch. Requires prior read_file of target files.",
 		[]message.ToolArgument{
 			{
 				Name:        "edits",
@@ -1024,13 +1024,13 @@ func (m *FileSystemToolManager) GetToolState() string {
 	var parts []string
 	for path, count := range m.editFailCounts {
 		if count >= 1 {
-			parts = append(parts, fmt.Sprintf("%s (Edit failed %d time(s) — re-read the file before retrying)", filepath.Base(path), count))
+			parts = append(parts, fmt.Sprintf("%s (edit_file failed %d time(s) — re-read the file before retrying)", filepath.Base(path), count))
 		}
 	}
 	if len(parts) == 0 {
 		return ""
 	}
-	return "Edit failures requiring re-read: " + strings.Join(parts, ", ")
+	return "edit_file failures requiring re-read: " + strings.Join(parts, ", ")
 }
 
 // Compile-time check that FileSystemToolManager implements ToolStateProvider.

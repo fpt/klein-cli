@@ -60,7 +60,7 @@ var _ domain.ToolManager = (*mockStatefulToolManager)(nil)
 var _ domain.ToolStateProvider = (*mockStatefulToolManager)(nil)
 
 func TestCompositeToolManager_NoStateProviders(t *testing.T) {
-	mgr := newMockToolManager("Read", "Write")
+	mgr := newMockToolManager("read_file", "write_file")
 	composite := NewCompositeToolManager(mgr)
 
 	tools := composite.GetTools()
@@ -83,7 +83,7 @@ func TestCompositeToolManager_NoStateProviders(t *testing.T) {
 
 func TestCompositeToolManager_WithStateProvider(t *testing.T) {
 	mgr := &mockStatefulToolManager{
-		mockToolManager:   newMockToolManager("WebFetch", "WebFetchBlock", "Read"),
+		mockToolManager:   newMockToolManager("web_fetch", "web_fetch_block", "read_file"),
 		mockStateProvider: &mockStateProvider{state: "Web cache: https://example.com (30s ago)"},
 	}
 
@@ -91,15 +91,15 @@ func TestCompositeToolManager_WithStateProvider(t *testing.T) {
 
 	// Tool descriptions must remain static — no dynamic annotations.
 	tools := composite.GetTools()
-	wf := tools["WebFetch"]
+	wf := tools["web_fetch"]
 	if wf == nil {
-		t.Fatal("WebFetch not found")
+		t.Fatal("web_fetch not found")
 	}
 	desc := wf.Description().String()
 	if strings.Contains(desc, "cached") {
 		t.Errorf("tool description should be static, got: %s", desc)
 	}
-	if desc != "Description for WebFetch" {
+	if desc != "Description for web_fetch" {
 		t.Errorf("expected original description, got: %s", desc)
 	}
 
@@ -113,7 +113,7 @@ func TestCompositeToolManager_WithStateProvider(t *testing.T) {
 func TestCompositeToolManager_StateProviderDynamic(t *testing.T) {
 	sp := &mockStateProvider{state: ""}
 	mgr := &mockStatefulToolManager{
-		mockToolManager:   newMockToolManager("WebFetch"),
+		mockToolManager:   newMockToolManager("web_fetch"),
 		mockStateProvider: sp,
 	}
 
@@ -124,7 +124,7 @@ func TestCompositeToolManager_StateProviderDynamic(t *testing.T) {
 		t.Errorf("expected empty state initially, got: %q", s)
 	}
 	// Tool description is unchanged regardless of state.
-	desc := composite.GetTools()["WebFetch"].Description().String()
+	desc := composite.GetTools()["web_fetch"].Description().String()
 	if strings.Contains(desc, "cached") {
 		t.Errorf("tool description should not contain state: %s", desc)
 	}
@@ -138,7 +138,7 @@ func TestCompositeToolManager_StateProviderDynamic(t *testing.T) {
 		t.Errorf("expected updated state, got: %q", s2)
 	}
 	// Tool description must still be static.
-	desc2 := composite.GetTools()["WebFetch"].Description().String()
+	desc2 := composite.GetTools()["web_fetch"].Description().String()
 	if strings.Contains(desc2, "cached") {
 		t.Errorf("tool description should remain static after state update: %s", desc2)
 	}
@@ -146,7 +146,7 @@ func TestCompositeToolManager_StateProviderDynamic(t *testing.T) {
 
 func TestCompositeToolManager_MultipleStateProviders(t *testing.T) {
 	mgr1 := &mockStatefulToolManager{
-		mockToolManager:   newMockToolManager("WebFetch"),
+		mockToolManager:   newMockToolManager("web_fetch"),
 		mockStateProvider: &mockStateProvider{state: "Web cache: https://example.com (5s ago)"},
 	}
 	mgr2 := &mockStatefulToolManager{
@@ -167,14 +167,14 @@ func TestCompositeToolManager_MultipleStateProviders(t *testing.T) {
 
 func TestCompositeToolManager_CallToolUnaffectedByState(t *testing.T) {
 	mgr := &mockStatefulToolManager{
-		mockToolManager:   newMockToolManager("WebFetch"),
+		mockToolManager:   newMockToolManager("web_fetch"),
 		mockStateProvider: &mockStateProvider{state: "Web cache: https://test.com (10s ago)"},
 	}
 
 	composite := NewCompositeToolManager(mgr)
 
 	// CallTool should work normally regardless of state.
-	result, err := composite.CallTool(context.Background(), "WebFetch", nil)
+	result, err := composite.CallTool(context.Background(), "web_fetch", nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}

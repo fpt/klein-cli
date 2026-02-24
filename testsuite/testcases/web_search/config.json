@@ -1,4 +1,4 @@
 {
   "skill": "respond",
-  "allowed_tools": ["WebFetch", "WebFetchBlock", "WebSearch", "todo_write"]
+  "allowed_tools": ["web_fetch", "web_fetch_block", "web_search", "todo_write"]
 }

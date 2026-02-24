@@ -47,15 +47,15 @@ func (m *SearchToolManager) CallTool(ctx context.Context, name message.ToolName,
 }
 
 func (m *SearchToolManager) register() {
-	// Glob tool: fast file listing by pattern
-	m.RegisterTool("Glob", "Find files by glob pattern (e.g., **/*.go)",
+	// glob tool: fast file listing by pattern
+	m.RegisterTool("glob", "Find files by glob pattern (e.g., **/*.go)",
 		[]message.ToolArgument{
 			{Name: "pattern", Description: "Glob pattern to match", Required: true, Type: "string"},
 			{Name: "path", Description: "Base directory (optional)", Required: false, Type: "string"},
 		}, m.handleGlob)
 
-	// Grep tool: ripgrep-style content search
-	m.RegisterTool("Grep", "Search file contents using ripgrep-compatible flags",
+	// grep tool: ripgrep-style content search
+	m.RegisterTool("grep", "Search file contents using ripgrep-compatible flags",
 		[]message.ToolArgument{
 			{Name: "pattern", Description: "Regex pattern to search", Required: true, Type: "string"},
 			{Name: "path", Description: "File/dir to search (optional)", Required: false, Type: "string"},

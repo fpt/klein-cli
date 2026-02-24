@@ -12,6 +12,8 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -42,26 +44,26 @@ func NewWebToolManager() domain.ToolManager {
 }
 
 func (m *WebToolManager) registerWebTools() {
-	// WebFetch — default mode returns dense text block summaries.
-	m.RegisterTool("WebFetch",
-		"Fetch a webpage and extract content. Default mode returns a summary of dense text blocks with DOM paths; use WebFetchBlock to retrieve full content of specific blocks. Set mode='full' for complete markdown.",
+	// web_fetch — default mode returns dense text block summaries.
+	m.RegisterTool("web_fetch",
+		"Fetch a webpage and extract content. Default mode returns a summary of dense text blocks with DOM paths; use web_fetch_block to retrieve full content of specific blocks. Set mode='full' for complete markdown.",
 		[]message.ToolArgument{
 			{Name: "url", Description: "URL of the webpage to fetch", Required: true, Type: "string"},
 			{Name: "mode", Description: "Extraction mode: 'blocks' (default) for block summaries, 'full' for complete markdown", Required: false, Type: "string"},
 		},
 		m.handleFetchWeb)
 
-	// WebFetchBlock — retrieve full content of specific blocks from cache.
-	m.RegisterTool("WebFetchBlock",
-		"Retrieve full content of specific text blocks from a previously fetched webpage. Use after WebFetch to get detailed content of interesting blocks.",
+	// web_fetch_block — retrieve full content of specific blocks from cache.
+	m.RegisterTool("web_fetch_block",
+		"Retrieve full content of specific text blocks from a previously fetched webpage. Use after web_fetch to get detailed content of interesting blocks.",
 		[]message.ToolArgument{
 			{Name: "url", Description: "URL of the webpage (should match a previous WebFetch call)", Required: true, Type: "string"},
 			{Name: "block_indices", Description: "Comma-separated block indices to retrieve (e.g., '1,3,5')", Required: true, Type: "string"},
 		},
 		m.handleFetchWebBlock)
 
-	// WebSearch (stub): declare interface compatibility; return informative message
-	m.RegisterTool("WebSearch", "Search the web (stub). Not implemented in this build. Provide URLs or use WebFetch with a concrete link.",
+	// web_search (stub): declare interface compatibility; return informative message
+	m.RegisterTool("web_search", "Search the web (stub). Not implemented in this build. Provide URLs or use web_fetch with a concrete link.",
 		[]message.ToolArgument{
 			{Name: "query", Description: "Search query", Required: true, Type: "string"},
 			{Name: "allowed_domains", Description: "Only include results from these domains", Required: false, Type: "array"},
@@ -130,7 +132,7 @@ func (m *WebToolManager) fetchAndParse(ctx context.Context, urlStr string) (*goq
 	// Reject non-text content types (images are handled separately in handleFetchWeb)
 	ct := resp.Header.Get("Content-Type")
 	if ct != "" && !strings.HasPrefix(ct, "text/") && !strings.Contains(ct, "html") && !strings.Contains(ct, "xml") && !strings.Contains(ct, "json") {
-		return nil, nil, fmt.Errorf("unsupported content type %q — WebFetch only handles HTML/text pages; use WebFetch with an image URL to download images for vision analysis", ct)
+		return nil, nil, fmt.Errorf("unsupported content type %q — web_fetch only handles HTML/text pages directly; binary content (PDF, images) is handled automatically by URL or content type detection", ct)
 	}
 
 	doc, err := goquery.NewDocumentFromReader(resp.Body)
@@ -251,6 +253,70 @@ func isImageURL(urlStr string) bool {
 	return false
 }
 
+// isPDFURL checks if a URL likely points to a PDF based on file extension.
+func isPDFURL(urlStr string) bool {
+	lower := strings.ToLower(urlStr)
+	if idx := strings.Index(lower, "?"); idx > 0 {
+		return strings.HasSuffix(lower[:idx], ".pdf")
+	}
+	return strings.HasSuffix(lower, ".pdf")
+}
+
+// fetchPDF downloads a PDF from a URL and saves it to a temporary file.
+// Returns the local file path where the PDF was saved.
+func (m *WebToolManager) fetchPDF(ctx context.Context, urlStr string) (string, int, error) {
+	client := &http.Client{Timeout: 60 * time.Second}
+	req, err := http.NewRequestWithContext(ctx, "GET", urlStr, nil)
+	if err != nil {
+		return "", 0, fmt.Errorf("failed to create request: %v", err)
+	}
+	req.Header.Set("User-Agent", "Mozilla/5.0 (Compatible Web Fetcher Bot)")
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return "", 0, fmt.Errorf("failed to fetch PDF: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return "", 0, fmt.Errorf("HTTP error %d: %s", resp.StatusCode, resp.Status)
+	}
+
+	const maxPDFBytes = 50 * 1024 * 1024 // 50MB limit
+	data, err := io.ReadAll(io.LimitReader(resp.Body, maxPDFBytes+1))
+	if err != nil {
+		return "", 0, fmt.Errorf("failed to read PDF: %v", err)
+	}
+	if len(data) > maxPDFBytes {
+		return "", 0, fmt.Errorf("PDF exceeds %dMB size limit", maxPDFBytes/1024/1024)
+	}
+
+	// Extract filename from URL for a meaningful temp file name
+	parsedURL, _ := url.Parse(urlStr)
+	baseName := "download.pdf"
+	if parsedURL != nil {
+		if name := filepath.Base(parsedURL.Path); name != "" && name != "." && name != "/" {
+			baseName = name
+		}
+		if !strings.HasSuffix(strings.ToLower(baseName), ".pdf") {
+			baseName += ".pdf"
+		}
+	}
+
+	tmpFile, err := os.CreateTemp("", "klein-pdf-*-"+baseName)
+	if err != nil {
+		return "", 0, fmt.Errorf("failed to create temp file: %v", err)
+	}
+	defer tmpFile.Close()
+
+	if _, err := tmpFile.Write(data); err != nil {
+		os.Remove(tmpFile.Name())
+		return "", 0, fmt.Errorf("failed to write temp file: %v", err)
+	}
+
+	return tmpFile.Name(), len(data), nil
+}
+
 // handleFetchWeb fetches a webpage. Default mode returns dense block summaries.
 // If the URL points to an image, downloads it and returns as base64 for vision analysis.
 func (m *WebToolManager) handleFetchWeb(ctx context.Context, args message.ToolArgumentValues) (message.ToolResult, error) {
@@ -262,6 +328,16 @@ func (m *WebToolManager) handleFetchWeb(ctx context.Context, args message.ToolAr
 	mode, _ := args["mode"].(string)
 	if mode == "" {
 		mode = "blocks"
+	}
+
+	// If URL looks like a PDF, download to temp file for pdf_read/pdf_info tools
+	if isPDFURL(urlStr) {
+		filePath, size, err := m.fetchPDF(ctx, urlStr)
+		if err != nil {
+			return message.NewToolResultError(fmt.Sprintf("failed to download PDF: %v", err)), nil
+		}
+		desc := fmt.Sprintf("PDF downloaded from %s (%dKB) and saved to: %s\nUse pdf_info and pdf_read tools with this file path to extract content.", urlStr, size/1024, filePath)
+		return message.NewToolResultText(desc), nil
 	}
 
 	// If URL looks like an image, try to download it for vision analysis
@@ -276,16 +352,29 @@ func (m *WebToolManager) handleFetchWeb(ctx context.Context, args message.ToolAr
 
 	doc, parsedURL, err := m.fetchAndParse(ctx, urlStr)
 	if err != nil {
-		// If fetchAndParse failed due to content type being an image, try image download
-		if strings.Contains(err.Error(), "unsupported content type") && strings.Contains(err.Error(), "image") {
-			b64, ct, size, imgErr := m.fetchImage(ctx, urlStr)
-			if imgErr != nil {
-				return message.NewToolResultError(fmt.Sprintf("failed to download image: %v", imgErr)), nil
+		errMsg := err.Error()
+		// If fetchAndParse failed due to content type, check what kind
+		if strings.Contains(errMsg, "unsupported content type") {
+			// PDF content type — download to temp file
+			if strings.Contains(errMsg, "application/pdf") {
+				filePath, size, pdfErr := m.fetchPDF(ctx, urlStr)
+				if pdfErr != nil {
+					return message.NewToolResultError(fmt.Sprintf("failed to download PDF: %v", pdfErr)), nil
+				}
+				desc := fmt.Sprintf("PDF downloaded from %s (%dKB) and saved to: %s\nUse pdf_info and pdf_read tools with this file path to extract content.", urlStr, size/1024, filePath)
+				return message.NewToolResultText(desc), nil
 			}
-			desc := fmt.Sprintf("Image downloaded from %s (type: %s, size: %dKB). Analyze the attached image.", urlStr, ct, size/1024)
-			return message.NewToolResultWithImages(desc, []string{b64}), nil
+			// Image content type — download for vision analysis
+			if strings.Contains(errMsg, "image/") {
+				b64, ct, size, imgErr := m.fetchImage(ctx, urlStr)
+				if imgErr != nil {
+					return message.NewToolResultError(fmt.Sprintf("failed to download image: %v", imgErr)), nil
+				}
+				desc := fmt.Sprintf("Image downloaded from %s (type: %s, size: %dKB). Analyze the attached image.", urlStr, ct, size/1024)
+				return message.NewToolResultWithImages(desc, []string{b64}), nil
+			}
 		}
-		return message.NewToolResultError(err.Error()), nil
+		return message.NewToolResultError(errMsg), nil
 	}
 
 	if mode == "full" {
@@ -454,9 +543,9 @@ func parseBlockIndices(s string) ([]int, error) {
 // handleWebSearchStub returns a compatibility message explaining unavailability
 func (m *WebToolManager) handleWebSearchStub(ctx context.Context, args message.ToolArgumentValues) (message.ToolResult, error) {
 	query, _ := args["query"].(string)
-	msg := "WebSearch is not supported in this build. Provide relevant URLs or documents, or use WebFetch with a specific URL."
+	msg := "web_search is not supported in this build. Provide relevant URLs or documents, or use web_fetch with a specific URL."
 	if query != "" {
-		msg = fmt.Sprintf("WebSearch not available. Query: %q. Please supply URLs, or use WebFetch.", query)
+		msg = fmt.Sprintf("web_search not available. Query: %q. Please supply URLs, or use web_fetch.", query)
 	}
 	return message.NewToolResultText(msg), nil
 }

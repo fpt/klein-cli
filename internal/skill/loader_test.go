@@ -48,7 +48,7 @@ func TestLoadSkillsFromDir(t *testing.T) {
 	os.WriteFile(filepath.Join(skillDir, "SKILL.md"), []byte(`---
 name: test-skill
 description: A test skill
-allowed-tools: Read
+allowed-tools: read_file
 ---
 
 Test content.
@@ -68,7 +68,7 @@ Test content.
 	if s.Priority != 1 {
 		t.Errorf("expected priority 1, got %d", s.Priority)
 	}
-	if len(s.AllowedTools) != 1 || s.AllowedTools[0] != "Read" {
+	if len(s.AllowedTools) != 1 || s.AllowedTools[0] != "read_file" {
 		t.Errorf("unexpected allowed tools: %v", s.AllowedTools)
 	}
 }

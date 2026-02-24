@@ -257,7 +257,7 @@ func formatBlockSummary(title, urlStr string, blocks []textBlock, previewLen int
 		b.WriteString(fmt.Sprintf("[%d] %s\n    \"%s\"\n\n", block.Index, block.DOMPath, preview))
 	}
 
-	b.WriteString("Use WebFetchBlock with url and block_indices to retrieve full content of specific blocks.\n")
+	b.WriteString("Use web_fetch_block with url and block_indices to retrieve full content of specific blocks.\n")
 	return b.String()
 }
 

@@ -59,7 +59,7 @@ func newTestAgent(t *testing.T) *Agent {
 		},
 		"respond": &skill.Skill{
 			Name:         "respond",
-			AllowedTools: []string{"Read", "Glob", "todo_write"},
+			AllowedTools: []string{"read_file", "glob", "todo_write"},
 			Content:      "Respond skill",
 		},
 	}

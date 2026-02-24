@@ -138,8 +138,9 @@ func (r *ReAct) annotateAndLogUsage(resp message.Message) {
 	}
 }
 
-// Run processes input using the configured maxIterations
-func (r *ReAct) Run(ctx context.Context, input string) (message.Message, error) {
+// Run processes input using the configured maxIterations.
+// Optional images are base64-encoded strings attached to the user message for vision-capable models.
+func (r *ReAct) Run(ctx context.Context, input string, images ...string) (message.Message, error) {
 	// Create internal thinking channel to convert string chunks to ThinkingChunk events
 	r.thinkingChan = make(chan string, 10)
 	go func() {
@@ -154,7 +155,12 @@ func (r *ReAct) Run(ctx context.Context, input string) (message.Message, error) 
 	}()
 
 	// Add user message to state (enriched with todos if available)
-	userMessage := message.NewChatMessage(message.MessageTypeUser, input)
+	var userMessage message.Message
+	if len(images) > 0 {
+		userMessage = message.NewChatMessageWithImages(message.MessageTypeUser, input, images)
+	} else {
+		userMessage = message.NewChatMessage(message.MessageTypeUser, input)
+	}
 	r.state.AddMessage(userMessage)
 
 	r.status = domain.AgentStatusRunning

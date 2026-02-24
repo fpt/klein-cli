@@ -136,6 +136,7 @@ func (gw *Gateway) handleInbound(ctx context.Context, msg InboundMessage) {
 		Scenario:       session.Skill,
 		UserInput:      enrichedText,
 		EnableThinking: true,
+		Images:         msg.Images,
 	}))
 	if err != nil {
 		gw.logger.Error("Failed to invoke agent", "error", err)

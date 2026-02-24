@@ -2,6 +2,7 @@ package connectrpc
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -151,8 +152,14 @@ func (s *AgentServer) Invoke(ctx context.Context, req *connect.Request[agentv1.I
 	})
 	defer session.agent.SetEventHandler(nil)
 
+	// Convert raw image bytes to base64 strings for the agent
+	var images []string
+	for _, imgBytes := range req.Msg.Images {
+		images = append(images, base64.StdEncoding.EncodeToString(imgBytes))
+	}
+
 	// Invoke the agent
-	result, invokeErr := session.agent.Invoke(ctx, req.Msg.UserInput, skillName)
+	result, invokeErr := session.agent.Invoke(ctx, req.Msg.UserInput, skillName, images...)
 
 	// Send final message or error
 	if invokeErr != nil {

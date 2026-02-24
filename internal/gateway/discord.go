@@ -3,10 +3,13 @@ package gateway
 import (
 	"context"
 	"fmt"
+	"io"
+	"net/http"
 	"strings"
 
 	"github.com/bwmarrin/discordgo"
 
+	"github.com/fpt/klein-cli/internal/tool"
 	pkgLogger "github.com/fpt/klein-cli/pkg/logger"
 )
 
@@ -93,8 +96,32 @@ func (a *DiscordAdapter) handleMessage(s *discordgo.Session, m *discordgo.Messag
 		text = strings.TrimSpace(text)
 	}
 
-	if text == "" {
+	// Download image attachments
+	var images [][]byte
+	for _, att := range m.Attachments {
+		if !isImageContentType(att.ContentType) {
+			continue
+		}
+		data, err := downloadAttachment(att.URL)
+		if err != nil {
+			a.logger.Warn("Failed to download attachment", "url", att.URL, "error", err)
+			continue
+		}
+		// Resize to keep gRPC payload and LLM context small
+		resized, err := tool.ResizeImageToJPEG(data, tool.MaxImageDim, tool.MaxJPEGQuality)
+		if err != nil {
+			// Fallback to raw data if decode fails (e.g., GIF, SVG)
+			images = append(images, data)
+			continue
+		}
+		images = append(images, resized)
+	}
+
+	if text == "" && len(images) == 0 {
 		return
+	}
+	if text == "" {
+		text = "Please analyze the attached image(s)."
 	}
 
 	// Push to message bus
@@ -106,6 +133,7 @@ func (a *DiscordAdapter) handleMessage(s *discordgo.Session, m *discordgo.Messag
 		Text:        text,
 		ReplyToID:   m.ID,
 		Timestamp:   m.Timestamp,
+		Images:      images,
 	}
 }
 
@@ -128,10 +156,18 @@ func (a *DiscordAdapter) Stop() error {
 }
 
 // Send sends a message to a Discord channel, splitting if over 2000 chars.
+// The first chunk is sent as a reply to the original message (if ReplyToID is set);
+// subsequent chunks are sent as plain follow-up messages.
 func (a *DiscordAdapter) Send(ctx context.Context, msg OutboundMessage) error {
 	chunks := splitMessage(msg.Text, 2000)
-	for _, chunk := range chunks {
-		_, err := a.session.ChannelMessageSend(msg.ChannelID, chunk)
+	for i, chunk := range chunks {
+		var err error
+		if i == 0 && msg.ReplyToID != "" {
+			ref := &discordgo.MessageReference{MessageID: msg.ReplyToID, ChannelID: msg.ChannelID}
+			_, err = a.session.ChannelMessageSendReply(msg.ChannelID, chunk, ref)
+		} else {
+			_, err = a.session.ChannelMessageSend(msg.ChannelID, chunk)
+		}
 		if err != nil {
 			return fmt.Errorf("failed to send discord message: %w", err)
 		}
@@ -184,4 +220,31 @@ func toSet(ids []string) map[string]bool {
 		m[id] = true
 	}
 	return m
+}
+
+// isImageContentType checks if the content type is an image.
+func isImageContentType(ct string) bool {
+	return strings.HasPrefix(ct, "image/")
+}
+
+// downloadAttachment downloads a Discord attachment URL and returns the raw bytes.
+func downloadAttachment(url string) ([]byte, error) {
+	resp, err := http.Get(url) //nolint:gosec // Discord CDN URL
+	if err != nil {
+		return nil, fmt.Errorf("download failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("download returned status %d", resp.StatusCode)
+	}
+
+	data, err := io.ReadAll(io.LimitReader(resp.Body, int64(tool.MaxImageBytes)+1))
+	if err != nil {
+		return nil, fmt.Errorf("read failed: %w", err)
+	}
+	if len(data) > tool.MaxImageBytes {
+		return nil, fmt.Errorf("attachment exceeds %dMB size limit", tool.MaxImageBytes/1024/1024)
+	}
+	return data, nil
 }

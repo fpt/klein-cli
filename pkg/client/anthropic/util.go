@@ -381,14 +381,37 @@ func toAnthropicMessages(messages []message.Message) []anthropic.MessageParam {
 			}
 		case message.MessageTypeToolResult:
 			if toolResultMsg, ok := msg.(*llmmsg.ToolResultMessage); ok {
-				// Anthropic tool result format
+				// Build content blocks for tool result
+				var contentBlocks []anthropic.ToolResultBlockParamContentUnion
+
+				// Add image blocks if present (Anthropic supports images in tool results)
+				if images := toolResultMsg.Images(); len(images) > 0 {
+					for _, imageData := range images {
+						mediaType := "image/jpeg"
+						if strings.HasPrefix(imageData, "iVBORw0KGgo") {
+							mediaType = "image/png"
+						}
+						contentBlocks = append(contentBlocks, anthropic.ToolResultBlockParamContentUnion{
+							OfImage: &anthropic.ImageBlockParam{
+								Source: anthropic.ImageBlockParamSourceUnion{
+									OfBase64: &anthropic.Base64ImageSourceParam{
+										Data:      imageData,
+										MediaType: anthropic.Base64ImageSourceMediaType(mediaType),
+									},
+								},
+							},
+						})
+					}
+				}
+
+				// Add text block
+				contentBlocks = append(contentBlocks, anthropic.ToolResultBlockParamContentUnion{
+					OfText: &anthropic.TextBlockParam{Text: toolResultMsg.Content()},
+				})
+
 				toolResultParam := anthropic.ToolResultBlockParam{
 					ToolUseID: toolResultMsg.ID(),
-					Content: []anthropic.ToolResultBlockParamContentUnion{
-						{
-							OfText: &anthropic.TextBlockParam{Text: toolResultMsg.Content()},
-						},
-					},
+					Content:   contentBlocks,
 				}
 				toolResult := anthropic.ContentBlockParamUnion{
 					OfToolResult: &toolResultParam,

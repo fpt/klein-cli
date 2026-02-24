@@ -11,6 +11,7 @@ import (
 	connectserver "github.com/fpt/klein-cli/internal/connectrpc"
 	"github.com/fpt/klein-cli/internal/infra"
 	"github.com/fpt/klein-cli/internal/mcp"
+	"github.com/fpt/klein-cli/internal/tool"
 	"github.com/fpt/klein-cli/pkg/agent/domain"
 	client "github.com/fpt/klein-cli/pkg/client"
 	pkgLogger "github.com/fpt/klein-cli/pkg/logger"
@@ -66,6 +67,7 @@ func main() {
 	var serve = flag.Bool("serve", false, "Start Connect-gRPC server mode for gateway integration")
 	var serveAddr = flag.String("serve-addr", ":50051", "Connect server listen address")
 	var sessionsDir = flag.String("sessions-dir", "", "Directory for per-session persistence files (default: ~/.klein/claw/sessions/)")
+	var memoryDir = flag.String("memory-dir", "", "Directory for memory files used by memory_search/memory_get tools (e.g., ~/.klein/claw/memory/)")
 	var help = flag.Bool("h", false, "Show this help message")
 	var helpLong = flag.Bool("help", false, "Show this help message")
 
@@ -182,6 +184,10 @@ func main() {
 
 	// Handle Connect-gRPC server mode
 	if *serve {
+		// Register memory tools (serve mode only)
+		if *memoryDir != "" {
+			mcpToolManagers["memory"] = tool.NewMemoryToolManager(*memoryDir)
+		}
 		logger.Info("Starting Connect-gRPC server", "addr", *serveAddr)
 		if err := connectserver.StartServer(ctx, *serveAddr, settings, mcpToolManagers, logger, *sessionsDir); err != nil {
 			logger.Error("Server failed", "error", err)

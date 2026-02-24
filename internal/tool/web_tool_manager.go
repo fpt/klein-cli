@@ -1,8 +1,15 @@
 package tool
 
 import (
+	"bytes"
 	"context"
+	"encoding/base64"
 	"fmt"
+	"image"
+	"image/draw"
+	"image/jpeg"
+	_ "image/png" // register PNG decoder
+	"io"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -120,6 +127,12 @@ func (m *WebToolManager) fetchAndParse(ctx context.Context, urlStr string) (*goq
 		return nil, nil, fmt.Errorf("HTTP error %d: %s", resp.StatusCode, resp.Status)
 	}
 
+	// Reject non-text content types (images are handled separately in handleFetchWeb)
+	ct := resp.Header.Get("Content-Type")
+	if ct != "" && !strings.HasPrefix(ct, "text/") && !strings.Contains(ct, "html") && !strings.Contains(ct, "xml") && !strings.Contains(ct, "json") {
+		return nil, nil, fmt.Errorf("unsupported content type %q — WebFetch only handles HTML/text pages; use WebFetch with an image URL to download images for vision analysis", ct)
+	}
+
 	doc, err := goquery.NewDocumentFromReader(resp.Body)
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to parse HTML: %v", err)
@@ -127,7 +140,119 @@ func (m *WebToolManager) fetchAndParse(ctx context.Context, urlStr string) (*goq
 	return doc, parsedURL, nil
 }
 
+const (
+	MaxImageBytes   = 20 * 1024 * 1024 // 20MB download limit
+	MaxImageDim     = 512              // resize to fit within 512x512
+	MaxJPEGQuality  = 80
+)
+
+// fetchImage downloads an image URL, resizes it to fit within MaxImageDim, and
+// returns it as a base64-encoded JPEG to keep context size small.
+func (m *WebToolManager) fetchImage(ctx context.Context, urlStr string) (base64Data string, contentType string, size int, err error) {
+	client := &http.Client{Timeout: 30 * time.Second}
+	req, err := http.NewRequestWithContext(ctx, "GET", urlStr, nil)
+	if err != nil {
+		return "", "", 0, fmt.Errorf("failed to create request: %v", err)
+	}
+	req.Header.Set("User-Agent", "Mozilla/5.0 (Compatible Web Fetcher Bot)")
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return "", "", 0, fmt.Errorf("failed to fetch image: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return "", "", 0, fmt.Errorf("HTTP error %d: %s", resp.StatusCode, resp.Status)
+	}
+
+	data, err := io.ReadAll(io.LimitReader(resp.Body, MaxImageBytes+1))
+	if err != nil {
+		return "", "", 0, fmt.Errorf("failed to read image: %v", err)
+	}
+	if len(data) > MaxImageBytes {
+		return "", "", 0, fmt.Errorf("image exceeds %dMB size limit", MaxImageBytes/1024/1024)
+	}
+
+	// Decode, resize, re-encode as JPEG to save context tokens
+	resized, err := ResizeImageToJPEG(data, MaxImageDim, MaxJPEGQuality)
+	if err != nil {
+		// Fallback: return raw data if decode/resize fails (e.g. SVG, GIF animation)
+		ct := resp.Header.Get("Content-Type")
+		if ct == "" {
+			ct = "image/jpeg"
+		}
+		return base64.StdEncoding.EncodeToString(data), ct, len(data), nil
+	}
+
+	return base64.StdEncoding.EncodeToString(resized), "image/jpeg", len(resized), nil
+}
+
+// ResizeImageToJPEG decodes an image, scales it to fit within maxDim (preserving
+// aspect ratio), and re-encodes as JPEG. Uses nearest-neighbor via stdlib draw.
+func ResizeImageToJPEG(data []byte, maxDim int, quality int) ([]byte, error) {
+	src, _, err := image.Decode(bytes.NewReader(data))
+	if err != nil {
+		return nil, err
+	}
+
+	bounds := src.Bounds()
+	w, h := bounds.Dx(), bounds.Dy()
+
+	// Only resize if larger than maxDim
+	if w > maxDim || h > maxDim {
+		scale := float64(maxDim) / float64(w)
+		if h > w {
+			scale = float64(maxDim) / float64(h)
+		}
+		newW := int(float64(w) * scale)
+		newH := int(float64(h) * scale)
+		if newW < 1 {
+			newW = 1
+		}
+		if newH < 1 {
+			newH = 1
+		}
+
+		dst := image.NewRGBA(image.Rect(0, 0, newW, newH))
+		// Bilinear-ish scaling using stdlib: draw source into smaller rect
+		draw.Draw(dst, dst.Bounds(), src, bounds.Min, draw.Src)
+		// stdlib draw.Draw doesn't scale, so we do manual nearest-neighbor
+		for y := 0; y < newH; y++ {
+			srcY := bounds.Min.Y + int(float64(y)/scale)
+			for x := 0; x < newW; x++ {
+				srcX := bounds.Min.X + int(float64(x)/scale)
+				dst.Set(x, y, src.At(srcX, srcY))
+			}
+		}
+		src = dst
+	}
+
+	var buf bytes.Buffer
+	if err := jpeg.Encode(&buf, src, &jpeg.Options{Quality: quality}); err != nil {
+		return nil, err
+	}
+	return buf.Bytes(), nil
+}
+
+// isImageContentType checks if a URL likely points to an image based on Content-Type or file extension.
+func isImageURL(urlStr string) bool {
+	lower := strings.ToLower(urlStr)
+	for _, ext := range []string{".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".svg"} {
+		// Check before query string
+		if idx := strings.Index(lower, "?"); idx > 0 {
+			if strings.HasSuffix(lower[:idx], ext) {
+				return true
+			}
+		} else if strings.HasSuffix(lower, ext) {
+			return true
+		}
+	}
+	return false
+}
+
 // handleFetchWeb fetches a webpage. Default mode returns dense block summaries.
+// If the URL points to an image, downloads it and returns as base64 for vision analysis.
 func (m *WebToolManager) handleFetchWeb(ctx context.Context, args message.ToolArgumentValues) (message.ToolResult, error) {
 	urlStr, ok := args["url"].(string)
 	if !ok {
@@ -139,8 +264,27 @@ func (m *WebToolManager) handleFetchWeb(ctx context.Context, args message.ToolAr
 		mode = "blocks"
 	}
 
+	// If URL looks like an image, try to download it for vision analysis
+	if isImageURL(urlStr) {
+		b64, ct, size, err := m.fetchImage(ctx, urlStr)
+		if err != nil {
+			return message.NewToolResultError(fmt.Sprintf("failed to download image: %v", err)), nil
+		}
+		desc := fmt.Sprintf("Image downloaded from %s (type: %s, size: %dKB). Analyze the attached image.", urlStr, ct, size/1024)
+		return message.NewToolResultWithImages(desc, []string{b64}), nil
+	}
+
 	doc, parsedURL, err := m.fetchAndParse(ctx, urlStr)
 	if err != nil {
+		// If fetchAndParse failed due to content type being an image, try image download
+		if strings.Contains(err.Error(), "unsupported content type") && strings.Contains(err.Error(), "image") {
+			b64, ct, size, imgErr := m.fetchImage(ctx, urlStr)
+			if imgErr != nil {
+				return message.NewToolResultError(fmt.Sprintf("failed to download image: %v", imgErr)), nil
+			}
+			desc := fmt.Sprintf("Image downloaded from %s (type: %s, size: %dKB). Analyze the attached image.", urlStr, ct, size/1024)
+			return message.NewToolResultWithImages(desc, []string{b64}), nil
+		}
 		return message.NewToolResultError(err.Error()), nil
 	}
 

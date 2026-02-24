@@ -168,8 +168,9 @@ func NewAgentWithOptions(llmClient domain.LLM, workingDir string, mcpToolManager
 	}
 }
 
-// Invoke executes a specified skill.
-func (a *Agent) Invoke(ctx context.Context, userInput string, skillName string) (message.Message, error) {
+// Invoke executes a specified skill. Optional images are base64-encoded strings
+// that get attached to the user message for vision-capable models.
+func (a *Agent) Invoke(ctx context.Context, userInput string, skillName string, images ...string) (message.Message, error) {
 	skillName = strings.ToLower(skillName)
 	activeSkill, exists := a.skills[skillName]
 	if !exists {
@@ -275,7 +276,7 @@ func (a *Agent) Invoke(ctx context.Context, userInput string, skillName string) 
 		userPrompt = strings.Join(out, "\n")
 	}
 
-	result, err := reactClient.Run(ctx, userPrompt)
+	result, err := reactClient.Run(ctx, userPrompt, images...)
 
 	// Handle multiple approval workflows in sequence
 	var approvalErrors []error

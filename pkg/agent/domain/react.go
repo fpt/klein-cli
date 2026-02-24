@@ -15,8 +15,9 @@ const (
 )
 
 type ReAct interface {
-	// Run sends a prompt to the ReAct model and returns the response
-	Run(ctx context.Context, prompt string) (message.Message, error)
+	// Run sends a prompt to the ReAct model and returns the response.
+	// Optional images are base64-encoded strings for vision-capable models.
+	Run(ctx context.Context, prompt string, images ...string) (message.Message, error)
 	Resume(ctx context.Context) (message.Message, error)
 	CancelPendingToolCall() // Cancel the pending tool call without executing it
 	Close()

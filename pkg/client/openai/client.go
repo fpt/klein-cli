@@ -9,6 +9,7 @@ import (
 
 	"github.com/openai/openai-go/v2"
 	"github.com/openai/openai-go/v2/option"
+	"github.com/openai/openai-go/v2/packages/param"
 	"github.com/openai/openai-go/v2/responses"
 	"github.com/openai/openai-go/v2/shared"
 
@@ -430,9 +431,14 @@ func (c *OpenAIClient) convertMessagesToResponsesInputItems(messages []message.M
 	for _, msg := range messages {
 		switch msg.Type() {
 		case message.MessageTypeUser:
-			// TODO: Should use ResponseInputItemParamOfInputMessage
-			inputItem := responses.ResponseInputItemParamOfMessage(msg.Content(), responses.EasyInputMessageRoleUser)
-			inputItems = append(inputItems, inputItem)
+			if images := msg.Images(); len(images) > 0 {
+				contentList := buildImageContentList(images, msg.Content())
+				inputItem := responses.ResponseInputItemParamOfInputMessage(contentList, "user")
+				inputItems = append(inputItems, inputItem)
+			} else {
+				inputItem := responses.ResponseInputItemParamOfMessage(msg.Content(), responses.EasyInputMessageRoleUser)
+				inputItems = append(inputItems, inputItem)
+			}
 
 		case message.MessageTypeAssistant:
 			// TODO: Should use ResponseInputItemParamOfOutputMessage and ResponseInputItemParamOfReasoning
@@ -475,6 +481,13 @@ func (c *OpenAIClient) convertMessagesToResponsesInputItems(messages []message.M
 					toolResultMsg.Result,
 				)
 				inputItems = append(inputItems, inputItem)
+				// If the tool result contains images, inject a user message with the image
+				// (FunctionCallOutput is text-only, so images must go in a separate message)
+				if images := msg.Images(); len(images) > 0 {
+					contentList := buildImageContentList(images, "")
+					imageItem := responses.ResponseInputItemParamOfInputMessage(contentList, "user")
+					inputItems = append(inputItems, imageItem)
+				}
 			} else {
 				// Fallback to message representation if cast fails
 				inputItem := responses.ResponseInputItemParamOfMessage(
@@ -501,6 +514,28 @@ func (c *OpenAIClient) convertMessagesToResponsesInputItems(messages []message.M
 	// the appropriate input items or request params here.
 
 	return inputItems
+}
+
+// buildImageContentList creates a multi-part content list with base64 images and optional text.
+func buildImageContentList(images []string, text string) responses.ResponseInputMessageContentListParam {
+	var parts responses.ResponseInputMessageContentListParam
+	for _, img := range images {
+		dataURL := "data:image/jpeg;base64," + img
+		// Detect PNG by base64 magic bytes (iVBORw0KGgo = PNG header)
+		if strings.HasPrefix(img, "iVBORw0KGgo") {
+			dataURL = "data:image/png;base64," + img
+		}
+		parts = append(parts, responses.ResponseInputContentUnionParam{
+			OfInputImage: &responses.ResponseInputImageParam{
+				Detail:   responses.ResponseInputImageDetailAuto,
+				ImageURL: param.NewOpt(dataURL),
+			},
+		})
+	}
+	if text != "" {
+		parts = append(parts, responses.ResponseInputContentParamOfInputText(text))
+	}
+	return parts
 }
 
 // SetToolManager implements ToolCallingLLM interface

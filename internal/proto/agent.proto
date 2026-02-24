@@ -67,6 +67,7 @@ message InvokeRequest {
   string scenario        = 2; // e.g., CODE | RESPOND
   string user_input      = 3; // raw user request
   bool   enable_thinking = 4; // request thinking when supported
+  repeated bytes images  = 5; // optional base64-decoded image data (e.g., from Discord attachments)
 }
 
 // Streaming events

@@ -2,6 +2,7 @@ package tool
 
 import (
 	"context"
+	"encoding/base64"
 	"fmt"
 	"os"
 	"os/exec"
@@ -564,7 +565,14 @@ func (m *FileSystemToolManager) handleEnhancedEdit(ctx context.Context, args mes
 		absPath, occurrenceInfo, oldLines, newLines, len(oldString), len(newString), validationResult)), nil
 }
 
-// handleRead implements Read with optional paging and line numbering
+// imageExtensions lists file extensions recognized as images for vision analysis.
+var imageExtensions = map[string]bool{
+	".png": true, ".jpg": true, ".jpeg": true,
+	".gif": true, ".webp": true, ".bmp": true,
+}
+
+// handleRead implements Read with optional paging and line numbering.
+// For image files, it returns a resized base64-encoded image for vision analysis.
 func (m *FileSystemToolManager) handleRead(ctx context.Context, args message.ToolArgumentValues) (message.ToolResult, error) {
 	pathParam, ok := args["file_path"].(string)
 	if !ok {
@@ -596,6 +604,21 @@ func (m *FileSystemToolManager) handleRead(ctx context.Context, args message.Too
 	m.mu.Lock()
 	delete(m.editFailCounts, path)
 	m.mu.Unlock()
+
+	// If file is an image, resize and return as base64 for vision analysis
+	ext := strings.ToLower(filepath.Ext(path))
+	if imageExtensions[ext] {
+		resized, resizeErr := ResizeImageToJPEG(contentBytes, MaxImageDim, MaxJPEGQuality)
+		if resizeErr != nil {
+			// Fallback: return raw base64 if resize fails
+			b64 := base64.StdEncoding.EncodeToString(contentBytes)
+			desc := fmt.Sprintf("Image file: %s (%dKB, resize failed: %v). Analyze the attached image.", path, len(contentBytes)/1024, resizeErr)
+			return message.NewToolResultWithImages(desc, []string{b64}), nil
+		}
+		b64 := base64.StdEncoding.EncodeToString(resized)
+		desc := fmt.Sprintf("Image file: %s (original %dKB, resized to JPEG %dKB). Analyze the attached image.", path, len(contentBytes)/1024, len(resized)/1024)
+		return message.NewToolResultWithImages(desc, []string{b64}), nil
+	}
 
 	content := string(contentBytes)
 	lines := strings.Split(content, "\n")

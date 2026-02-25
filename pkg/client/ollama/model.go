@@ -58,6 +58,8 @@ var ollamaModels = []OllamaModel{
 	{Name: "qwen3:14b", Tool: true, Think: true, Vision: false, Context: 40960},
 	{Name: "qwen3:30b", Tool: true, Think: true, Vision: false, Context: 40960},
 	{Name: "qwen3:32b", Tool: true, Think: true, Vision: false, Context: 40960},
+	// qwen3.5 family
+	{Name: "qwen3.5:35b", Tool: true, Think: true, Vision: true, Context: 256000},
 	// glm-4.7 family — uses XML tool call format, incompatible with Ollama JSON tool calling API
 	{Name: "glm-4.7", Tool: false, Think: false, Vision: false, Context: 128000},
 	// GLM-4.5-Air — claims native tool calling + thinking; unconfirmed, added for testing
@@ -149,4 +151,3 @@ func IsJSONSchemaCapableModel(model string) bool {
 	// This provides better user experience for new/unlisted models
 	return true
 }
-

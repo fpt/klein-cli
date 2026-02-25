@@ -44,3 +44,14 @@ type VisionLLM interface {
 	// SupportsVision returns true if this client supports vision/image analysis
 	SupportsVision() bool
 }
+
+// ServerSideCompactionLLM indicates the backend handles context compaction
+// (e.g. OpenAI Responses API truncation: "auto"). When present, the ReAct
+// agent skips its own compaction and relies on the provider instead.
+type ServerSideCompactionLLM interface {
+	LLM
+
+	// SupportsServerSideCompaction returns true if the backend automatically
+	// manages context overflow (truncation/compaction) on the server side.
+	SupportsServerSideCompaction() bool
+}

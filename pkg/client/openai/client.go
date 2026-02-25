@@ -17,7 +17,13 @@ import (
 	"github.com/fpt/klein-cli/pkg/message"
 )
 
-const defaultReasoningEffort = shared.ReasoningEffortLow // Default reasoning effort for OpenAI models
+const (
+	defaultReasoningEffort = shared.ReasoningEffortLow // Default reasoning effort for OpenAI models
+
+	// Minimum token drop between consecutive calls to be considered truncation.
+	// Small decreases can happen from our own compaction; this threshold filters noise.
+	truncationDetectionThreshold = 1000
+)
 
 // OpenAICore holds shared resources for OpenAI clients
 type OpenAICore struct {
@@ -35,9 +41,10 @@ type OpenAIClient struct {
 	toolManager domain.ToolManager
 
 	// Telemetry and caching/session hints
-	lastUsage message.TokenUsage
-	sessionID string
-	cacheOpts domain.ModelSideCacheOptions
+	lastUsage       message.TokenUsage
+	prevInputTokens int // previous call's input tokens for truncation detection
+	sessionID       string
+	cacheOpts       domain.ModelSideCacheOptions
 }
 
 // NewOpenAIClient creates a new OpenAI client with configurable maxTokens
@@ -115,6 +122,10 @@ func (c *OpenAIClient) ConfigureModelSideCache(opts domain.ModelSideCacheOptions
 	c.cacheOpts = opts
 }
 
+// SupportsServerSideCompaction implements ServerSideCompactionLLM.
+// OpenAI Responses API uses truncation: "auto" to handle context overflow.
+func (c *OpenAIClient) SupportsServerSideCompaction() bool { return true }
+
 // Chat implements the basic LLM interface with thinking control
 func (c *OpenAIClient) Chat(ctx context.Context, messages []message.Message, enableThinking bool, thinkingChan chan<- string) (message.Message, error) {
 	// Also respect cached fallback state from previous attempts
@@ -135,7 +146,8 @@ func (c *OpenAIClient) Chat(ctx context.Context, messages []message.Message, ena
 		Input: responses.ResponseNewParamsInputUnion{
 			OfInputItemList: inputItems,
 		},
-		Model: shared.ChatModel(c.model),
+		Model:      shared.ChatModel(c.model),
+		Truncation: responses.ResponseNewParamsTruncationAuto,
 	}
 
 	// Add max tokens if specified
@@ -179,6 +191,7 @@ func (c *OpenAIClient) Chat(ctx context.Context, messages []message.Message, ena
 			TotalTokens:  int(resp.Usage.TotalTokens),
 			CachedTokens: int(resp.Usage.InputTokensDetails.CachedTokens),
 		}
+		c.detectTruncation(int(resp.Usage.InputTokens))
 	}
 
 	// Extract response text and reasoning content
@@ -246,7 +259,8 @@ func (c *OpenAIClient) chatWithStreaming(ctx context.Context, messages []message
 		Input: responses.ResponseNewParamsInputUnion{
 			OfInputItemList: inputItems,
 		},
-		Model: shared.ChatModel(c.model),
+		Model:      shared.ChatModel(c.model),
+		Truncation: responses.ResponseNewParamsTruncationAuto,
 	}
 
 	// Add max tokens if specified
@@ -364,6 +378,7 @@ func (c *OpenAIClient) chatWithStreaming(ctx context.Context, messages []message
 					TotalTokens:  int(resp.Usage.TotalTokens),
 					CachedTokens: int(resp.Usage.InputTokensDetails.CachedTokens),
 				}
+				c.detectTruncation(int(resp.Usage.InputTokens))
 			}
 
 			// Extract response text and reasoning content
@@ -560,7 +575,8 @@ func (c *OpenAIClient) ChatWithToolChoice(ctx context.Context, messages []messag
 		Input: responses.ResponseNewParamsInputUnion{
 			OfInputItemList: inputItems,
 		},
-		Model: shared.ChatModel(c.model),
+		Model:      shared.ChatModel(c.model),
+		Truncation: responses.ResponseNewParamsTruncationAuto,
 	}
 
 	// Add max tokens if specified
@@ -699,6 +715,7 @@ func (c *OpenAIClient) chatWithToolChoiceStreaming(ctx context.Context, params r
 			TotalTokens:  int(resp.Usage.TotalTokens),
 			CachedTokens: int(resp.Usage.InputTokensDetails.CachedTokens),
 		}
+		c.detectTruncation(int(resp.Usage.InputTokens))
 	}
 
 	// Check for different types of output items using the variant system
@@ -931,6 +948,27 @@ func (c *OpenAIClient) SupportsVision() bool {
 	return strings.Contains(c.model, "gpt-4") && (strings.Contains(c.model, "vision") || strings.Contains(c.model, "gpt-4o"))
 }
 
+// detectTruncation checks if the API silently truncated input and logs a warning.
+// When truncation: "auto" is active, the API drops items from the beginning.
+// We detect this by comparing: if input_tokens decreased while we expected growth,
+// the API must have dropped older items.
+func (c *OpenAIClient) detectTruncation(inputTokens int) {
+	prev := c.prevInputTokens
+	c.prevInputTokens = inputTokens
+
+	// Skip first call (no baseline) and calls with missing data
+	if prev == 0 || inputTokens == 0 {
+		return
+	}
+
+	// If input tokens dropped significantly from last call, truncation likely occurred.
+	// A small drop could be normal (compaction on our side), so use a threshold.
+	if inputTokens < prev-truncationDetectionThreshold {
+		fmt.Fprintf(os.Stderr, "OpenAI: context truncation detected (input tokens: %d → %d, dropped ~%d tokens from beginning)\n",
+			prev, inputTokens, prev-inputTokens)
+	}
+}
+
 // isStreamingUnsupportedError checks whether the error indicates that streaming is not allowed
 // for the current account/organization (e.g., org not verified to stream this model).
 func isStreamingUnsupportedError(err error) bool {
@@ -968,6 +1006,7 @@ func (c *OpenAIClient) chatWithToolChoiceNonStreaming(ctx context.Context, param
 			TotalTokens:  int(resp.Usage.TotalTokens),
 			CachedTokens: int(resp.Usage.InputTokensDetails.CachedTokens),
 		}
+		c.detectTruncation(int(resp.Usage.InputTokens))
 	}
 
 	// Check for different types of output items using the variant system

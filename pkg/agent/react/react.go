@@ -254,12 +254,15 @@ func (r *ReAct) runInternal(ctx context.Context) (message.Message, error) {
 			return nil, fmt.Errorf("failed to perform mandatory cleanup: %w", err)
 		}
 
-		// Apply compaction only if token usage exceeds 70% threshold
-		// This preserves conversation context until we approach token limits
-		maxTokensEstimate := r.estimateContextWindow()
-		const compactionThreshold = 70.0 // 70% threshold
-		if err := r.state.CompactIfNeeded(ctx, r.llmClient, maxTokensEstimate, compactionThreshold); err != nil {
-			return nil, fmt.Errorf("failed to compact messages when needed: %w", err)
+		// Apply compaction only if the backend doesn't handle it server-side.
+		// Backends like OpenAI Responses API (truncation: "auto") manage overflow
+		// on the server, so client-side compaction is unnecessary.
+		if ssc, ok := r.llmClient.(domain.ServerSideCompactionLLM); !ok || !ssc.SupportsServerSideCompaction() {
+			maxTokensEstimate := r.estimateContextWindow()
+			const compactionThreshold = 70.0 // 70% threshold
+			if err := r.state.CompactIfNeeded(ctx, r.llmClient, maxTokensEstimate, compactionThreshold); err != nil {
+				return nil, fmt.Errorf("failed to compact messages when needed: %w", err)
+			}
 		}
 		messages := r.state.GetMessages()
 

@@ -1,0 +1,9 @@
+{
+  "name": "ollama_qwen3.5_27b",
+  "llm": {
+    "backend": "ollama",
+    "model": "qwen3.5:27b",
+    "thinking": false,
+    "maxTokens": 2048
+  }
+}

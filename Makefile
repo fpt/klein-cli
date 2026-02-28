@@ -41,7 +41,7 @@ integ: build ## Matrix integration test (testcases × backends)
 	CLI=output/klein BACKENDS="anthropic,openai,ollama" ./testsuite/matrix_runner.sh
 
 integ-ollama: build
-	CLI=output/klein BACKENDS="ollama_gpt_oss_20b,ollama_qwen3_4b,ollama_qwen3_8b,ollama_glm_air_q3_k_m" \
+	CLI=output/klein BACKENDS="ollama_gpt_oss_20b,ollama_qwen3.5_27b,ollama_qwen3.5_35b,ollama_glm_air_q3_k_m" \
 	TESTS="coding,fibonacci,refactoring,research_scenario,web_search" ./testsuite/matrix_runner.sh
 
 test-capabilities: ## Capability testing

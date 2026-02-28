@@ -58,8 +58,13 @@ var ollamaModels = []OllamaModel{
 	{Name: "qwen3:14b", Tool: true, Think: true, Vision: false, Context: 40960},
 	{Name: "qwen3:30b", Tool: true, Think: true, Vision: false, Context: 40960},
 	{Name: "qwen3:32b", Tool: true, Think: true, Vision: false, Context: 40960},
-	// qwen3.5 family
-	{Name: "qwen3.5:35b", Tool: true, Think: true, Vision: true, Context: 256000},
+	// qwen3.5 family — Tool: false due to Ollama bug (issue #14493):
+	// Ollama's qwen3.5 pipeline uses the wrong tool-call format (Qwen3 Hermes JSON) but
+	// the model was trained on Qwen3-Coder XML format. Sending tools in the API request
+	// crashes the model runner with a 500 error. Disable native tool calling until fixed.
+	{Name: "qwen3.5:27b", Tool: false, Think: true, Vision: true, Context: 256000},
+	{Name: "qwen3.5:35b", Tool: false, Think: true, Vision: true, Context: 256000},
+	{Name: "qwen3.5:122b", Tool: false, Think: true, Vision: true, Context: 256000},
 	// glm-4.7 family — uses XML tool call format, incompatible with Ollama JSON tool calling API
 	{Name: "glm-4.7", Tool: false, Think: false, Vision: false, Context: 128000},
 	// GLM-4.5-Air — claims native tool calling + thinking; unconfirmed, added for testing

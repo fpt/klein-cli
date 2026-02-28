@@ -17,7 +17,8 @@ var iterationAdvisorLogger = pkgLogger.NewComponentLogger("iteration-advisor")
 // runtime state from tool managers (web cache, todo counts, edit failures) so that
 // tool descriptions stay static and Anthropic prompt caching can hit.
 type IterationAdvisor struct {
-	toolState domain.ToolStateProvider // optional; nil if no state tracking needed
+	toolState   domain.ToolStateProvider // optional; nil if no state tracking needed
+	routingHint string                   // injected once at iteration 0 by SkillsRouter
 }
 
 // NewIterationAdvisor creates a new IterationAdvisor.
@@ -25,6 +26,13 @@ type IterationAdvisor struct {
 // in situation messages; pass nil to disable state injection.
 func NewIterationAdvisor(toolState domain.ToolStateProvider) *IterationAdvisor {
 	return &IterationAdvisor{toolState: toolState}
+}
+
+// WithRoutingHint attaches a one-shot routing hint (from SkillsRouter) that is
+// injected into the situation message on iteration 0 only.
+func (a *IterationAdvisor) WithRoutingHint(hint string) *IterationAdvisor {
+	a.routingHint = hint
+	return a
 }
 
 func (a *IterationAdvisor) InjectMessage(state domain.State, curIter, iterLimit int) {
@@ -37,6 +45,11 @@ func (a *IterationAdvisor) InjectMessage(state domain.State, curIter, iterLimit 
 	}
 
 	var messages []string
+
+	// Inject routing hint on the first iteration only (before any tool calls have been made).
+	if curIter == 0 && a.routingHint != "" {
+		messages = append(messages, a.routingHint)
+	}
 
 	// Include dynamic tool state (web cache entries, todo counts, edit failures) if available.
 	// This keeps the information ephemeral (removed each iteration) and out of

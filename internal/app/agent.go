@@ -44,6 +44,7 @@ type Agent struct {
 	settings        *config.Settings
 	logger          *pkgLogger.Logger
 	out             io.Writer
+	router          *SkillsRouter
 	thinkingStarted      bool
 	alwaysApprove        bool
 	allowedToolsOverride []string       // CLI override for skill's allowed-tools
@@ -165,6 +166,7 @@ func NewAgentWithOptions(llmClient domain.LLM, workingDir string, mcpToolManager
 		settings:        settings,
 		logger:          logger.WithComponent("agent"),
 		out:             out,
+		router:          NewSkillsRouter(),
 		alwaysApprove:   alwaysApprove,
 	}
 }
@@ -192,7 +194,8 @@ func (a *Agent) Invoke(ctx context.Context, userInput string, skillName string, 
 		return nil, fmt.Errorf("failed to create LLM client with tools: %w", err)
 	}
 
-	situation := NewIterationAdvisor(a.allToolManagers)
+	situation := NewIterationAdvisor(a.allToolManagers).
+		WithRoutingHint(a.router.Route(userInput, skillName))
 
 	maxIterations := DefaultAgentMaxIterations
 	if a.settings != nil && a.settings.Agent.MaxIterations > 0 {

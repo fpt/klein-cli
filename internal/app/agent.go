@@ -195,7 +195,7 @@ func (a *Agent) Invoke(ctx context.Context, userInput string, skillName string, 
 	}
 
 	situation := NewIterationAdvisor(a.allToolManagers).
-		WithRoutingHint(a.router.Route(userInput, skillName))
+		WithRoutingHint(a.router.Route(userInput, skillName, a.sharedState.GetMessages()))
 
 	maxIterations := DefaultAgentMaxIterations
 	if a.settings != nil && a.settings.Agent.MaxIterations > 0 {

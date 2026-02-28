@@ -1,8 +1,11 @@
 package app
 
 import (
+	"fmt"
 	"regexp"
 	"strings"
+
+	"github.com/fpt/klein-cli/pkg/message"
 )
 
 var (
@@ -15,7 +18,8 @@ var (
 type routerRule struct {
 	match       func(prompt string) bool
 	hint        string
-	skipIfSkill string // suppress this hint when the named skill is already active
+	skipIfSkill string // when the named skill is active/in history, use reminder instead of hint
+	reminder    string // short message shown when skipIfSkill is already loaded
 }
 
 // SkillsRouter inspects user prompts and returns a tool-usage hint to inject
@@ -42,6 +46,7 @@ func defaultRules() []routerRule {
 				"use the gh CLI (bash) for issues, PRs, workflows, and releases. " +
 				"Avoid fetching github.com HTML pages with web_fetch. " +
 				"The 'github' skill has comprehensive guidance if needed.",
+			reminder: "GitHub URL detected — github skill guidance is already in context.",
 		},
 		{
 			// Non-GitHub HTTP URL: nudge toward web_fetch
@@ -66,20 +71,38 @@ func defaultRules() []routerRule {
 }
 
 // Route inspects the prompt and returns a newline-joined set of hints (empty if none match).
-// activeSkill is the name of the currently loaded skill; rules with a matching skipIfSkill
-// are suppressed to avoid redundancy. Safe to call on a nil receiver.
-func (r *SkillsRouter) Route(prompt, activeSkill string) string {
+// activeSkill is the name of the currently loaded skill; history is the full message state.
+// Rules with a matching skipIfSkill are suppressed when that skill is either currently active
+// or has already been loaded in a previous turn (detected via [[SKILL_PROMPT:name]] markers).
+// Safe to call on a nil receiver.
+func (r *SkillsRouter) Route(prompt, activeSkill string, history []message.Message) string {
 	if r == nil {
 		return ""
 	}
 	var hints []string
 	for _, rule := range r.rules {
-		if rule.skipIfSkill != "" && rule.skipIfSkill == activeSkill {
+		if !rule.match(prompt) {
 			continue
 		}
-		if rule.match(prompt) {
-			hints = append(hints, rule.hint)
+		if rule.skipIfSkill != "" && (rule.skipIfSkill == activeSkill || skillInHistory(rule.skipIfSkill, history)) {
+			if rule.reminder != "" {
+				hints = append(hints, rule.reminder)
+			}
+			continue
 		}
+		hints = append(hints, rule.hint)
 	}
 	return strings.Join(hints, "\n")
+}
+
+// skillInHistory reports whether a skill's system prompt has been injected into the
+// message history (indicated by the [[SKILL_PROMPT:name]] marker added by Agent.Invoke).
+func skillInHistory(skillName string, history []message.Message) bool {
+	marker := fmt.Sprintf("[[SKILL_PROMPT:%s]]", skillName)
+	for _, msg := range history {
+		if msg.Type() == message.MessageTypeSystem && strings.Contains(msg.Content(), marker) {
+			return true
+		}
+	}
+	return false
 }

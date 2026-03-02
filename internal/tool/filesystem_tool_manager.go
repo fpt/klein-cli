@@ -786,8 +786,8 @@ func (m *FileSystemToolManager) handleMultiEdit(ctx context.Context, args messag
 			if b, ok := mapp["replace_all"].(bool); ok {
 				e.ReplaceAll = b
 			}
-			if e.FilePath == "" || e.OldString == "" || e.NewString == "" {
-				return message.NewToolResultError("each edit requires file_path, old_string, and new_string"), nil
+			if e.FilePath == "" || e.OldString == "" {
+				return message.NewToolResultError("each edit requires file_path and old_string"), nil
 			}
 			edits = append(edits, e)
 		}

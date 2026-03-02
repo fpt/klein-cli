@@ -526,8 +526,8 @@ klein-cli/
 
 **Google Gemini Models:**
 - `gemini-2.5-flash-lite` - **Recommended** - Latest, fastest, most efficient
-- `gemini-1.5-pro` - High capability model for complex reasoning
-- `gemini-2.0-flash` - Latest experimental features
+- `gemini-2.5-pro` - High capability model for complex reasoning
+- `gemini-2.5-flash` - Latest experimental features
 
 ### Development Tasks
 

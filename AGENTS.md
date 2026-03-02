@@ -584,7 +584,7 @@ Instructions:
 **Google Gemini Models (Native Schema + Structured Output):**
 - `gemini-2.5-flash-lite` - **Recommended** - Latest, fastest, most efficient
 - `gemini-1.5-pro` - High capability model for complex reasoning
-- `gemini-2.0-flash` - Latest experimental features
+- `gemini-2.5-flash` - Latest experimental features
 
 ## Testing Practices
 

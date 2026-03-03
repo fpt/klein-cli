@@ -180,22 +180,22 @@ silently dropping all qwen3 tool calls and producing empty responses. Fixed in
 
 ---
 
-### ⛔ qwen3.5 family — Broken in Ollama (renderer bug)
+### ✅ qwen3.5:9b — Strong performer (6/7)
 
-- **Architecture**: `qwen35moe` — MoE + Gated Delta Networks (newly released, different from qwen3)
-- **System messages**: Crash the model runner with `500 Internal Server Error` — the `qwen3.5`
-  renderer/parser does not handle `{"role":"system"}` messages. The template is `{{ .Prompt }}`
-  (raw prompt passthrough) rather than the standard chat template. Since klein always injects
-  the skill as a system message, qwen3.5 is **completely non-functional** for our agent.
-- **Tool calling**: Also crashes — Ollama's pipeline uses the wrong tool-call format
-  (Qwen3 Hermes JSON) when qwen3.5 was trained on Qwen3-Coder XML format. See
-  [Ollama issue #14493](https://github.com/ollama/ollama/issues/14493).
-- **Single-turn user messages**: Work correctly (no system role, no tools, no prior history).
-- **Thinking**: Works when not combined with system messages.
-- **Context**: 256K tokens
-- **Recommendation**: Do not use until Ollama fixes the `qwen35moe` renderer. `model.go`
-  marks the family as `Tool: false` to avoid crashes. Check Ollama release notes before
-  re-enabling. A system-message-less run mode would be needed to test basic capabilities.
+| coding | fibonacci | long_text | memory_state | refactoring | research_scenario | web_search |
+|--------|-----------|-----------|--------------|-------------|-------------------|------------|
+| ✅ | ✅ | ✅ | ✅ | ❌ | ✅ | ✅ |
+
+**Score: 6/7** (tested 2026-03-03)
+
+- **Architecture**: `qwen35moe` — MoE + Gated Delta Networks; ~9B active parameters
+- **Tool calling**: Native Ollama JSON tool calling — works reliably after Ollama fixed the
+  `qwen35moe` renderer (was broken with 500 crashes in early v0.17.x releases, now fixed)
+- **Thinking**: ✅ — `think: false` in backend JSON disables it, keeping token budget for tools
+- **Vision**: ✅ (256K context)
+- **Refactoring**: ❌ — universal Ollama failure (same as all other models)
+- **Notes**: Excellent quality for its size. Matches gpt-oss:20b score at a fraction of the
+  memory footprint. The smaller qwen3.5 variants (0.8b–4b) have not yet been benchmarked.
 
 ---
 
@@ -224,9 +224,10 @@ silently dropping all qwen3 tool calls and producing empty responses. Fixed in
 | Model | Tool calling | Thinking | Matrix score |
 |-------|-------------|----------|--------------|
 | gpt-oss:20b | ✅ Native | ✅ | 6/7 |
+| qwen3.5:9b | ✅ Native | ✅ | 6/7 |
+| GLM-4.5-Air:Q3_K_M | ✅ Native | ✅ | 6/7 |
 | gpt-oss:120b | ✅ Native | ✅ | 5/7 (slow — CPU-bound) |
 | qwen3:14b | ✅ Native* | ✅ | 5/7 |
-| GLM-4.5-Air:Q3_K_M | ✅ Native | ✅ | 6/7 |
 | GLM-4.5-Air:Q2_K | ✅ Native | ✅ | 5/7 |
 | qwen3:30b | ✅ Native* | ✅† | 4/7 |
 | qwen3:8b | ✅ Native* | ✅ | 4/7 |
@@ -235,11 +236,9 @@ silently dropping all qwen3 tool calls and producing empty responses. Fixed in
 | lfm2.5-thinking | ❌ | ❌ | 1/4 |
 | rnj-1:8b | ❌ | ❌ | 1/4 |
 | nemotron-3-nano | ❓ Unreliable | ✅ | ⛔ OOM (24GB model, 12GB VRAM) |
-| qwen3.5:35b | ❌ Crashes Ollama | ✅ | ⛔ Ollama bug #14493 |
 
 \* Required streaming fix: qwen3 sends tool calls in intermediate streaming chunks, not the final chunk.
 † qwen3:30b ignores `think: false` — outputs reasoning as content, exhausting token budget before tool calls.
-‡ qwen3.5 tool calling crashes the model runner — wrong format pipeline in Ollama. Fix pending.
 
 ### Known universal failure: `refactoring` test
 
@@ -273,8 +272,7 @@ and model limitations. The test may need relaxed pass criteria or a more guided 
    search step would improve reliability across all model sizes.
 7. **Large models on insufficient VRAM are impractical**: gpt-oss:120b (60 GB) on a 12 GB
    GPU runs at ~10 min/test. Only useful if a GPU with sufficient VRAM is available.
-8. **New Ollama architectures may have deeply broken chat support**: qwen3.5 uses a new
-   `qwen35moe` architecture with a custom renderer/parser. Ollama's initial implementation
-   crashes on both system messages and tool calls — making the model completely unusable for
-   our agent (which always injects the skill as a system message). Always verify basic
-   multi-turn chat with a system message before adding a new model family to `model.go`.
+8. **New Ollama architectures may have deeply broken chat support at launch**: qwen3.5 uses
+   a new `qwen35moe` architecture. Early v0.17.x releases crashed on both system messages
+   and tool calls. Ollama fixed it shortly after. Always verify basic multi-turn chat with a
+   system message before committing a new model family to `model.go`.

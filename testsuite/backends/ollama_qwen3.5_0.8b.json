@@ -1,8 +1,8 @@
 {
-  "name": "ollama_qwen3_8b",
+  "name": "ollama_qwen3.5_0.8b",
   "llm": {
     "backend": "ollama",
-    "model": "qwen3:8b",
+    "model": "qwen3.5:0.8b",
     "thinking": false,
     "maxTokens": 2048
   }

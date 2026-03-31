@@ -49,7 +49,7 @@ type Agent struct {
 	out                    io.Writer
 	router                 *SkillsRouter
 	thinkingStarted        bool
-	alwaysApprove          bool
+	sessionRules           *permission.RuleSet // in-memory allow/deny rules created during this session
 	permRules              *permission.RuleSet // persistent allow/deny rules from JSON files
 	allowedToolsOverride   []string            // CLI override for skill's allowed-tools
 	externalEventHandler   events.EventHandler // optional: forward events to external consumers (e.g., Connect server)
@@ -94,14 +94,12 @@ func NewAgentWithOptions(llmClient domain.LLM, workingDir string, mcpToolManager
 	// Create individual tool managers
 	var todoToolManager *tool.TodoToolManager
 	var taskToolManager *tool.TaskToolManager
-	alwaysApprove := false
 	if isInteractiveMode {
 		todoToolManager = tool.NewTodoToolManager(workingDir)
 		taskToolManager = tool.NewTaskToolManager(workingDir)
 	} else {
 		todoToolManager = tool.NewInMemoryTodoToolManager()
 		taskToolManager = tool.NewInMemoryTaskToolManager()
-		alwaysApprove = true
 	}
 
 	fsConfig := infra.DefaultFileSystemConfig(workingDir)
@@ -191,9 +189,9 @@ func NewAgentWithOptions(llmClient domain.LLM, workingDir string, mcpToolManager
 		settings:           settings,
 		logger:             logger.WithComponent("agent"),
 		out:                out,
-		router:             NewSkillsRouter(),
-		alwaysApprove:      alwaysApprove,
-		permRules:          permRules,
+		router:        NewSkillsRouter(),
+		sessionRules:  newSessionRules(isInteractiveMode),
+		permRules:     permRules,
 	}
 }
 
@@ -369,30 +367,40 @@ func (a *Agent) Invoke(ctx context.Context, userInput string, skillName string, 
 func (a *Agent) handleApprovalWorkflow(ctx context.Context, reactClient domain.ReAct) (message.Message, error) {
 	writer := a.OutWriter()
 
-	if a.alwaysApprove {
-		fmt.Fprintf(writer, "Proceeding (Always selected)...\n\n")
-		return reactClient.Resume(ctx)
+	var toolName, arg string
+	if pending, ok := reactClient.GetPendingToolCall().(*message.ToolCallMessage); ok {
+		toolName = string(pending.ToolName())
+		arg = extractPermissionArg(toolName, pending.ToolArguments())
 	}
 
-	// Check persistent permission rules before showing a dialog.
-	if pending, ok := reactClient.GetPendingToolCall().(*message.ToolCallMessage); ok {
-		toolName := string(pending.ToolName())
-		arg := extractPermissionArg(toolName, pending.ToolArguments())
-		if behavior, matched := a.permRules.Check(toolName, arg); matched {
-			switch behavior {
-			case permission.RuleAllow:
-				fmt.Fprintf(writer, "Proceeding (allow rule matched)...\n\n")
-				return reactClient.Resume(ctx)
-			case permission.RuleDeny:
-				fmt.Fprintf(writer, "Cancelled (deny rule matched).\n")
-				reactClient.CancelPendingToolCall()
-				return reactClient.Resume(ctx)
-			}
+	// 1. Session rules (in-memory, highest priority).
+	if behavior, matched := a.sessionRules.Check(toolName, arg); matched {
+		switch behavior {
+		case permission.RuleAllow:
+			fmt.Fprintf(writer, "Proceeding (session rule matched)...\n\n")
+			return reactClient.Resume(ctx)
+		case permission.RuleDeny:
+			fmt.Fprintf(writer, "Cancelled (session deny rule matched).\n")
+			reactClient.CancelPendingToolCall()
+			return reactClient.Resume(ctx)
 		}
 	}
 
-	lastMessage := reactClient.GetLastMessage()
+	// 2. Persistent rules from JSON files.
+	if behavior, matched := a.permRules.Check(toolName, arg); matched {
+		switch behavior {
+		case permission.RuleAllow:
+			fmt.Fprintf(writer, "Proceeding (allow rule matched)...\n\n")
+			return reactClient.Resume(ctx)
+		case permission.RuleDeny:
+			fmt.Fprintf(writer, "Cancelled (deny rule matched).\n")
+			reactClient.CancelPendingToolCall()
+			return reactClient.Resume(ctx)
+		}
+	}
 
+	// 3. Non-interactive stdin (pipe / script): auto-approve.
+	lastMessage := reactClient.GetLastMessage()
 	stat, err := os.Stdin.Stat()
 	if err != nil || (stat.Mode()&os.ModeCharDevice) == 0 {
 		fmt.Fprintf(writer, "\nAbout to write file(s):\n")
@@ -401,19 +409,23 @@ func (a *Agent) handleApprovalWorkflow(ctx context.Context, reactClient domain.R
 		return reactClient.Resume(ctx)
 	}
 
+	// 4. Interactive dialog.
 	fmt.Fprintf(writer, "\nAbout to write file(s):\n")
 	fmt.Fprintf(writer, "%s\n\n", lastMessage.TruncatedString())
 
+	scopedLabel := fmt.Sprintf("Yes, for %s", inferPattern(toolName, arg))
+	items := []string{"Yes", scopedLabel, "Always (this session)", "No"}
+
 	prompt := promptui.Select{
 		Label: "Proceed with this action?",
-		Items: []string{"Yes", "Always", "No"},
+		Items: items,
 		Templates: &promptui.SelectTemplates{
 			Label:    "{{ . }}",
 			Active:   "> {{ . | cyan }}",
 			Inactive: "  {{ . }}",
 			Selected: "{{ . }}",
 		},
-		Size: 3,
+		Size: len(items),
 	}
 
 	_, result, err := prompt.Run()
@@ -426,9 +438,22 @@ func (a *Agent) handleApprovalWorkflow(ctx context.Context, reactClient domain.R
 	case "Yes":
 		fmt.Fprintf(writer, "Proceeding...\n\n")
 		return reactClient.Resume(ctx)
-	case "Always":
-		a.alwaysApprove = true
-		fmt.Fprintf(writer, "Proceeding (will auto-approve future file operations this session)...\n\n")
+	case scopedLabel:
+		pattern := inferPattern(toolName, arg)
+		a.sessionRules.Rules = append(a.sessionRules.Rules, permission.PermissionRule{
+			Tool:     toolName,
+			Pattern:  pattern,
+			Behavior: permission.RuleAllow,
+		})
+		fmt.Fprintf(writer, "Proceeding (session rule added: %s %s)...\n\n", toolName, pattern)
+		return reactClient.Resume(ctx)
+	case "Always (this session)":
+		a.sessionRules.Rules = append(a.sessionRules.Rules, permission.PermissionRule{
+			Tool:     toolName,
+			Pattern:  "",
+			Behavior: permission.RuleAllow,
+		})
+		fmt.Fprintf(writer, "Proceeding (all future %s calls approved this session)...\n\n", toolName)
 		return reactClient.Resume(ctx)
 	case "No":
 		fmt.Fprintf(writer, "Cancelled.\n")
@@ -465,6 +490,57 @@ func extractPermissionArg(toolName string, args message.ToolArgumentValues) stri
 		}
 	}
 	return ""
+}
+
+// newSessionRules returns the initial session rule set.
+// In non-interactive mode (one-shot, file, server) all approval-requiring tools
+// are pre-approved so the dialog never blocks a piped or scripted invocation.
+func newSessionRules(isInteractive bool) *permission.RuleSet {
+	if isInteractive {
+		return &permission.RuleSet{}
+	}
+	tools := []string{"write_file", "edit_file", "multi_edit", "bash"}
+	rules := make([]permission.PermissionRule, len(tools))
+	for i, t := range tools {
+		rules[i] = permission.PermissionRule{Tool: t, Pattern: "", Behavior: permission.RuleAllow}
+	}
+	return &permission.RuleSet{Rules: rules}
+}
+
+// inferPattern derives a suggested allow pattern from the tool name and its primary argument.
+//
+// For file tools the first path segment becomes a dir glob (e.g. "src/foo/bar.go" → "src/**").
+// A root-level file with an extension gets a glob on the extension (e.g. "main.go" → "*.go").
+// For bash the first whitespace-delimited word(s) become a prefix wildcard (e.g. "go build ./..." → "go build *").
+// Falls back to "*" (match all) when no useful structure is found.
+func inferPattern(toolName, arg string) string {
+	if arg == "" {
+		return "*"
+	}
+	switch toolName {
+	case "write_file", "edit_file", "multi_edit":
+		// Normalise to forward slashes and strip leading ./
+		arg = strings.TrimPrefix(filepath.ToSlash(arg), "./")
+		if idx := strings.Index(arg, "/"); idx > 0 {
+			return arg[:idx] + "/**"
+		}
+		// Root-level file: glob on extension if present
+		if dot := strings.LastIndex(arg, "."); dot > 0 {
+			return "*" + arg[dot:]
+		}
+		return "*"
+	case "bash":
+		// Use the first two words if there are at least two, otherwise one word
+		words := strings.Fields(arg)
+		if len(words) >= 2 {
+			return words[0] + " " + words[1] + " *"
+		}
+		if len(words) == 1 {
+			return words[0] + " *"
+		}
+		return "*"
+	}
+	return "*"
 }
 
 // EnablePersistence upgrades an in-memory agent to file-backed session persistence.

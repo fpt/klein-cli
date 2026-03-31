@@ -2,6 +2,8 @@ package state
 
 import (
 	"context"
+	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/fpt/klein-cli/pkg/message"
@@ -184,53 +186,125 @@ func TestCompactIfNeeded_NoMaxTokens(t *testing.T) {
 }
 
 func TestVisionContentTruncation(t *testing.T) {
+	// Build a history of 10 user turns, each with an image.
+	// keepRecentTurns=5 means turns 0-4 (old) get images stripped,
+	// turns 5-9 (recent) keep their images.
+	state := NewMessageState()
+	const totalTurns = 10
+
+	for i := 0; i < totalTurns; i++ {
+		state.AddMessage(message.NewChatMessageWithImages(
+			message.MessageTypeUser, "turn message", []string{"base64img"},
+		))
+	}
+
+	if err := state.CleanupMandatory(); err != nil {
+		t.Fatalf("CleanupMandatory failed: %v", err)
+	}
+
+	msgs := state.GetMessages()
+	if len(msgs) != totalTurns {
+		t.Fatalf("expected %d messages, got %d", totalTurns, len(msgs))
+	}
+
+	// Old turns (before boundary at keepRecentTurns=5 from end) lose images.
+	oldCount := totalTurns - keepRecentTurns // 5
+	for i := 0; i < oldCount; i++ {
+		if len(msgs[i].Images()) != 0 {
+			t.Errorf("turn %d (old): expected images stripped, still present", i)
+		}
+	}
+	// Recent turns keep their images.
+	for i := oldCount; i < totalTurns; i++ {
+		if len(msgs[i].Images()) == 0 {
+			t.Errorf("turn %d (recent): expected images preserved, got none", i)
+		}
+	}
+}
+
+func TestMicroCompaction_LargeToolResults(t *testing.T) {
+	// Interleave user turns with tool call/result pairs.
+	// Old turns should have large tool results micro-compacted;
+	// recent turns should keep their results verbatim.
 	state := NewMessageState()
 
-	// Add messages with images - first 5 are "old", last 5 are "recent"
-	for i := 0; i < 15; i++ {
-		var msg message.Message
-		if i < 10 {
-			// Older messages with images (should be truncated)
-			msg = message.NewChatMessageWithImages(message.MessageTypeUser, "Image message", []string{"base64image"})
-		} else {
-			// Recent messages with images (should be preserved)
-			msg = message.NewChatMessageWithImages(message.MessageTypeUser, "Recent image", []string{"base64recent"})
-		}
-		state.AddMessage(msg)
+	largeContent := strings.Repeat("x", microCompactMinChars+1)
+	const totalTurns = 8
+
+	for i := 0; i < totalTurns; i++ {
+		// User message starts the turn
+		state.AddMessage(message.NewChatMessage(message.MessageTypeUser, "request"))
+		// Tool result for this turn
+		state.AddMessage(message.NewToolResultMessage("id-"+strconv.Itoa(i), largeContent, ""))
 	}
 
-	// Verify all messages initially have images
-	messages := state.GetMessages()
-	for i, msg := range messages {
-		if len(msg.Images()) == 0 {
-			t.Errorf("Message %d should have images initially", i)
-		}
+	if err := state.CleanupMandatory(); err != nil {
+		t.Fatalf("CleanupMandatory failed: %v", err)
 	}
 
-	// Run mandatory cleanup
-	err := state.CleanupMandatory()
-	if err != nil {
-		t.Errorf("CleanupMandatory failed: %v", err)
+	msgs := state.GetMessages()
+	// totalTurns * 2 messages (user + tool result each)
+	if len(msgs) != totalTurns*2 {
+		t.Fatalf("expected %d messages, got %d", totalTurns*2, len(msgs))
 	}
 
-	// Check vision content truncation
-	messages = state.GetMessages()
-	if len(messages) != 15 {
-		t.Errorf("Expected 15 messages after cleanup, got %d", len(messages))
-		return
-	}
-
-	// First 5 messages (older) should have images removed
-	for i := 0; i < 5; i++ {
-		if len(messages[i].Images()) > 0 {
-			t.Errorf("Message %d should have images removed by vision truncation", i)
+	oldTurns := totalTurns - keepRecentTurns // 3
+	for i := 0; i < oldTurns; i++ {
+		toolResultIdx := i*2 + 1
+		result := msgs[toolResultIdx].(*message.ToolResultMessage).Result
+		if !strings.HasPrefix(result, "[Content cleared") {
+			t.Errorf("turn %d tool result should be micro-compacted, got: %.60s", i, result)
 		}
 	}
+	for i := oldTurns; i < totalTurns; i++ {
+		toolResultIdx := i*2 + 1
+		result := msgs[toolResultIdx].(*message.ToolResultMessage).Result
+		if strings.HasPrefix(result, "[Content cleared") {
+			t.Errorf("turn %d tool result should be preserved, got stub", i)
+		}
+	}
+}
 
-	// Last 10 messages (recent) should still have images
-	for i := 5; i < 15; i++ {
-		if len(messages[i].Images()) == 0 {
-			t.Errorf("Message %d should still have images (recent message)", i)
+func TestMicroCompaction_SkipsOffloadedStubs(t *testing.T) {
+	state := NewMessageState()
+
+	// Fill enough turns that old ones would normally be compacted
+	stub := "[Result offloaded to disk: /some/path (99999 chars total)]\nPreview:\n..."
+	for i := 0; i < keepRecentTurns+2; i++ {
+		state.AddMessage(message.NewChatMessage(message.MessageTypeUser, "q"))
+		state.AddMessage(message.NewToolResultMessage("id-"+strconv.Itoa(i), stub, ""))
+	}
+
+	if err := state.CleanupMandatory(); err != nil {
+		t.Fatalf("CleanupMandatory failed: %v", err)
+	}
+
+	for _, msg := range state.GetMessages() {
+		if tr, ok := msg.(*message.ToolResultMessage); ok {
+			if tr.Result != stub {
+				t.Errorf("already-offloaded stub should not be re-stubbed, got: %.80s", tr.Result)
+			}
+		}
+	}
+}
+
+func TestMicroCompaction_SmallResultsUntouched(t *testing.T) {
+	state := NewMessageState()
+	small := strings.Repeat("s", microCompactMinChars-1)
+	for i := 0; i < keepRecentTurns+2; i++ {
+		state.AddMessage(message.NewChatMessage(message.MessageTypeUser, "q"))
+		state.AddMessage(message.NewToolResultMessage("id-"+strconv.Itoa(i), small, ""))
+	}
+
+	if err := state.CleanupMandatory(); err != nil {
+		t.Fatalf("CleanupMandatory failed: %v", err)
+	}
+
+	for _, msg := range state.GetMessages() {
+		if tr, ok := msg.(*message.ToolResultMessage); ok {
+			if tr.Result != small {
+				t.Errorf("small result should be untouched, got: %.80s", tr.Result)
+			}
 		}
 	}
 }

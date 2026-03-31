@@ -20,50 +20,123 @@ const (
 	MinReductionTokens = 5000 // Must save at least 5K tokens to be worthwhile
 )
 
-// CleanupMandatory performs mandatory cleanup without compaction
-// - Removes situation messages (mandatory for context purity)
-// - Truncates vision content in older messages (mandatory for token efficiency)
-// - Does NOT perform message compaction/summarization
+// Lightweight cleanup configuration.
+// keepRecentTurns defines how many complete user turns to leave fully intact;
+// messages in older turns are eligible for content reduction.
+// microCompactMinChars is the tool-result size above which the content is
+// replaced with a compact stub during cleanup of old turns.
+const (
+	keepRecentTurns      = 5     // protect the last N user turns from content reduction
+	microCompactMinChars = 2_000 // minimum chars to trigger tool-result stub replacement
+)
+
+// offloadStubPrefix is the prefix written by ToolResultStorage when a result
+// has already been persisted to disk. Such stubs are never re-stubbed.
+const offloadStubPrefix = "[Result offloaded to disk:"
+
+// microCompactStub is the replacement text inserted when a tool result is
+// cleared by lightweight cleanup.
+const microCompactStub = "[Content cleared by micro-compaction — was %d chars]"
+
+// CleanupMandatory performs lightweight, LLM-free cleanup on every invocation:
+//
+//  1. Removes stale summary and situation messages (source-based filtering).
+//  2. Finds the start of the Nth most recent user turn (the "old/recent boundary").
+//  3. Applies applyLightweightCleanup to every message before that boundary,
+//     stripping vision content and micro-compacting large tool results in a
+//     single unified pass.
+//
+// This unifies the previous image-truncation logic with the new micro-compaction
+// so there is exactly one pass over old messages, and one consistent boundary
+// definition across both concerns.
 func (c *MessageState) CleanupMandatory() error {
-	// Remove any previous summary messages first to get accurate count
-	previousSummariesRemoved := c.RemoveMessagesBySource(message.MessageSourceSummary)
-	if previousSummariesRemoved > 0 {
-		logger.DebugWithIntention(pkgLogger.IntentionDebug, "Removed previous summary messages during cleanup",
-			"removed_count", previousSummariesRemoved)
+	// 1. Remove stale metadata messages
+	if n := c.RemoveMessagesBySource(message.MessageSourceSummary); n > 0 {
+		logger.DebugWithIntention(pkgLogger.IntentionDebug, "Removed stale summary messages", "count", n)
+	}
+	if n := c.RemoveMessagesBySource(message.MessageSourceSituation); n > 0 {
+		logger.DebugWithIntention(pkgLogger.IntentionDebug, "Removed stale situation messages", "count", n)
 	}
 
-	// Remove situation messages (mandatory for context purity)
-	situationRemoved := c.RemoveMessagesBySource(message.MessageSourceSituation)
-	if situationRemoved > 0 {
-		logger.DebugWithIntention(pkgLogger.IntentionDebug, "Removed situation messages during mandatory cleanup",
-			"removed_count", situationRemoved)
+	// 2. Locate the boundary: first message of the Nth most recent user turn.
+	//    Everything before boundary is "old" and eligible for content reduction.
+	boundary := findTurnBoundary(c.Messages, keepRecentTurns)
+	if boundary == 0 {
+		return nil // not enough history yet — nothing to clean
 	}
 
-	// Apply vision content truncation to older messages (keep recent 10 messages with images)
-	messages := c.Messages
-	if len(messages) > 10 {
-		for i, msg := range messages[:len(messages)-10] {
-			if len(msg.Images()) > 0 {
-				// Create new message without images to save tokens
-				switch typedMsg := msg.(type) {
-				case *message.ChatMessage:
-					// Create new message without images
-					newMsg := message.NewChatMessage(msg.Type(), msg.Content())
-					newMsg.SetTokenUsage(msg.InputTokens(), msg.OutputTokens(), msg.TotalTokens())
-					c.Messages[i] = newMsg
-				case *message.ToolResultMessage:
-					// Create new tool result without images
-					newMsg := message.NewToolResultMessage(msg.ID(), typedMsg.Result, typedMsg.Error)
-					newMsg.SetTokenUsage(msg.InputTokens(), msg.OutputTokens(), msg.TotalTokens())
-					c.Messages[i] = newMsg
-				}
-				logger.DebugWithIntention(pkgLogger.IntentionDebug, "Truncated vision content for token efficiency",
-					"message_id", msg.ID(), "position", "older_message")
+	// 3. Single pass: strip vision content and micro-compact large tool results.
+	reduced := 0
+	for i := 0; i < boundary; i++ {
+		if cleaned, ok := applyLightweightCleanup(c.Messages[i]); ok {
+			c.Messages[i] = cleaned
+			reduced++
+		}
+	}
+	if reduced > 0 {
+		logger.DebugWithIntention(pkgLogger.IntentionDebug,
+			"Lightweight cleanup reduced content in old turns",
+			"messages_cleaned", reduced, "boundary", boundary)
+	}
+	return nil
+}
+
+// findTurnBoundary returns the index of the start of the Nth most recent user
+// turn. The caller should clean messages at indices [0, boundary).
+// Returns 0 when there are fewer than n user messages (nothing is old enough).
+func findTurnBoundary(messages []message.Message, n int) int {
+	found := 0
+	for i := len(messages) - 1; i >= 0; i-- {
+		if messages[i].Type() == message.MessageTypeUser {
+			found++
+			if found >= n {
+				return i
 			}
 		}
 	}
+	return 0
+}
 
-	return nil
+// applyLightweightCleanup applies non-destructive content reduction to a single
+// message. It handles two concerns in one function so old messages are visited
+// exactly once:
+//
+//   - ChatMessage with images: image data is removed (vision truncation).
+//   - ToolResultMessage with images: image data is removed.
+//   - ToolResultMessage with a large result text: content is replaced with a
+//     stub that records the original size. Already-offloaded stubs are skipped.
+//
+// Returns (cleaned, true) when a reduction was made, (original, false) otherwise.
+func applyLightweightCleanup(msg message.Message) (message.Message, bool) {
+	switch m := msg.(type) {
+	case *message.ToolResultMessage:
+		stripImages := len(m.Images()) > 0
+		stubResult := m.Error == "" &&
+			len(m.Result) > microCompactMinChars &&
+			!strings.HasPrefix(m.Result, offloadStubPrefix) &&
+			!strings.HasPrefix(m.Result, "[Content cleared")
+
+		if !stripImages && !stubResult {
+			return msg, false
+		}
+
+		newResult := m.Result
+		if stubResult {
+			newResult = fmt.Sprintf(microCompactStub, len(m.Result))
+		}
+		cleaned := message.NewToolResultMessage(m.ID(), newResult, m.Error)
+		cleaned.SetTokenUsage(m.InputTokens(), m.OutputTokens(), m.TotalTokens())
+		return cleaned, true
+
+	case *message.ChatMessage:
+		if len(m.Images()) == 0 {
+			return msg, false
+		}
+		cleaned := message.NewChatMessage(m.Type(), m.Content())
+		cleaned.SetTokenUsage(m.InputTokens(), m.OutputTokens(), m.TotalTokens())
+		return cleaned, true
+	}
+	return msg, false
 }
 
 // getAccurateTokenCount returns the most accurate token count available

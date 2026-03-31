@@ -220,6 +220,10 @@ func StartInteractiveMode(ctx context.Context, a *Agent, skillName string) {
 		modelID = mi.ModelID()
 	}
 
+	// Wire the ask_user_question tool with an interactive handler that uses
+	// promptui for selection menus and a simple prompt for free-form input.
+	a.SetInteractiveInputHandler(makeUserInputHandler(a.OutWriter()))
+
 	// Optional splash screen
 	WriteSplashScreen(os.Stdout, true)
 	fmt.Printf("🧠 Model: %s\n", modelID)
@@ -380,6 +384,51 @@ func showInteractiveHelp() {
 	fmt.Println("  > Run go build and fix any errors")
 	fmt.Println("\n✨ New: Type just '/' to see a beautiful command selector!")
 	fmt.Println("🔧 The agent will automatically use tools when needed!")
+}
+
+// makeUserInputHandler returns a UserInputHandler that uses promptui to collect
+// answers from the terminal. When options are provided a selection menu is shown;
+// otherwise a free-form text prompt is displayed.
+func makeUserInputHandler(w io.Writer) func(question string, options []string) (string, error) {
+	return func(question string, options []string) (string, error) {
+		fmt.Fprintf(w, "\n")
+
+		if len(options) > 0 {
+			// Multiple-choice: present a selection menu
+			prompt := promptui.Select{
+				Label: question,
+				Items: options,
+				Templates: &promptui.SelectTemplates{
+					Label:    "{{ . }}",
+					Active:   "> {{ . | cyan }}",
+					Inactive: "  {{ . }}",
+					Selected: "{{ . | bold }}",
+				},
+				Size: len(options),
+			}
+			_, result, err := prompt.Run()
+			if err != nil {
+				if err == promptui.ErrInterrupt {
+					return "", fmt.Errorf("cancelled by user")
+				}
+				return "", fmt.Errorf("selection failed: %w", err)
+			}
+			return result, nil
+		}
+
+		// Free-form text input
+		prompt := promptui.Prompt{
+			Label: question,
+		}
+		result, err := prompt.Run()
+		if err != nil {
+			if err == promptui.ErrInterrupt {
+				return "", fmt.Errorf("cancelled by user")
+			}
+			return "", fmt.Errorf("input failed: %w", err)
+		}
+		return result, nil
+	}
 }
 
 func showStatus(a *Agent) {

@@ -16,6 +16,7 @@ import (
 
 	"github.com/fpt/klein-cli/internal/config"
 	"github.com/fpt/klein-cli/internal/infra"
+	"github.com/fpt/klein-cli/internal/permission"
 	"github.com/fpt/klein-cli/internal/repository"
 	"github.com/fpt/klein-cli/internal/skill"
 	"github.com/fpt/klein-cli/internal/tool"
@@ -33,22 +34,24 @@ const DefaultAgentMaxIterations = 10
 
 // Agent handles skill-based tool management and sequential action execution.
 type Agent struct {
-	llmClient       domain.LLM
-	allToolManagers *tool.CompositeToolManager      // ALL tool managers combined
-	todoToolManager *tool.TodoToolManager
-	fsRepo          repository.FilesystemRepository  // Shared filesystem repository instance
-	workingDir      string
-	sharedState     domain.State
-	skills          skill.SkillMap
-	sessionFilePath string
-	settings        *config.Settings
-	logger          *pkgLogger.Logger
-	out             io.Writer
-	router          *SkillsRouter
-	thinkingStarted      bool
-	alwaysApprove        bool
-	allowedToolsOverride []string       // CLI override for skill's allowed-tools
-	externalEventHandler events.EventHandler // optional: forward events to external consumers (e.g., Connect server)
+	llmClient              domain.LLM
+	allToolManagers        *tool.CompositeToolManager      // ALL tool managers combined
+	todoToolManager        *tool.TodoToolManager
+	askQuestionManager     *tool.AskUserQuestionToolManager
+	fsRepo                 repository.FilesystemRepository  // Shared filesystem repository instance
+	workingDir             string
+	sharedState            domain.State
+	skills                 skill.SkillMap
+	sessionFilePath        string
+	settings               *config.Settings
+	logger                 *pkgLogger.Logger
+	out                    io.Writer
+	router                 *SkillsRouter
+	thinkingStarted        bool
+	alwaysApprove          bool
+	permRules              *permission.RuleSet // persistent allow/deny rules from JSON files
+	allowedToolsOverride   []string            // CLI override for skill's allowed-tools
+	externalEventHandler   events.EventHandler // optional: forward events to external consumers (e.g., Connect server)
 }
 
 // WorkingDir returns the agent's working directory.
@@ -67,6 +70,16 @@ func (a *Agent) SetAllowedToolsOverride(tools []string) {
 // Used by the Connect server to translate events into streaming RPC responses.
 func (a *Agent) SetEventHandler(handler events.EventHandler) {
 	a.externalEventHandler = handler
+}
+
+// SetInteractiveInputHandler configures the ask_user_question tool with an
+// interactive handler. Call this in interactive mode before the first Invoke.
+// The handler receives the question and optional choices; it blocks until the
+// user responds or an error occurs.
+func (a *Agent) SetInteractiveInputHandler(h tool.UserInputHandler) {
+	if a.askQuestionManager != nil {
+		a.askQuestionManager.SetHandler(h)
+	}
 }
 
 // NewAgent creates a new Agent with MCP tools and settings.
@@ -111,8 +124,14 @@ func NewAgentWithOptions(llmClient domain.LLM, workingDir string, mcpToolManager
 	// Create skill tool manager (provides read_skill tool)
 	skillToolManager := tool.NewSkillToolManager(skills, workingDir)
 
+	askQuestionManager := tool.NewAskUserQuestionToolManager()
+
+	// Load persistent permission rules (user + project + local).
+	// Missing files are silently ignored; never fatal.
+	permRules := permission.LoadForProject(workingDir)
+
 	// Combine ALL tool managers into one composite
-	managers := []domain.ToolManager{todoToolManager, filesystemManager, bashToolManager, searchToolManager, webToolManager, pdfToolManager, skillToolManager}
+	managers := []domain.ToolManager{todoToolManager, filesystemManager, bashToolManager, searchToolManager, webToolManager, pdfToolManager, skillToolManager, askQuestionManager}
 	for _, mcpManager := range mcpToolManagers {
 		managers = append(managers, mcpManager)
 	}
@@ -155,19 +174,21 @@ func NewAgentWithOptions(llmClient domain.LLM, workingDir string, mcpToolManager
 	}
 
 	return &Agent{
-		llmClient:       llmClient,
-		allToolManagers: allToolManagers,
-		todoToolManager: todoToolManager,
-		fsRepo:          fsRepo,
-		workingDir:      workingDir,
-		sharedState:     sharedState,
-		skills:          skills,
-		sessionFilePath: sessionFilePath,
-		settings:        settings,
-		logger:          logger.WithComponent("agent"),
-		out:             out,
-		router:          NewSkillsRouter(),
-		alwaysApprove:   alwaysApprove,
+		llmClient:          llmClient,
+		allToolManagers:    allToolManagers,
+		todoToolManager:    todoToolManager,
+		askQuestionManager: askQuestionManager,
+		fsRepo:             fsRepo,
+		workingDir:         workingDir,
+		sharedState:        sharedState,
+		skills:             skills,
+		sessionFilePath:    sessionFilePath,
+		settings:           settings,
+		logger:             logger.WithComponent("agent"),
+		out:                out,
+		router:             NewSkillsRouter(),
+		alwaysApprove:      alwaysApprove,
+		permRules:          permRules,
 	}
 }
 
@@ -203,6 +224,22 @@ func (a *Agent) Invoke(ctx context.Context, userInput string, skillName string, 
 	}
 	reactClient, eventEmitter := react.NewReAct(llmWithTools, toolManager, a.sharedState, situation, maxIterations)
 	a.setupEventHandlers(eventEmitter)
+
+	// Tool result budgeting: offload large tool results to disk so they don't
+	// permanently consume context window space. Only active in interactive/persistent
+	// sessions where a project directory exists; one-shot mode keeps everything
+	// in memory.
+	if a.sessionFilePath != "" {
+		projectDir := filepath.Dir(a.sessionFilePath)
+		storage := tool.NewToolResultStorage(projectDir)
+		reactClient.SetToolResultTransform(storage.MaybeOffload)
+	}
+
+	// Mandatory cleanup: remove stale situation messages and truncate old vision
+	// content. Runs before catalog/prompt injection so dedup checks see a clean slate.
+	if err := a.sharedState.CleanupMandatory(); err != nil {
+		a.logger.Warn("Mandatory cleanup failed, continuing", "error", err)
+	}
 
 	// Inject skill catalog into system prompt
 	catalogContent := skill.BuildSkillCatalog(a.skills)
@@ -280,6 +317,19 @@ func (a *Agent) Invoke(ctx context.Context, userInput string, skillName string, 
 		userPrompt = strings.Join(out, "\n")
 	}
 
+	// Token-based compaction: compact the conversation history if context usage
+	// approaches the model's context window limit. Skipped for backends that handle
+	// context overflow server-side (e.g. OpenAI Responses API with auto-truncation).
+	if ssc, ok := a.llmClient.(domain.ServerSideCompactionLLM); !ok || !ssc.SupportsServerSideCompaction() {
+		if cwp, ok := a.llmClient.(domain.ContextWindowProvider); ok {
+			if maxCtx := cwp.MaxContextTokens(); maxCtx > 0 {
+				if compactErr := a.sharedState.CompactIfNeeded(ctx, a.llmClient, maxCtx, 0); compactErr != nil {
+					a.logger.Warn("Context compaction failed, continuing without compaction", "error", compactErr)
+				}
+			}
+		}
+	}
+
 	result, err := reactClient.Run(ctx, userPrompt, images...)
 
 	// Handle multiple approval workflows in sequence
@@ -317,6 +367,23 @@ func (a *Agent) handleApprovalWorkflow(ctx context.Context, reactClient domain.R
 	if a.alwaysApprove {
 		fmt.Fprintf(writer, "Proceeding (Always selected)...\n\n")
 		return reactClient.Resume(ctx)
+	}
+
+	// Check persistent permission rules before showing a dialog.
+	if pending, ok := reactClient.GetPendingToolCall().(*message.ToolCallMessage); ok {
+		toolName := string(pending.ToolName())
+		arg := extractPermissionArg(toolName, pending.ToolArguments())
+		if behavior, matched := a.permRules.Check(toolName, arg); matched {
+			switch behavior {
+			case permission.RuleAllow:
+				fmt.Fprintf(writer, "Proceeding (allow rule matched)...\n\n")
+				return reactClient.Resume(ctx)
+			case permission.RuleDeny:
+				fmt.Fprintf(writer, "Cancelled (deny rule matched).\n")
+				reactClient.CancelPendingToolCall()
+				return reactClient.Resume(ctx)
+			}
+		}
 	}
 
 	lastMessage := reactClient.GetLastMessage()
@@ -366,6 +433,33 @@ func (a *Agent) handleApprovalWorkflow(ctx context.Context, reactClient domain.R
 		fmt.Fprintf(writer, "Proceeding...\n\n")
 		return reactClient.Resume(ctx)
 	}
+}
+
+// extractPermissionArg returns the primary argument used for rule pattern matching.
+// For file tools this is the path; for bash this is the command string.
+// multi_edit carries multiple paths — we return the first one; the caller may
+// want to call Check per-path, but for the initial implementation one suffices.
+func extractPermissionArg(toolName string, args message.ToolArgumentValues) string {
+	switch toolName {
+	case "write_file", "edit_file":
+		if path, ok := args["path"].(string); ok {
+			return path
+		}
+	case "multi_edit":
+		// edits is []interface{} where each element has "file_path"
+		if edits, ok := args["edits"].([]interface{}); ok && len(edits) > 0 {
+			if edit, ok := edits[0].(map[string]interface{}); ok {
+				if fp, ok := edit["file_path"].(string); ok {
+					return fp
+				}
+			}
+		}
+	case "bash":
+		if cmd, ok := args["command"].(string); ok {
+			return cmd
+		}
+	}
+	return ""
 }
 
 // EnablePersistence upgrades an in-memory agent to file-backed session persistence.

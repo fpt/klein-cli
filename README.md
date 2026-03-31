@@ -14,6 +14,7 @@ The name KLEIN is inspired by the Klein bottle, a topological surface with no di
 - **Integrated Tools**: File operations, grep search, bash tools, todo tools, and simple web tools
 - **Secure File Access**: Files are accessible only in working directory. Also, applies Read-before-Write semantics for content updates.
 - **Smart Tool Approval**: Interactive approval system for potentially destructive operations (Write, Edit, MultiEdit)
+- **Persistent Permission Rules**: Allow/deny rules in JSON files at user (`~/.klein/permissions.json`) and project (`.klein/permissions.json`) level; survive restarts and support glob patterns
 - **MCP Server Support**: MCP Servers can be configured in settings.json
 - **Conversation State Management**: Automatic handling of conversation history and context
 - **AGENTS.md support**: Includes content of AGENTS.md to system prompt automatically
@@ -117,6 +118,41 @@ KLEIN includes a smart approval system that prompts for confirmation before exec
 
 **Non-Interactive Mode:**
 When running in non-interactive environments (pipes, scripts), operations are automatically approved with logged notifications.
+
+### Persistent Permission Rules
+
+Rules that survive across sessions can be stored in JSON files at three levels (higher priority listed first):
+
+| File | Scope |
+|------|-------|
+| `{project}/.klein/permissions.local.json` | Project-local (add to `.gitignore`) |
+| `{project}/.klein/permissions.json` | Project-wide (committable) |
+| `~/.klein/permissions.json` | User-wide defaults |
+
+**Rule format:**
+
+```json
+{
+  "rules": [
+    {"tool": "write_file", "pattern": "src/**",    "behavior": "allow"},
+    {"tool": "bash",       "pattern": "go *",      "behavior": "allow"},
+    {"tool": "bash",       "pattern": "rm -rf *",  "behavior": "deny"}
+  ]
+}
+```
+
+**Pattern syntax:**
+
+| Pattern | Matches |
+|---------|---------|
+| `""` (omitted) | Every invocation of the tool |
+| `**` | Every invocation of the tool |
+| `src/**` | `src` directory and all files beneath it |
+| `go *` | Any string starting with `go ` (trailing wildcard) |
+| `src/*.go` | Standard glob — `*` does not cross `/` |
+| `src/main.go` | Exact match |
+
+Rules are evaluated first-match-wins. A local rule overrides a project rule; a project rule overrides a user rule.
 
 ## Configuration
 

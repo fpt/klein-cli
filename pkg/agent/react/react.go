@@ -32,6 +32,13 @@ type ReAct struct {
 	status           domain.AgentStatus
 	currentIteration int // current iteration count
 	pendingToolCall  message.Message
+
+	// toolResultTransform is an optional hook applied to every tool result
+	// before it is stored in the conversation state. Intended for tool result
+	// budgeting: large results can be offloaded to disk and replaced with a
+	// stub so they don't consume the full context window.
+	// If nil, results are stored verbatim.
+	toolResultTransform func(toolUseID, toolName, content string) string
 }
 
 // Ensure ReAct implements domain.ReAct interface
@@ -51,6 +58,12 @@ func NewReAct(llmClient domain.LLM, toolManager domain.ToolManager, sharedState 
 		eventEmitter:  eventEmitter,
 	}
 	return reactClient, eventEmitter
+}
+
+// SetToolResultTransform sets an optional transform applied to every tool
+// result before it is stored in conversation state. Pass nil to disable.
+func (r *ReAct) SetToolResultTransform(fn func(toolUseID, toolName, content string) string) {
+	r.toolResultTransform = fn
 }
 
 // GetLastMessage returns the last message in the conversation without exposing state
@@ -428,6 +441,14 @@ func (r *ReAct) handleToolCall(ctx context.Context, toolCall *message.ToolCallMe
 		return message.NewToolResultMessage(id, "", fmt.Sprintf("Tool execution failed: %v", err)), nil
 	}
 
+	// Apply tool result budget transform (offloads large results to disk).
+	// Errors and image results are always stored verbatim; only plain-text
+	// success results are eligible for offloading.
+	resultText := toolResult.Text
+	if toolResult.Error == "" && len(toolResult.Images) == 0 && r.toolResultTransform != nil {
+		resultText = r.toolResultTransform(id, string(toolName), resultText)
+	}
+
 	// Handle structured tool result
 	var resp message.Message
 	if len(toolResult.Images) > 0 {
@@ -435,7 +456,7 @@ func (r *ReAct) handleToolCall(ctx context.Context, toolCall *message.ToolCallMe
 	} else if toolResult.Error != "" {
 		resp = message.NewToolResultMessage(id, "", toolResult.Error)
 	} else {
-		resp = message.NewToolResultMessage(id, toolResult.Text, "")
+		resp = message.NewToolResultMessage(id, resultText, "")
 	}
 
 	return resp, nil

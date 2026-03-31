@@ -8,16 +8,35 @@ import (
 	"sync"
 )
 
+// TaskStatus is the lifecycle state of a task.
+type TaskStatus string
+
+const (
+	TaskStatusPending    TaskStatus = "pending"
+	TaskStatusInProgress TaskStatus = "in_progress"
+	TaskStatusCompleted  TaskStatus = "completed"
+	TaskStatusDeleted    TaskStatus = "deleted"
+)
+
+// ValidTaskStatus returns true if s is a recognised status value.
+func ValidTaskStatus(s TaskStatus) bool {
+	switch s {
+	case TaskStatusPending, TaskStatusInProgress, TaskStatusCompleted, TaskStatusDeleted:
+		return true
+	}
+	return false
+}
+
 // TaskItem represents a single task with dependency tracking.
 type TaskItem struct {
-	ID          string   `json:"id"`
-	Subject     string   `json:"subject"`
-	Description string   `json:"description,omitempty"`
-	Status      string   `json:"status"`              // pending | in_progress | completed | deleted
-	BlockedBy   []string `json:"blocked_by,omitempty"` // IDs of tasks that must complete first
-	Blocks      []string `json:"blocks,omitempty"`     // IDs of tasks that this task unblocks
-	Created     string   `json:"created"`
-	Updated     string   `json:"updated"`
+	ID          string     `json:"id"`
+	Subject     string     `json:"subject"`
+	Description string     `json:"description,omitempty"`
+	Status      TaskStatus `json:"status"`
+	BlockedBy   []string   `json:"blocked_by,omitempty"` // IDs of tasks that must complete first
+	Blocks      []string   `json:"blocks,omitempty"`     // IDs of tasks that this task unblocks
+	Created     string     `json:"created"`
+	Updated     string     `json:"updated"`
 }
 
 // TaskRepository abstracts task data persistence.

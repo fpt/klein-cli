@@ -133,6 +133,59 @@ func TestTaskUpdate_InvalidStatus(t *testing.T) {
 	}
 }
 
+func TestTaskUpdate_InvalidTransition_CompletedIsTerminal(t *testing.T) {
+	m := newTestTaskManager()
+	out := callTask(t, m, "task_create", message.ToolArgumentValues{"subject": "Task"})
+	id := extractID(t, out)
+
+	// pending → in_progress → completed
+	callTask(t, m, "task_update", message.ToolArgumentValues{"id": id, "status": "in_progress"})
+	callTask(t, m, "task_update", message.ToolArgumentValues{"id": id, "status": "completed"})
+
+	// completed → pending must fail
+	upd := callTask(t, m, "task_update", message.ToolArgumentValues{"id": id, "status": "pending"})
+	if !strings.Contains(upd, "invalid transition") {
+		t.Errorf("expected transition error, got: %s", upd)
+	}
+}
+
+func TestTaskUpdate_InvalidTransition_PendingToCompleted(t *testing.T) {
+	m := newTestTaskManager()
+	out := callTask(t, m, "task_create", message.ToolArgumentValues{"subject": "Task"})
+	id := extractID(t, out)
+
+	// pending → completed must fail (must go through in_progress)
+	upd := callTask(t, m, "task_update", message.ToolArgumentValues{"id": id, "status": "completed"})
+	if !strings.Contains(upd, "invalid transition") {
+		t.Errorf("expected transition error, got: %s", upd)
+	}
+}
+
+func TestTaskUpdate_BlockedByNotCompleted(t *testing.T) {
+	m := newTestTaskManager()
+	outA := callTask(t, m, "task_create", message.ToolArgumentValues{"subject": "Blocker"})
+	idA := extractID(t, outA)
+	outB := callTask(t, m, "task_create", message.ToolArgumentValues{
+		"subject":    "Dependent",
+		"blocked_by": []interface{}{idA},
+	})
+	idB := extractID(t, outB)
+
+	// Try to start B while A is still pending — must fail
+	upd := callTask(t, m, "task_update", message.ToolArgumentValues{"id": idB, "status": "in_progress"})
+	if !strings.Contains(upd, "not completed") {
+		t.Errorf("expected blocker error, got: %s", upd)
+	}
+
+	// Complete A, then B can start
+	callTask(t, m, "task_update", message.ToolArgumentValues{"id": idA, "status": "in_progress"})
+	callTask(t, m, "task_update", message.ToolArgumentValues{"id": idA, "status": "completed"})
+	upd2 := callTask(t, m, "task_update", message.ToolArgumentValues{"id": idB, "status": "in_progress"})
+	if !strings.Contains(upd2, "PASS") {
+		t.Errorf("expected PASS after blocker completed, got: %s", upd2)
+	}
+}
+
 func TestTaskUpdate_AddBlockedBy(t *testing.T) {
 	m := newTestTaskManager()
 	outA := callTask(t, m, "task_create", message.ToolArgumentValues{"subject": "A"})
@@ -188,6 +241,24 @@ func TestTaskList_HidesDeleted(t *testing.T) {
 		t.Errorf("visible task missing: %s", list)
 	}
 	_ = id
+}
+
+func TestTaskList_ShowsBlocksDeps(t *testing.T) {
+	m := newTestTaskManager()
+	outA := callTask(t, m, "task_create", message.ToolArgumentValues{"subject": "A"})
+	idA := extractID(t, outA)
+	callTask(t, m, "task_create", message.ToolArgumentValues{
+		"subject":    "B",
+		"blocked_by": []interface{}{idA},
+	})
+
+	list := callTask(t, m, "task_list", message.ToolArgumentValues{})
+	if !strings.Contains(list, "blocks:") {
+		t.Errorf("expected 'blocks:' in list for A, got: %s", list)
+	}
+	if !strings.Contains(list, "blocked by:") {
+		t.Errorf("expected 'blocked by:' in list for B, got: %s", list)
+	}
 }
 
 func TestTaskGet_FullDetail(t *testing.T) {

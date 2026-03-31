@@ -84,20 +84,20 @@ func (m *TaskToolManager) GetToolState() string {
 	items := m.taskRepository.GetItems()
 	var active []TaskItem
 	for _, it := range items {
-		if it.Status != "deleted" {
+		if it.Status != repository.TaskStatusDeleted {
 			active = append(active, it)
 		}
 	}
 	if len(active) == 0 {
 		return ""
 	}
-	counts := map[string]int{}
+	counts := map[repository.TaskStatus]int{}
 	for _, it := range active {
 		counts[it.Status]++
 	}
 	ann := fmt.Sprintf("Task list: %d tasks", len(active))
 	var parts []string
-	for _, st := range []string{"in_progress", "pending", "completed"} {
+	for _, st := range []repository.TaskStatus{repository.TaskStatusInProgress, repository.TaskStatusPending, repository.TaskStatusCompleted} {
 		if n := counts[st]; n > 0 {
 			parts = append(parts, fmt.Sprintf("%d %s", n, st))
 		}
@@ -172,7 +172,7 @@ func (m *TaskToolManager) handleCreate(ctx context.Context, args message.ToolArg
 		ID:          id,
 		Subject:     subject,
 		Description: description,
-		Status:      "pending",
+		Status:      repository.TaskStatusPending,
 		BlockedBy:   blockedBy,
 		Created:     now,
 		Updated:     now,
@@ -211,12 +211,20 @@ func (m *TaskToolManager) handleUpdate(ctx context.Context, args message.ToolArg
 	now := time.Now().Format(time.RFC3339)
 	task := items[idx]
 
-	if status, ok := args["status"].(string); ok && status != "" {
-		valid := map[string]bool{"pending": true, "in_progress": true, "completed": true, "deleted": true}
-		if !valid[status] {
-			return message.NewToolResultError(fmt.Sprintf("invalid status %q; must be pending, in_progress, completed, or deleted", status)), nil
+	if statusStr, ok := args["status"].(string); ok && statusStr != "" {
+		next := repository.TaskStatus(statusStr)
+		if !repository.ValidTaskStatus(next) {
+			return message.NewToolResultError(fmt.Sprintf("invalid status %q; must be pending, in_progress, completed, or deleted", statusStr)), nil
 		}
-		task.Status = status
+		if err := validateTransition(task.Status, next); err != nil {
+			return message.NewToolResultError(err.Error()), nil
+		}
+		if next == repository.TaskStatusInProgress {
+			if err := checkBlockers(items, task); err != nil {
+				return message.NewToolResultError(err.Error()), nil
+			}
+		}
+		task.Status = next
 	}
 	if subject, ok := args["subject"].(string); ok && subject != "" {
 		task.Subject = subject
@@ -268,7 +276,7 @@ func (m *TaskToolManager) handleList(_ context.Context, _ message.ToolArgumentVa
 	items := m.taskRepository.GetItems()
 	var active []TaskItem
 	for _, it := range items {
-		if it.Status != "deleted" {
+		if it.Status != repository.TaskStatusDeleted {
 			active = append(active, it)
 		}
 	}
@@ -277,11 +285,20 @@ func (m *TaskToolManager) handleList(_ context.Context, _ message.ToolArgumentVa
 	}
 
 	var sb strings.Builder
-	sb.WriteString(fmt.Sprintf("%d task(s):\n", len(active)))
+	fmt.Fprintf(&sb, "Tasks (%d):\n", len(active))
 	for _, it := range active {
-		line := fmt.Sprintf("[%s] #%s: %s", it.Status, it.ID, it.Subject)
+		// Pad status field to 12 chars for alignment: "[in_progress]" is 13, "[pending]" is 9
+		statusField := fmt.Sprintf("[%s]", it.Status)
+		line := fmt.Sprintf("  %-13s #%s: %s", statusField, it.ID, it.Subject)
+		var deps []string
 		if len(it.BlockedBy) > 0 {
-			line += fmt.Sprintf(" (blocked by: %s)", strings.Join(it.BlockedBy, ", "))
+			deps = append(deps, "blocked by: "+strings.Join(it.BlockedBy, ", "))
+		}
+		if len(it.Blocks) > 0 {
+			deps = append(deps, "blocks: "+strings.Join(it.Blocks, ", "))
+		}
+		if len(deps) > 0 {
+			line += " (" + strings.Join(deps, "; ") + ")"
 		}
 		sb.WriteString(line + "\n")
 	}
@@ -318,6 +335,45 @@ func (m *TaskToolManager) handleGet(_ context.Context, args message.ToolArgument
 }
 
 // --- helpers ---
+
+// validateTransition enforces the allowed status transitions:
+//
+//	pending    → in_progress | deleted
+//	in_progress → completed | pending | deleted
+//	completed  → (terminal — no further transitions)
+//	deleted    → (terminal)
+func validateTransition(from, to repository.TaskStatus) error {
+	if from == to {
+		return nil
+	}
+	allowed := map[repository.TaskStatus][]repository.TaskStatus{
+		repository.TaskStatusPending:    {repository.TaskStatusInProgress, repository.TaskStatusDeleted},
+		repository.TaskStatusInProgress: {repository.TaskStatusCompleted, repository.TaskStatusPending, repository.TaskStatusDeleted},
+		repository.TaskStatusCompleted:  {},
+		repository.TaskStatusDeleted:    {},
+	}
+	for _, ok := range allowed[from] {
+		if ok == to {
+			return nil
+		}
+	}
+	return fmt.Errorf("invalid transition %s → %s", from, to)
+}
+
+// checkBlockers returns an error if any blocked_by task is not completed.
+func checkBlockers(items []TaskItem, task TaskItem) error {
+	byID := indexByID(items)
+	for _, bid := range task.BlockedBy {
+		idx, ok := byID[bid]
+		if !ok {
+			continue // dangling ref — skip
+		}
+		if items[idx].Status != repository.TaskStatusCompleted {
+			return fmt.Errorf("cannot start task: blocker #%s (%s) is not completed", bid, items[idx].Status)
+		}
+	}
+	return nil
+}
 
 func newID() string {
 	b := make([]byte, 4)

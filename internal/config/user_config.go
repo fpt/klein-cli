@@ -97,6 +97,15 @@ func (c *UserConfig) GetProjectTodoFile(projectPath string) (string, error) {
 	return filepath.Join(projectDir, "todos.json"), nil
 }
 
+// GetProjectTaskFile returns the task file path for a specific project
+func (c *UserConfig) GetProjectTaskFile(projectPath string) (string, error) {
+	projectDir, err := c.GetProjectDataDir(projectPath)
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(projectDir, "tasks.json"), nil
+}
+
 // GetProjectSessionFile returns the session state file path for a specific project
 func (c *UserConfig) GetProjectSessionFile(projectPath string) (string, error) {
 	projectDir, err := c.GetProjectDataDir(projectPath)

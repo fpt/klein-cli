@@ -27,6 +27,10 @@ var neverOffloadTools = map[string]bool{
 	"ask_user_question": true,
 	"todo_read":         true,
 	"todo_write":        true,
+	"task_create":       true,
+	"task_update":       true,
+	"task_list":         true,
+	"task_get":          true,
 }
 
 // ToolResultStorage manages offloading of large tool results to disk.

@@ -37,6 +37,7 @@ type Agent struct {
 	llmClient              domain.LLM
 	allToolManagers        *tool.CompositeToolManager      // ALL tool managers combined
 	todoToolManager        *tool.TodoToolManager
+	taskToolManager        *tool.TaskToolManager
 	askQuestionManager     *tool.AskUserQuestionToolManager
 	fsRepo                 repository.FilesystemRepository  // Shared filesystem repository instance
 	workingDir             string
@@ -92,11 +93,14 @@ func NewAgent(llmClient domain.LLM, workingDir string, mcpToolManagers map[strin
 func NewAgentWithOptions(llmClient domain.LLM, workingDir string, mcpToolManagers map[string]domain.ToolManager, settings *config.Settings, logger *pkgLogger.Logger, out io.Writer, skipSessionRestore bool, isInteractiveMode bool, fsRepo repository.FilesystemRepository) *Agent {
 	// Create individual tool managers
 	var todoToolManager *tool.TodoToolManager
+	var taskToolManager *tool.TaskToolManager
 	alwaysApprove := false
 	if isInteractiveMode {
 		todoToolManager = tool.NewTodoToolManager(workingDir)
+		taskToolManager = tool.NewTaskToolManager(workingDir)
 	} else {
 		todoToolManager = tool.NewInMemoryTodoToolManager()
+		taskToolManager = tool.NewInMemoryTaskToolManager()
 		alwaysApprove = true
 	}
 
@@ -131,7 +135,7 @@ func NewAgentWithOptions(llmClient domain.LLM, workingDir string, mcpToolManager
 	permRules := permission.LoadForProject(workingDir)
 
 	// Combine ALL tool managers into one composite
-	managers := []domain.ToolManager{todoToolManager, filesystemManager, bashToolManager, searchToolManager, webToolManager, pdfToolManager, skillToolManager, askQuestionManager}
+	managers := []domain.ToolManager{todoToolManager, taskToolManager, filesystemManager, bashToolManager, searchToolManager, webToolManager, pdfToolManager, skillToolManager, askQuestionManager}
 	for _, mcpManager := range mcpToolManagers {
 		managers = append(managers, mcpManager)
 	}
@@ -177,6 +181,7 @@ func NewAgentWithOptions(llmClient domain.LLM, workingDir string, mcpToolManager
 		llmClient:          llmClient,
 		allToolManagers:    allToolManagers,
 		todoToolManager:    todoToolManager,
+		taskToolManager:    taskToolManager,
 		askQuestionManager: askQuestionManager,
 		fsRepo:             fsRepo,
 		workingDir:         workingDir,

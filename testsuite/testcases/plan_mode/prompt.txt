@@ -1,0 +1,15 @@
+/plan
+
+How to calculate the sum of an arithmetic progression in Go?
+
+Plan and implement three approaches in a single file named "sum_ap.go":
+1. Iterative (for loop)
+2. Recursive function
+3. Closed-form equation: n*(2*a1 + (n-1)*d) / 2
+
+Requirements:
+- Call EnterPlanMode first to plan which functions and signatures to use
+- After your plan is approved, create exactly ONE file named "sum_ap.go"
+- Package main with a main() that demonstrates all three methods
+- Use n=10, a1=1, d=1 (expected sum: 55 for all three approaches)
+- Do NOT create go.mod, go.sum, or test files

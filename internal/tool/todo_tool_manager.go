@@ -193,28 +193,12 @@ func (m *TodoToolManager) registerTodoTools() {
 
 // registerTaskTools registers small compatibility stubs for task tools
 func (m *TodoToolManager) registerTaskTools() {
-	// ExitPlanMode: acknowledge plan and signal ready
-	m.RegisterTool("ExitPlanMode", "Acknowledge plan and exit planning mode (stub).",
-		[]message.ToolArgument{
-			{Name: "plan", Description: "Concise implementation plan", Required: true, Type: "string"},
-		}, m.handleExitPlanMode)
-
 	// task: sub-agent launcher (stub)
 	m.RegisterTool("task", "Launch a sub-agent (stub). Not supported; use Glob/Grep/Read/WebFetch directly.",
 		[]message.ToolArgument{
 			{Name: "description", Description: "Short task description", Required: true, Type: "string"},
 			{Name: "prompt", Description: "Detailed task for the agent", Required: true, Type: "string"},
 		}, m.handleTaskStub)
-}
-
-// handleExitPlanMode acknowledges a plan and indicates readiness to implement
-func (m *TodoToolManager) handleExitPlanMode(ctx context.Context, args message.ToolArgumentValues) (message.ToolResult, error) {
-	plan, _ := args["plan"].(string)
-	msg := "Plan acknowledged. Exiting plan mode; ready to implement."
-	if plan != "" {
-		msg = fmt.Sprintf("Plan acknowledged. Ready to implement.\n\nPlan:\n%s", plan)
-	}
-	return message.NewToolResultText(msg), nil
 }
 
 // handleTaskStub informs that the Task sub-agent is not supported

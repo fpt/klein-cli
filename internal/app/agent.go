@@ -39,6 +39,8 @@ type Agent struct {
 	todoToolManager        *tool.TodoToolManager
 	taskToolManager        *tool.TaskToolManager
 	askQuestionManager     *tool.AskUserQuestionToolManager
+	planMode               *tool.PlanModeState             // shared with planToolManager and guard
+	planToolManager        *tool.PlanToolManager
 	fsRepo                 repository.FilesystemRepository  // Shared filesystem repository instance
 	workingDir             string
 	sharedState            domain.State
@@ -81,6 +83,18 @@ func (a *Agent) SetEventHandler(handler events.EventHandler) {
 func (a *Agent) SetInteractiveInputHandler(h tool.UserInputHandler) {
 	if a.askQuestionManager != nil {
 		a.askQuestionManager.SetHandler(h)
+	}
+}
+
+// SetPlanApprovalHandler configures interactive plan approval and wires up the
+// clear-context callback so "Approve and clear planning context" works.
+// Call this in interactive mode before the first Invoke.
+func (a *Agent) SetPlanApprovalHandler(h tool.PlanApprovalHandler) {
+	if a.planToolManager != nil {
+		a.planToolManager.SetApprovalHandler(h)
+		a.planToolManager.SetClearContextHandler(func() {
+			a.sharedState.Clear()
+		})
 	}
 }
 
@@ -129,12 +143,15 @@ func NewAgentWithOptions(llmClient domain.LLM, workingDir string, mcpToolManager
 
 	askQuestionManager := tool.NewAskUserQuestionToolManager()
 
+	planModeState := new(tool.PlanModeState) // starts as PlanModeOff
+	planToolManager := tool.NewPlanToolManager(planModeState)
+
 	// Load persistent permission rules (user + project + local).
 	// Missing files are silently ignored; never fatal.
 	permRules := permission.LoadForProject(workingDir)
 
 	// Combine ALL tool managers into one composite
-	managers := []domain.ToolManager{todoToolManager, taskToolManager, filesystemManager, bashToolManager, searchToolManager, webToolManager, pdfToolManager, skillToolManager, askQuestionManager}
+	managers := []domain.ToolManager{todoToolManager, taskToolManager, filesystemManager, bashToolManager, searchToolManager, webToolManager, pdfToolManager, skillToolManager, askQuestionManager, planToolManager}
 	for _, mcpManager := range mcpToolManagers {
 		managers = append(managers, mcpManager)
 	}
@@ -182,6 +199,8 @@ func NewAgentWithOptions(llmClient domain.LLM, workingDir string, mcpToolManager
 		todoToolManager:    todoToolManager,
 		taskToolManager:    taskToolManager,
 		askQuestionManager: askQuestionManager,
+		planMode:           planModeState,
+		planToolManager:    planToolManager,
 		fsRepo:             fsRepo,
 		workingDir:         workingDir,
 		sharedState:        sharedState,
@@ -205,13 +224,22 @@ func (a *Agent) Invoke(ctx context.Context, userInput string, skillName string, 
 		return nil, fmt.Errorf("skill '%s' not found", skillName)
 	}
 
-	// Get filtered tool manager based on skill's allowed-tools or CLI override
-	var toolManager domain.ToolManager
-	if len(a.allowedToolsOverride) > 0 {
-		toolManager = skill.NewFilteredToolManager(a.allToolManagers, a.allowedToolsOverride)
-	} else {
-		toolManager = activeSkill.FilterTools(a.allToolManagers)
+	// Reset plan mode at the start of each invocation
+	if a.planMode != nil {
+		*a.planMode = tool.PlanModeOff
 	}
+
+	// Get filtered tool manager based on skill's allowed-tools or CLI override
+	var filteredTools domain.ToolManager
+	if len(a.allowedToolsOverride) > 0 {
+		filteredTools = skill.NewFilteredToolManager(a.allToolManagers, a.allowedToolsOverride)
+	} else {
+		filteredTools = activeSkill.FilterTools(a.allToolManagers)
+	}
+
+	// Wrap with plan mode guard to block destructive operations during planning
+	guard := tool.NewPlanModeGuard(filteredTools, a.planMode)
+	toolManager := domain.ToolManager(guard)
 
 	// Create LLM client with filtered tools
 	llmWithTools, err := client.NewClientWithToolManager(a.llmClient, toolManager)
@@ -563,7 +591,15 @@ func (a *Agent) ClearHistory() {
 
 // InvokeWithOptions creates a ReAct client with all tools and configured maxIterations.
 func (a *Agent) InvokeWithOptions(ctx context.Context, prompt string) (message.Message, error) {
-	llmWithTools, err := client.NewClientWithToolManager(a.llmClient, a.allToolManagers)
+	// Reset plan mode at the start of each invocation
+	if a.planMode != nil {
+		*a.planMode = tool.PlanModeOff
+	}
+
+	// Wrap all tools with plan mode guard
+	guard := tool.NewPlanModeGuard(a.allToolManagers, a.planMode)
+
+	llmWithTools, err := client.NewClientWithToolManager(a.llmClient, guard)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create LLM client with tools: %w", err)
 	}
@@ -574,7 +610,7 @@ func (a *Agent) InvokeWithOptions(ctx context.Context, prompt string) (message.M
 	if a.settings != nil && a.settings.Agent.MaxIterations > 0 {
 		maxIterations = a.settings.Agent.MaxIterations
 	}
-	reactClient, eventEmitter := react.NewReAct(llmWithTools, a.allToolManagers, a.sharedState, situation, maxIterations)
+	reactClient, eventEmitter := react.NewReAct(llmWithTools, guard, a.sharedState, situation, maxIterations)
 	a.setupEventHandlers(eventEmitter)
 
 	result, err := reactClient.Run(ctx, prompt)

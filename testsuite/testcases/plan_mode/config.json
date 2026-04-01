@@ -1,0 +1,4 @@
+{
+  "skill": "code",
+  "allowed_tools": ["Read", "Write", "Edit", "LS", "Bash", "EnterPlanMode", "ExitPlanMode"]
+}

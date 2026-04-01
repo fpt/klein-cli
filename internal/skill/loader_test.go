@@ -31,8 +31,16 @@ func TestLoadBuiltinSkills_HasCodeSkill(t *testing.T) {
 	if code.Description == "" {
 		t.Error("expected non-empty description for code skill")
 	}
-	if len(code.AllowedTools) != 0 {
-		t.Errorf("expected no allowed-tools for code skill (all tools), got %v", code.AllowedTools)
+	// code skill has explicit allowed-tools including plan mode tools
+	hasPlanMode := false
+	for _, tool := range code.AllowedTools {
+		if tool == "EnterPlanMode" || tool == "ExitPlanMode" {
+			hasPlanMode = true
+			break
+		}
+	}
+	if len(code.AllowedTools) > 0 && !hasPlanMode {
+		t.Errorf("expected code skill allowed-tools to include plan mode tools, got %v", code.AllowedTools)
 	}
 	if code.Content == "" {
 		t.Error("expected non-empty content for code skill")

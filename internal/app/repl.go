@@ -10,6 +10,7 @@ import (
 	"syscall"
 
 	"github.com/chzyer/readline"
+	"github.com/fpt/klein-cli/internal/tool"
 	"github.com/fpt/klein-cli/pkg/agent/domain"
 	"github.com/manifoldco/promptui"
 )
@@ -237,6 +238,9 @@ func StartInteractiveMode(ctx context.Context, a *Agent, skillName string) {
 	// promptui for selection menus and a simple prompt for free-form input.
 	a.SetInteractiveInputHandler(makeUserInputHandler(a.OutWriter()))
 
+	// Wire the plan approval handler for interactive plan mode.
+	a.SetPlanApprovalHandler(makePlanApprovalHandler(a.OutWriter()))
+
 	// Optional splash screen
 	WriteSplashScreen(os.Stdout, true)
 	fmt.Printf("🧠 Model: %s\n", modelID)
@@ -441,6 +445,48 @@ func makeUserInputHandler(w io.Writer) func(question string, options []string) (
 			return "", fmt.Errorf("input failed: %w", err)
 		}
 		return result, nil
+	}
+}
+
+// makePlanApprovalHandler returns a PlanApprovalHandler that shows the proposed
+// plan to the user via a promptui selection menu and waits for approval.
+// The returned bool pair is (approved, clearContext).
+func makePlanApprovalHandler(w io.Writer) tool.PlanApprovalHandler {
+	return func(plan string) (bool, bool, error) {
+		fmt.Fprintf(w, "\nProposed Plan:\n%s\n\n", plan)
+
+		const (
+			optApproveAndClear = "Approve and clear planning context"
+			optApprove         = "Approve"
+			optReject          = "Reject"
+		)
+		items := []string{optApproveAndClear, optApprove, optReject}
+		prompt := promptui.Select{
+			Label: "Approve this plan?",
+			Items: items,
+			Templates: &promptui.SelectTemplates{
+				Label:    "{{ . }}",
+				Active:   "> {{ . | cyan }}",
+				Inactive: "  {{ . }}",
+				Selected: "{{ . }}",
+			},
+			Size: len(items),
+		}
+		_, result, err := prompt.Run()
+		if err != nil {
+			if err == promptui.ErrInterrupt {
+				return false, false, fmt.Errorf("cancelled by user")
+			}
+			return false, false, fmt.Errorf("plan approval failed: %w", err)
+		}
+		switch result {
+		case optApproveAndClear:
+			return true, true, nil
+		case optApprove:
+			return true, false, nil
+		default:
+			return false, false, nil
+		}
 	}
 }
 

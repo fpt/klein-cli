@@ -4,6 +4,6 @@
     "backend": "ollama",
     "model": "MichelRosselli/GLM-4.5-Air:Q2_K",
     "thinking": true,
-    "maxTokens": 2048
+    "maxTokens": 8192
   }
 }

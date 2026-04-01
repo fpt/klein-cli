@@ -4,6 +4,6 @@
     "backend": "ollama",
     "model": "qwen3.5:2b",
     "thinking": false,
-    "maxTokens": 2048
+    "maxTokens": 8192
   }
 }

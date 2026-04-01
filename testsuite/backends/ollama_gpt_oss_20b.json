@@ -4,6 +4,6 @@
     "backend": "ollama",
     "model": "gpt-oss:20b",
     "thinking": true,
-    "maxTokens": 2048
+    "maxTokens": 16384
   }
 }

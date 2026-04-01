@@ -16,6 +16,8 @@ const (
 	EventTypeToolResult    EventType = "tool_result"
 	EventTypeResponse      EventType = "response"
 	EventTypeError         EventType = "error"
+	EventTypeSubAgentStart EventType = "sub_agent_start"
+	EventTypeSubAgentEnd   EventType = "sub_agent_end"
 )
 
 // AgentEvent represents a structured event from the agent
@@ -69,6 +71,20 @@ type ResponseData struct {
 type ErrorData struct {
 	Error   error  `json:"error"`
 	Context string `json:"context,omitempty"`
+}
+
+// SubAgentStartData contains information about a sub-agent starting
+type SubAgentStartData struct {
+	Task  string `json:"task"`
+	Skill string `json:"skill"`
+}
+
+// SubAgentEndData contains information about a sub-agent completing
+type SubAgentEndData struct {
+	Task   string `json:"task"`
+	Skill  string `json:"skill"`
+	Result string `json:"result"`
+	IsError bool  `json:"is_error,omitempty"`
 }
 
 // EventHandler is a function that processes agent events

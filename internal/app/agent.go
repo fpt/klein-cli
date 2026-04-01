@@ -41,6 +41,7 @@ type Agent struct {
 	askQuestionManager     *tool.AskUserQuestionToolManager
 	planMode               *tool.PlanModeState             // shared with planToolManager and guard
 	planToolManager        *tool.PlanToolManager
+	spawnAgentManager      *tool.SpawnAgentToolManager
 	fsRepo                 repository.FilesystemRepository  // Shared filesystem repository instance
 	workingDir             string
 	sharedState            domain.State
@@ -98,6 +99,107 @@ func (a *Agent) SetPlanApprovalHandler(h tool.PlanApprovalHandler) {
 	}
 }
 
+// SpawnSubAgent runs a sub-agent with a fresh conversation state and returns its result.
+// The sub-agent shares the parent's LLM client and tool managers but has its own
+// message state and cannot spawn further agents (recursion prevention).
+func (a *Agent) SpawnSubAgent(ctx context.Context, task string, skillName string, allowedTools []string, maxIterations int) (string, error) {
+	skillName = strings.ToLower(skillName)
+	if skillName == "" {
+		skillName = "code"
+	}
+	activeSkill, exists := a.skills[skillName]
+	if !exists {
+		return "", fmt.Errorf("sub-agent skill %q not found", skillName)
+	}
+
+	// Build the effective allowed-tools list, always excluding spawn_agent to prevent recursion.
+	var subToolManager domain.ToolManager
+	effectiveAllowed := allowedTools
+	if len(effectiveAllowed) == 0 {
+		effectiveAllowed = activeSkill.AllowedTools
+	}
+	if len(effectiveAllowed) > 0 {
+		filtered := make([]string, 0, len(effectiveAllowed))
+		for _, name := range effectiveAllowed {
+			if name != "spawn_agent" {
+				filtered = append(filtered, name)
+			}
+		}
+		subToolManager = skill.NewFilteredToolManager(a.allToolManagers, filtered)
+	} else {
+		// No restriction from skill or caller — allow all tools except spawn_agent.
+		allTools := a.allToolManagers.GetTools()
+		names := make([]string, 0, len(allTools))
+		for name := range allTools {
+			if name != "spawn_agent" {
+				names = append(names, string(name))
+			}
+		}
+		subToolManager = skill.NewFilteredToolManager(a.allToolManagers, names)
+	}
+
+	if maxIterations <= 0 {
+		maxIterations = DefaultAgentMaxIterations
+	}
+
+	// Emit sub-agent start event on the parent's output.
+	writer := a.OutWriter()
+	fmt.Fprintf(writer, "  [sub-agent:%s] Starting: %s\n", skillName, task)
+
+	// Fresh conversation state — isolated from the parent.
+	subState := state.NewMessageState()
+
+	// Inject skill system prompt.
+	systemPrompt := activeSkill.RenderContent("", a.workingDir)
+	if systemPrompt != "" {
+		subState.AddMessage(message.NewSystemMessage(systemPrompt))
+	}
+
+	llmWithTools, err := client.NewClientWithToolManager(a.llmClient, subToolManager)
+	if err != nil {
+		return "", fmt.Errorf("sub-agent: failed to create LLM client: %w", err)
+	}
+
+	situation := NewIterationAdvisor(a.allToolManagers)
+	reactClient, eventEmitter := react.NewReAct(llmWithTools, subToolManager, subState, situation, maxIterations)
+
+	// Forward sub-agent events to our output with an indent prefix.
+	eventEmitter.AddHandler(func(event events.AgentEvent) {
+		switch event.Type {
+		case events.EventTypeToolCallStart:
+			if data, ok := event.Data.(events.ToolCallStartData); ok {
+				fmt.Fprintf(writer, "  [sub-agent] Running tool %s %v\n", data.ToolName, data.Arguments)
+			}
+		case events.EventTypeToolResult:
+			if data, ok := event.Data.(events.ToolResultData); ok {
+				if data.IsError {
+					fmt.Fprintf(writer, "  [sub-agent] ERROR %s\n", data.Content)
+				}
+			}
+		case events.EventTypeThinkingChunk:
+			if data, ok := event.Data.(events.ThinkingChunkData); ok {
+				fmt.Fprintf(writer, "\x1b[90m%s", data.Content)
+			}
+		case events.EventTypeResponse:
+			fmt.Fprint(writer, "\x1b[0m")
+		}
+		if a.externalEventHandler != nil {
+			a.externalEventHandler(event)
+		}
+	})
+
+	result, err := reactClient.Run(ctx, task)
+	defer reactClient.Close()
+	if err != nil {
+		fmt.Fprintf(writer, "  [sub-agent:%s] Failed: %v\n", skillName, err)
+		return "", err
+	}
+
+	resultText := result.Content()
+	fmt.Fprintf(writer, "  [sub-agent:%s] Done\n", skillName)
+	return resultText, nil
+}
+
 // NewAgent creates a new Agent with MCP tools and settings.
 func NewAgent(llmClient domain.LLM, workingDir string, mcpToolManagers map[string]domain.ToolManager, settings *config.Settings, logger *pkgLogger.Logger, out io.Writer) *Agent {
 	fsRepo := infra.NewOSFilesystemRepository()
@@ -146,12 +248,14 @@ func NewAgentWithOptions(llmClient domain.LLM, workingDir string, mcpToolManager
 	planModeState := new(tool.PlanModeState) // starts as PlanModeOff
 	planToolManager := tool.NewPlanToolManager(planModeState)
 
+	spawnAgentManager := tool.NewSpawnAgentToolManager()
+
 	// Load persistent permission rules (user + project + local).
 	// Missing files are silently ignored; never fatal.
 	permRules := permission.LoadForProject(workingDir)
 
 	// Combine ALL tool managers into one composite
-	managers := []domain.ToolManager{todoToolManager, taskToolManager, filesystemManager, bashToolManager, searchToolManager, webToolManager, pdfToolManager, skillToolManager, askQuestionManager, planToolManager}
+	managers := []domain.ToolManager{todoToolManager, taskToolManager, filesystemManager, bashToolManager, searchToolManager, webToolManager, pdfToolManager, skillToolManager, askQuestionManager, planToolManager, spawnAgentManager}
 	for _, mcpManager := range mcpToolManagers {
 		managers = append(managers, mcpManager)
 	}
@@ -193,7 +297,7 @@ func NewAgentWithOptions(llmClient domain.LLM, workingDir string, mcpToolManager
 		logger.DebugWithIntention(pkgLogger.IntentionStatus, "Starting with clean session", "reason", "one-shot mode")
 	}
 
-	return &Agent{
+	a := &Agent{
 		llmClient:          llmClient,
 		allToolManagers:    allToolManagers,
 		todoToolManager:    todoToolManager,
@@ -201,6 +305,7 @@ func NewAgentWithOptions(llmClient domain.LLM, workingDir string, mcpToolManager
 		askQuestionManager: askQuestionManager,
 		planMode:           planModeState,
 		planToolManager:    planToolManager,
+		spawnAgentManager:  spawnAgentManager,
 		fsRepo:             fsRepo,
 		workingDir:         workingDir,
 		sharedState:        sharedState,
@@ -213,6 +318,13 @@ func NewAgentWithOptions(llmClient domain.LLM, workingDir string, mcpToolManager
 		sessionRules:  newSessionRules(isInteractiveMode),
 		permRules:     permRules,
 	}
+
+	// Wire spawn_agent callback (two-phase init: callback references the agent).
+	spawnAgentManager.SetCallback(func(ctx context.Context, task string, skillName string, allowedTools []string, maxIterations int) (string, error) {
+		return a.SpawnSubAgent(ctx, task, skillName, allowedTools, maxIterations)
+	})
+
+	return a
 }
 
 // Invoke executes a specified skill. Optional images are base64-encoded strings

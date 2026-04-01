@@ -63,6 +63,19 @@ func getSlashCommands() []SlashCommand {
 			},
 		},
 		{
+			Name:        "tasks",
+			Description: "Show all tasks for this project session",
+			Handler: func(a *Agent) bool {
+				summary := a.GetTaskListDisplay()
+				if summary == "" {
+					fmt.Println("No tasks.")
+				} else {
+					fmt.Println(summary)
+				}
+				return false
+			},
+		},
+		{
 			Name:        "quit",
 			Description: "Exit the interactive session",
 			Handler: func(a *Agent) bool {
@@ -240,8 +253,8 @@ func StartInteractiveMode(ctx context.Context, a *Agent, skillName string) {
 	for {
 		pb.Clear() // Clear the prompt buffer at the start of each loop
 
-		// Show context usage above the prompt, reflecting the latest LLM turn
-		line := contextDisplay.ShowContextUsage(a.GetMessageState(), a.GetLLMClient())
+		// Show task summary + context usage above the prompt.
+		line := contextDisplay.ShowStatusLine(a.GetMessageState(), a.GetLLMClient(), a.GetTaskSummary())
 		if line != "" {
 			fmt.Printf("%s\n", line)
 		}

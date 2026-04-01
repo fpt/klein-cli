@@ -11,7 +11,7 @@ import (
 	"golang.org/x/term"
 )
 
-// ContextDisplay handles context window usage visualization
+// ContextDisplay handles the status line shown above the REPL prompt.
 type ContextDisplay struct{}
 
 // NewContextDisplay creates a new context display instance
@@ -19,14 +19,13 @@ func NewContextDisplay() *ContextDisplay {
 	return &ContextDisplay{}
 }
 
-// CalculateUsageDetails calculates context window usage details from message state and LLM client
+// CalculateUsageDetails calculates context window usage details from message state and LLM client.
 func (cd *ContextDisplay) CalculateUsageDetails(messageState domain.State, llmClient domain.LLM) (currentTokens, maxTokens, percentage int) {
 	messages := messageState.GetMessages()
 	if len(messages) == 0 {
 		return 0, 0, 0
 	}
 
-	// Estimate tokens for all messages
 	estimateTokensFor := func(msg message.Message) int {
 		content := msg.Content()
 		if t := msg.Thinking(); t != "" {
@@ -40,84 +39,80 @@ func (cd *ContextDisplay) CalculateUsageDetails(messageState domain.State, llmCl
 		return approx
 	}
 
-	totalTokens := 0
 	for _, msg := range messages {
-		totalTokens += estimateTokensFor(msg)
+		currentTokens += estimateTokensFor(msg)
 	}
 
-	// Get estimated context window size based on client type
-	maxTokens = cd.estimateContextWindow(llmClient)
+	// Prefer the interface-based value; fall back to hardcoded estimates.
+	if cwp, ok := llmClient.(domain.ContextWindowProvider); ok {
+		maxTokens = cwp.MaxContextTokens()
+	}
 	if maxTokens <= 0 {
 		return 0, 0, 0
 	}
 
-	percentage = int(math.Round(float64(totalTokens) * 100.0 / float64(maxTokens)))
-
-	// Cap at 100%
+	percentage = int(math.Round(float64(currentTokens) * 100.0 / float64(maxTokens)))
 	if percentage > 100 {
 		percentage = 100
 	}
-
-	return totalTokens, maxTokens, percentage
+	return
 }
 
-// estimateContextWindow estimates the context window size based on LLM client type
-func (cd *ContextDisplay) estimateContextWindow(llmClient domain.LLM) int {
-	clientType := fmt.Sprintf("%T", llmClient)
-
-	switch {
-	case strings.Contains(clientType, "anthropic"):
-		return 200000 // Claude models typically have 200k+ context windows
-	case strings.Contains(clientType, "openai"):
-		return 128000 // GPT-4o models have 128k context windows
-	case strings.Contains(clientType, "gemini"):
-		return 1000000 // Gemini models have 1M+ context windows
-	case strings.Contains(clientType, "ollama"):
-		return 32000 // Ollama models typically have 32k context windows (varies by model)
-	default:
-		return 32000 // Conservative fallback
-	}
-}
-
-// FormatContextUsage creates a right-aligned context usage display with color coding
-func (cd *ContextDisplay) FormatContextUsage(currentTokens, maxTokens, percentage int, terminalWidth int) string {
-	var colorCode string
-	var resetCode string = "\033[0m"
-
-	// Color code based on usage level
-	switch {
-	case percentage < 50:
-		colorCode = "\033[32m" // Green - low usage
-	case percentage < 80:
-		colorCode = "\033[33m" // Yellow - moderate usage
-	default:
-		colorCode = "\033[31m" // Red - high usage
-	}
-
-	contextStr := fmt.Sprintf("%sContext: %d/%d (%.1f%%)%s", colorCode, currentTokens, maxTokens, float64(percentage), resetCode)
-
-	// Calculate padding to right-align (accounting for color codes)
-	visibleLength := fmt.Sprintf("Context: %d/%d (%.1f%%)", currentTokens, maxTokens, float64(percentage))
-	padding := terminalWidth - len(visibleLength)
-	if padding < 0 {
-		padding = 0
-	}
-
-	return strings.Repeat(" ", padding) + contextStr
-}
-
-// ShowContextUsage displays the context usage below the current output
-func (cd *ContextDisplay) ShowContextUsage(messageState domain.State, llmClient domain.LLM) string {
-	// Get terminal width
-	terminalWidth := 80 // fallback
+// ShowStatusLine renders the combined task + context status line printed above the prompt.
+// taskSummary may be empty; contextState is always shown when available.
+func (cd *ContextDisplay) ShowStatusLine(messageState domain.State, llmClient domain.LLM, taskSummary string) string {
+	terminalWidth := 80
 	if width, _, err := term.GetSize(int(os.Stdout.Fd())); err == nil {
 		terminalWidth = width
 	}
 
-	// Calculate current context usage details
 	currentTokens, maxTokens, percentage := cd.CalculateUsageDetails(messageState, llmClient)
+	if maxTokens <= 0 && taskSummary == "" {
+		return ""
+	}
 
-	// Create and display the status line
-	statusLine := cd.FormatContextUsage(currentTokens, maxTokens, percentage, terminalWidth)
-	return statusLine
+	// Right side: context usage with color.
+	var contextStr string
+	if maxTokens > 0 {
+		var colorCode string
+		switch {
+		case percentage < 50:
+			colorCode = "\033[32m" // green
+		case percentage < 80:
+			colorCode = "\033[33m" // yellow
+		default:
+			colorCode = "\033[31m" // red
+		}
+		contextVisible := fmt.Sprintf("Context: %dk/%dk (%d%%)", currentTokens/1000, maxTokens/1000, percentage)
+		contextStr = colorCode + contextVisible + "\033[0m"
+
+		// Left side: task summary (dim/grey).
+		if taskSummary != "" {
+			taskStr := "\033[2m" + taskSummary + "\033[0m"
+			taskVisible := taskSummary
+			contextVisibleLen := len(contextVisible)
+			taskVisibleLen := len(taskVisible)
+			gap := terminalWidth - taskVisibleLen - contextVisibleLen
+			if gap < 1 {
+				gap = 1
+			}
+			return taskStr + strings.Repeat(" ", gap) + contextStr
+		}
+
+		// No tasks — right-align context only.
+		visLen := len(fmt.Sprintf("Context: %dk/%dk (%d%%)", currentTokens/1000, maxTokens/1000, percentage))
+		pad := terminalWidth - visLen
+		if pad < 0 {
+			pad = 0
+		}
+		return strings.Repeat(" ", pad) + contextStr
+	}
+
+	// No context info — show task summary left-aligned.
+	return "\033[2m" + taskSummary + "\033[0m"
+}
+
+// ShowContextUsage is kept for backward compatibility; delegates to ShowStatusLine with no task summary.
+func (cd *ContextDisplay) ShowContextUsage(messageState domain.State, llmClient domain.LLM) string {
+	return cd.ShowStatusLine(messageState, llmClient, "")
 }

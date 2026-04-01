@@ -643,6 +643,30 @@ func (a *Agent) GetLLMClient() domain.LLM {
 	return a.llmClient
 }
 
+// GetTaskSummary returns a compact one-line task status string, or "" when
+// no tasks exist. Shown in the REPL status line above the prompt.
+func (a *Agent) GetTaskSummary() string {
+	if a.taskToolManager == nil {
+		return ""
+	}
+	return a.taskToolManager.GetToolState()
+}
+
+// GetTaskListDisplay returns the full task list formatted for display, or "" if none.
+func (a *Agent) GetTaskListDisplay() string {
+	if a.taskToolManager == nil {
+		return ""
+	}
+	result, err := a.taskToolManager.CallTool(context.Background(), "task_list", nil)
+	if err != nil || result.Error != "" {
+		return ""
+	}
+	if result.Text == "No tasks." {
+		return ""
+	}
+	return result.Text
+}
+
 // OutWriter returns the output writer used for streaming thinking/log lines.
 func (a *Agent) OutWriter() io.Writer {
 	if a.out != nil {

@@ -112,7 +112,7 @@ func TestCompactIfNeeded_BelowThreshold(t *testing.T) {
 
 	// Test with 10000 max tokens and 70% threshold (7000 tokens)
 	// 1500 tokens is below threshold, should not compact
-	err := state.CompactIfNeeded(context.Background(), mockLLM, 10000, 70.0)
+	_, err := state.CompactIfNeeded(context.Background(), mockLLM, 10000, 70.0)
 	if err != nil {
 		t.Errorf("CompactIfNeeded failed: %v", err)
 	}
@@ -142,7 +142,7 @@ func TestCompactIfNeeded_AboveThreshold(t *testing.T) {
 	// Total: 60 * 300 = 18000 tokens
 	// Test with 20000 max tokens and 70% threshold (14000 tokens)
 	// 18000 tokens is above threshold, should compact
-	err := state.CompactIfNeeded(context.Background(), mockLLM, 20000, 70.0)
+	_, err := state.CompactIfNeeded(context.Background(), mockLLM, 20000, 70.0)
 	if err != nil {
 		t.Errorf("CompactIfNeeded failed: %v", err)
 	}
@@ -173,7 +173,7 @@ func TestCompactIfNeeded_NoMaxTokens(t *testing.T) {
 	initialCount := len(state.GetMessages())
 
 	// Test with 0 max tokens (no limit specified)
-	err := state.CompactIfNeeded(context.Background(), mockLLM, 0, 70.0)
+	_, err := state.CompactIfNeeded(context.Background(), mockLLM, 0, 70.0)
 	if err != nil {
 		t.Errorf("CompactIfNeeded failed: %v", err)
 	}

@@ -29,6 +29,11 @@ const (
 	MessageSourceDefault MessageSource = iota
 	MessageSourceSituation
 	MessageSourceSummary
+	// MessageSourceCompactBoundary marks a point in history that has already
+	// been summarised. Unlike MessageSourceSummary it is NOT removed by
+	// CleanupMandatory, so subsequent compaction passes can find it and avoid
+	// re-summarising content that is already captured in the boundary text.
+	MessageSourceCompactBoundary
 )
 
 // String returns the string representation of MessageType
@@ -59,6 +64,8 @@ func (s MessageSource) String() string {
 		return "situation"
 	case MessageSourceSummary:
 		return "summary"
+	case MessageSourceCompactBoundary:
+		return "compact_boundary"
 	default:
 		return "unknown"
 	}

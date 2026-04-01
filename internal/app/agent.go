@@ -53,6 +53,7 @@ type Agent struct {
 	permRules              *permission.RuleSet // persistent allow/deny rules from JSON files
 	allowedToolsOverride   []string            // CLI override for skill's allowed-tools
 	externalEventHandler   events.EventHandler // optional: forward events to external consumers (e.g., Connect server)
+	recentlyReadFiles      []string            // up to 5 most recently read unique file paths
 }
 
 // WorkingDir returns the agent's working directory.
@@ -326,8 +327,12 @@ func (a *Agent) Invoke(ctx context.Context, userInput string, skillName string, 
 	if ssc, ok := a.llmClient.(domain.ServerSideCompactionLLM); !ok || !ssc.SupportsServerSideCompaction() {
 		if cwp, ok := a.llmClient.(domain.ContextWindowProvider); ok {
 			if maxCtx := cwp.MaxContextTokens(); maxCtx > 0 {
-				if compactErr := a.sharedState.CompactIfNeeded(ctx, a.llmClient, maxCtx, 0); compactErr != nil {
+				compacted, compactErr := a.sharedState.CompactIfNeeded(ctx, a.llmClient, maxCtx, 0)
+				if compactErr != nil {
 					a.logger.Warn("Context compaction failed, continuing without compaction", "error", compactErr)
+				}
+				if compacted {
+					a.postCompactRestore(ctx)
 				}
 			}
 		}
@@ -681,6 +686,11 @@ func (a *Agent) setupEventHandlers(emitter events.EventEmitter) {
 		case events.EventTypeToolCallStart:
 			if data, ok := event.Data.(events.ToolCallStartData); ok {
 				fmt.Fprintf(writer, "Running tool %s %v\n", data.ToolName, data.Arguments)
+				if data.ToolName == "Read" {
+					if path, ok := data.Arguments["file_path"].(string); ok && path != "" {
+						a.recordRecentlyRead(path)
+					}
+				}
 			}
 
 		case events.EventTypeToolResult:
@@ -734,4 +744,60 @@ func (a *Agent) setupEventHandlers(emitter events.EventEmitter) {
 			a.externalEventHandler(event)
 		}
 	})
+}
+
+// recordRecentlyRead records a file path as recently read, keeping only the 5
+// most recent unique paths (most recently read first).
+func (a *Agent) recordRecentlyRead(path string) {
+	// Remove existing occurrence of path (dedup)
+	out := a.recentlyReadFiles[:0]
+	for _, p := range a.recentlyReadFiles {
+		if p != path {
+			out = append(out, p)
+		}
+	}
+	// Prepend (most recently read first)
+	a.recentlyReadFiles = append([]string{path}, out...)
+	// Cap at 5
+	if len(a.recentlyReadFiles) > 5 {
+		a.recentlyReadFiles = a.recentlyReadFiles[:5]
+	}
+}
+
+const (
+	postCompactTokenBudget = 50_000
+	postCompactMaxFiles    = 5
+	postCompactMaxPerFile  = 5_000
+)
+
+// postCompactRestore re-injects recently-read files as situation messages so
+// the agent retains working context immediately after a compaction.
+func (a *Agent) postCompactRestore(ctx context.Context) {
+	if len(a.recentlyReadFiles) == 0 {
+		return
+	}
+	budget := postCompactTokenBudget
+	count := 0
+	for _, path := range a.recentlyReadFiles {
+		if count >= postCompactMaxFiles || budget <= 0 {
+			break
+		}
+		data, err := a.fsRepo.ReadFile(ctx, path)
+		if err != nil {
+			continue
+		}
+		content := string(data)
+		tokens := len(content) / 4
+		if tokens > postCompactMaxPerFile || tokens > budget {
+			continue
+		}
+		msg := message.NewSituationSystemMessage(
+			fmt.Sprintf("# Recently-read file (restored after compaction): %s\n%s", path, content))
+		a.sharedState.AddMessage(msg)
+		budget -= tokens
+		count++
+	}
+	if count > 0 {
+		a.logger.Info("Post-compact context restoration", "files_restored", count)
+	}
 }

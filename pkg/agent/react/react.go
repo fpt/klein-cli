@@ -273,7 +273,7 @@ func (r *ReAct) runInternal(ctx context.Context) (message.Message, error) {
 		if ssc, ok := r.llmClient.(domain.ServerSideCompactionLLM); !ok || !ssc.SupportsServerSideCompaction() {
 			maxTokensEstimate := r.estimateContextWindow()
 			const compactionThreshold = 70.0 // 70% threshold
-			if err := r.state.CompactIfNeeded(ctx, r.llmClient, maxTokensEstimate, compactionThreshold); err != nil {
+			if _, err := r.state.CompactIfNeeded(ctx, r.llmClient, maxTokensEstimate, compactionThreshold); err != nil {
 				return nil, fmt.Errorf("failed to compact messages when needed: %w", err)
 			}
 		}

@@ -64,6 +64,20 @@ func NewSummarySystemMessage(content string) *ChatMessage {
 	}
 }
 
+// NewCompactBoundaryMessage creates a system message that marks a compaction
+// boundary.  Its content is the cumulative summary of all history up to this
+// point.  Unlike summary messages, boundary messages survive CleanupMandatory
+// so the next compaction pass can build on them instead of starting over.
+func NewCompactBoundaryMessage(summary string) *ChatMessage {
+	return &ChatMessage{
+		id:        generateMessageID(),
+		typ:       MessageTypeSystem,
+		content:   "# Conversation Summary\n" + summary,
+		timestamp: time.Now(),
+		source:    MessageSourceCompactBoundary,
+	}
+}
+
 // NewChatMessageWithThinking creates a new chat message with thinking content
 func NewChatMessageWithThinking(msgType MessageType, content, thinking string) *ChatMessage {
 	return &ChatMessage{

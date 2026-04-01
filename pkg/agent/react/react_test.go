@@ -637,7 +637,7 @@ func TestReAct_compaction(t *testing.T) {
 			// Perform compaction with low max tokens to trigger it
 			ctx := context.Background()
 			maxTokens := len(messages) * 500 // Much lower than actual usage to force compaction
-			err := react.state.CompactIfNeeded(ctx, mockLLM, maxTokens, 70.0)
+			_, err := react.state.CompactIfNeeded(ctx, mockLLM, maxTokens, 70.0)
 			if err != nil {
 				t.Fatalf("Compaction failed: %v", err)
 			}
@@ -664,8 +664,8 @@ func TestReAct_compaction(t *testing.T) {
 
 				// Should contain summary text
 				content := firstMsg.Content()
-				if !strings.Contains(content, "Previous Conversation Summary") {
-					t.Errorf("Expected summary message to contain 'Previous Conversation Summary', got: %s", content)
+				if !strings.Contains(content, "Conversation Summary") {
+					t.Errorf("Expected summary message to contain 'Conversation Summary', got: %s", content)
 				}
 
 				// Remaining messages should be the recent ones (last 10 from original)
@@ -709,7 +709,7 @@ func TestReAct_compactionEdgeCases(t *testing.T) {
 
 		// Test compaction with empty state (should not do anything)
 		ctx := context.Background()
-		err := react.state.CompactIfNeeded(ctx, mockLLM, 100000, 70.0)
+		_, err := react.state.CompactIfNeeded(ctx, mockLLM, 100000, 70.0)
 		if err != nil {
 			t.Fatalf("Compaction of empty state failed: %v", err)
 		}
@@ -746,7 +746,7 @@ func TestReAct_compactionEdgeCases(t *testing.T) {
 
 		ctx := context.Background()
 		maxTokens := len(messages) * 500 // Lower than actual usage to force compaction
-		err := react.state.CompactIfNeeded(ctx, mockLLM, maxTokens, 70.0)
+		_, err := react.state.CompactIfNeeded(ctx, mockLLM, maxTokens, 70.0)
 		if err != nil {
 			t.Fatalf("Compaction failed: %v", err)
 		}
@@ -836,7 +836,7 @@ func TestReAct_compactionWithToolCalls(t *testing.T) {
 		// Perform compaction
 		ctx := context.Background()
 		maxTokens := len(messages) * 500 // Lower than actual usage to force compaction
-		err := react.state.CompactIfNeeded(ctx, mockLLM, maxTokens, 70.0)
+		_, err := react.state.CompactIfNeeded(ctx, mockLLM, maxTokens, 70.0)
 		if err != nil {
 			t.Fatalf("Compaction failed: %v", err)
 		}
@@ -917,7 +917,7 @@ func TestReAct_compactionWithToolCalls(t *testing.T) {
 		// Perform compaction
 		ctx := context.Background()
 		maxTokens := len(messages) * 500 // Lower than actual usage to force compaction
-		err := react.state.CompactIfNeeded(ctx, mockLLM, maxTokens, 70.0)
+		_, err := react.state.CompactIfNeeded(ctx, mockLLM, maxTokens, 70.0)
 		if err != nil {
 			t.Fatalf("Compaction failed: %v", err)
 		}

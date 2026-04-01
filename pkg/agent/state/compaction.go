@@ -41,6 +41,8 @@ const microCompactStub = "[Content cleared by micro-compaction — was %d chars]
 // CleanupMandatory performs lightweight, LLM-free cleanup on every invocation:
 //
 //  1. Removes stale summary and situation messages (source-based filtering).
+//     CompactBoundary messages are intentionally kept so the next compaction
+//     pass can find them.
 //  2. Finds the start of the Nth most recent user turn (the "old/recent boundary").
 //  3. Applies applyLightweightCleanup to every message before that boundary,
 //     stripping vision content and micro-compacting large tool results in a
@@ -50,7 +52,8 @@ const microCompactStub = "[Content cleared by micro-compaction — was %d chars]
 // so there is exactly one pass over old messages, and one consistent boundary
 // definition across both concerns.
 func (c *MessageState) CleanupMandatory() error {
-	// 1. Remove stale metadata messages
+	// 1. Remove stale metadata messages.
+	// Note: MessageSourceCompactBoundary is intentionally NOT removed here.
 	if n := c.RemoveMessagesBySource(message.MessageSourceSummary); n > 0 {
 		logger.DebugWithIntention(pkgLogger.IntentionDebug, "Removed stale summary messages", "count", n)
 	}
@@ -188,10 +191,12 @@ func (c *MessageState) estimateTokensFromMessages() int {
 	return totalTokens
 }
 
-// CompactIfNeeded performs efficient token-based compaction
-func (c *MessageState) CompactIfNeeded(ctx context.Context, llm domain.LLM, maxTokens int, thresholdPercent float64) error {
+// CompactIfNeeded performs efficient token-based compaction.
+// Returns (true, nil) when compaction was performed, (false, nil) when not needed,
+// and (false, err) on error.
+func (c *MessageState) CompactIfNeeded(ctx context.Context, llm domain.LLM, maxTokens int, thresholdPercent float64) (bool, error) {
 	if maxTokens <= 0 {
-		return nil // No token limit specified
+		return false, nil // No token limit specified
 	}
 
 	// Get accurate current token count
@@ -215,7 +220,7 @@ func (c *MessageState) CompactIfNeeded(ctx context.Context, llm domain.LLM, maxT
 		logger.DebugWithIntention(pkgLogger.IntentionStatistics, "Usage below compaction threshold, skipping",
 			"usage_percent", fmt.Sprintf("%.1f%%", usagePercent),
 			"threshold", fmt.Sprintf("%.1f%%", CompactAtPercent*100))
-		return nil
+		return false, nil
 	}
 
 	// Check if compaction will save meaningful tokens
@@ -223,7 +228,7 @@ func (c *MessageState) CompactIfNeeded(ctx context.Context, llm domain.LLM, maxT
 	if tokensToSave < MinReductionTokens {
 		logger.InfoWithIntention(pkgLogger.IntentionStatus, "Compaction would save too few tokens, skipping",
 			"tokens_to_save", tokensToSave, "min_reduction", MinReductionTokens)
-		return nil
+		return false, nil
 	}
 
 	logger.InfoWithIntention(pkgLogger.IntentionStatus, "Performing token-based compaction",
@@ -232,7 +237,10 @@ func (c *MessageState) CompactIfNeeded(ctx context.Context, llm domain.LLM, maxT
 		"target_tokens", targetAfterCompaction,
 		"tokens_to_save", tokensToSave)
 
-	return c.performCompaction(ctx, llm)
+	if err := c.performCompaction(ctx, llm); err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
 // GetTotalTokenUsage returns the total token usage across all messages
@@ -245,62 +253,88 @@ func (c *MessageState) GetTotalTokenUsage() (inputTokens, outputTokens, totalTok
 	return inputTokens, outputTokens, totalTokens
 }
 
-// performCompaction contains the original compaction logic
+// performCompaction contains the compaction logic with boundary-aware summarisation.
+// It finds the last CompactBoundary message (if any), builds on its summary, and
+// replaces all older messages with a single new boundary message.
 func (c *MessageState) performCompaction(ctx context.Context, llm domain.LLM) error {
 	messages := c.Messages
 
 	// Reset counters before compaction to avoid double counting across histories
 	c.ResetTokenCounters()
 
+	// Find the last compact boundary message (search backwards).
+	boundaryIdx := -1
+	var prevSummary string
+	for i := len(messages) - 1; i >= 0; i-- {
+		if messages[i].Source() == message.MessageSourceCompactBoundary {
+			boundaryIdx = i
+			content := messages[i].Content()
+			const boundaryPrefix = "# Conversation Summary\n"
+			prevSummary = strings.TrimPrefix(content, boundaryPrefix)
+			break
+		}
+	}
+
+	// Determine the pool of messages eligible for summarisation.
+	// If a boundary exists, only messages after it are "new"; the boundary itself
+	// is not included in olderMessages.
+	eligibleStart := 0
+	if boundaryIdx >= 0 {
+		eligibleStart = boundaryIdx + 1
+	}
+	eligibleMessages := messages[eligibleStart:]
+
 	// Block-based compaction strategy: keep recent complete conversation blocks
 	const preserveRecentBlocks = 5 // Keep the last 5 complete conversation blocks
 
-	// Always perform compaction if we reach this point (either from token or message threshold)
-
-	// Try block-based compaction first
-	blocksToPreserve := findConversationBlocksToPreserve(messages, preserveRecentBlocks)
+	// Try block-based compaction first on the eligible slice
+	blocksToPreserve := findConversationBlocksToPreserve(eligibleMessages, preserveRecentBlocks)
 
 	var olderMessages, recentMessages []message.Message
 
 	// Try to use block-based compaction, but ensure we preserve at least 10 messages for compatibility
 	const minMessagesToPreserve = 10
 
-	if len(blocksToPreserve) > 0 && len(blocksToPreserve) >= minMessagesToPreserve && len(blocksToPreserve) < len(messages)-5 {
+	if len(blocksToPreserve) > 0 && len(blocksToPreserve) >= minMessagesToPreserve && len(blocksToPreserve) < len(eligibleMessages)-5 {
 		// Block-based compaction with good number of messages
-		splitIndex := len(messages) - len(blocksToPreserve)
-		olderMessages = messages[:splitIndex]
+		splitIndex := len(eligibleMessages) - len(blocksToPreserve)
+		olderMessages = eligibleMessages[:splitIndex]
 		recentMessages = blocksToPreserve
 		logger.InfoWithIntention(pkgLogger.IntentionStatus, "Using block-based compaction",
 			"total_messages", len(messages), "blocks_preserved", len(blocksToPreserve))
 	} else {
-		// Fallback to message-count based compaction
+		// Fallback to message-count based compaction on eligible slice
 		const preserveRecent = 10
-		splitPoint := findSafeSplitPoint(messages, preserveRecent)
+		splitPoint := findSafeSplitPoint(eligibleMessages, preserveRecent)
 		if splitPoint <= 0 {
 			logger.DebugWithIntention(pkgLogger.IntentionDebug, "No safe split point found, skipping compaction")
 			return nil
 		}
-		olderMessages = messages[:splitPoint]
-		recentMessages = messages[splitPoint:]
+		olderMessages = eligibleMessages[:splitPoint]
+		recentMessages = eligibleMessages[splitPoint:]
 		logger.InfoWithIntention(pkgLogger.IntentionStatus, "Using fallback message-based compaction",
 			"total_messages", len(messages), "messages_preserved", len(recentMessages))
 	}
 
-	// Create an LLM-generated summary of older messages (with vision truncation applied)
-	summary, err := c.createLLMSummary(ctx, llm, olderMessages)
+	// Create an LLM-generated summary, building on the previous boundary summary if available.
+	var summary string
+	var err error
+	if prevSummary != "" {
+		summary, err = c.createLLMSummaryWithContext(ctx, llm, prevSummary, olderMessages)
+	} else {
+		summary, err = c.createLLMSummary(ctx, llm, olderMessages)
+	}
 	if err != nil {
 		logger.Warn("Failed to create LLM summary, using fallback",
 			"error", err, "message_count", len(olderMessages))
 		summary = createBasicMessageSummary(olderMessages)
 	}
 
-	// Create new message state with summary + recent messages
+	// Build new state: boundary message + recent messages
 	c.Clear()
 
-	// Add new summary as system message
-	summaryMsg := message.NewSummarySystemMessage(
-		fmt.Sprintf("# Previous Conversation Summary\n%s\n\n# Current Conversation Continues", summary))
-	c.AddMessage(summaryMsg)
+	// Prepend a compact boundary message (survives CleanupMandatory for future passes)
+	c.AddMessage(message.NewCompactBoundaryMessage(summary))
 
 	// Add back recent messages, filtering out situation messages
 	skippedAlignment := 0
@@ -329,6 +363,65 @@ func (c *MessageState) performCompaction(ctx context.Context, llm domain.LLM) er
 		"input_tokens", in, "output_tokens", out, "total_tokens", total)
 
 	return nil
+}
+
+// createLLMSummaryWithContext creates a summary that incorporates a previous summary
+// with newly observed messages, producing a single combined summary.
+func (c *MessageState) createLLMSummaryWithContext(ctx context.Context, llm domain.LLM, prevSummary string, newMessages []message.Message) (string, error) {
+	if len(newMessages) == 0 {
+		// Nothing new to incorporate; return the previous summary unchanged.
+		return prevSummary, nil
+	}
+
+	// Build conversation text for new messages only (same logic as createLLMSummary)
+	var conversationBuilder strings.Builder
+	conversationBuilder.WriteString("Previous summary:\n")
+	conversationBuilder.WriteString(prevSummary)
+	conversationBuilder.WriteString("\n\nNew messages to incorporate:\n\n")
+
+	for _, msg := range newMessages {
+		switch msg.Type() {
+		case message.MessageTypeUser:
+			conversationBuilder.WriteString(fmt.Sprintf("User: %s\n", msg.Content()))
+		case message.MessageTypeAssistant:
+			if len(msg.Content()) > 0 && !strings.HasPrefix(msg.Content(), "Tool call:") {
+				conversationBuilder.WriteString(fmt.Sprintf("Assistant: %s\n", msg.Content()))
+			}
+		case message.MessageTypeToolCall:
+			if toolMsg, ok := msg.(*message.ToolCallMessage); ok {
+				conversationBuilder.WriteString(fmt.Sprintf("Tool used: %s\n", toolMsg.ToolName()))
+			}
+		case message.MessageTypeToolResult:
+			if toolResult, ok := msg.(*message.ToolResultMessage); ok {
+				result := toolResult.Result
+				if len(result) > 200 {
+					result = result[:200] + "..."
+				}
+				if len(msg.Images()) > 0 {
+					conversationBuilder.WriteString(fmt.Sprintf("Tool result: %s [Image data truncated for token efficiency]\n", result))
+				} else {
+					conversationBuilder.WriteString(fmt.Sprintf("Tool result: %s\n", result))
+				}
+			}
+		}
+	}
+
+	summaryPrompt := fmt.Sprintf(`You are updating a running conversation summary. You have a previous summary and new messages. Produce a single combined summary that:
+1. Merges the previous summary with the new messages
+2. Focuses on main topics, key findings, important context, and ongoing tasks
+3. Stays under 200 words
+
+%s
+
+Combined Summary:`, conversationBuilder.String())
+
+	summaryMessage := message.NewChatMessage(message.MessageTypeUser, summaryPrompt)
+	response, err := llm.Chat(ctx, []message.Message{summaryMessage}, false, nil)
+	if err != nil {
+		return "", fmt.Errorf("failed to generate LLM summary with context: %w", err)
+	}
+
+	return response.Content(), nil
 }
 
 // findSafeSplitPoint finds a split point that doesn't break tool call chains

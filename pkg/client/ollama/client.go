@@ -16,10 +16,11 @@ const temperature = 0.1 // Default temperature for Ollama chat requests
 // OllamaCore contains shared Ollama client resources and core functionality
 // This allows efficient resource sharing between different Ollama client types
 type OllamaCore struct {
-	client    *api.Client
-	model     string
-	maxTokens int
-	thinking  bool // Settings-based thinking control
+	client      *api.Client
+	model       string
+	maxTokens   int
+	contextSize int  // num_ctx: total context window (input + output). 0 = use model registry value.
+	thinking    bool // Settings-based thinking control
 	// Telemetry
 	lastUsage message.TokenUsage
 }
@@ -46,17 +47,37 @@ func NewOllamaCoreWithOptions(model string, maxTokens int, thinking bool) (*Olla
 		maxTokens = 4096 // Default for Ollama models
 	}
 
+	// Look up the model's registered context size to set num_ctx.
+	// Ollama defaults num_ctx to 4096 which is too small for most agent tasks.
+	contextSize := GetModelContextWindow(model)
+
 	return &OllamaCore{
-		client:    client,
-		model:     model,
-		maxTokens: maxTokens,
-		thinking:  thinking,
+		client:      client,
+		model:       model,
+		maxTokens:   maxTokens,
+		contextSize: contextSize,
+		thinking:    thinking,
 	}, nil
 }
 
 // Client returns the underlying Ollama API client
 func (c *OllamaCore) Client() *api.Client {
 	return c.client
+}
+
+// numCtx returns the context window size to pass as num_ctx in Ollama requests.
+// If the model's registered context is large (>16384), we cap at 16384 to avoid
+// excessive VRAM allocation while still being large enough for agent tasks.
+func (c *OllamaCore) numCtx() int {
+	const defaultNumCtx = 8192  // safe default — much better than Ollama's 4096
+	const maxNumCtx = 16384     // cap to avoid VRAM/slowdown on huge-context models
+	if c.contextSize <= 0 {
+		return defaultNumCtx
+	}
+	if c.contextSize > maxNumCtx {
+		return maxNumCtx
+	}
+	return c.contextSize
 }
 
 // Model returns the model name
@@ -204,7 +225,8 @@ func (c *OllamaClient) ChatWithToolChoice(ctx context.Context, messages []messag
 		Messages: ollamaMessages,
 		Options: map[string]any{
 			"temperature": temperature,
-			"num_predict": c.maxTokens, // Max output tokens for Ollama
+			"num_predict": c.maxTokens,  // Max output tokens for Ollama
+			"num_ctx":     c.numCtx(),   // Total context window (input + output)
 		},
 	}
 
@@ -247,7 +269,8 @@ func (c *OllamaClient) chatWithOptions(ctx context.Context, messages []message.M
 		Messages: ollamaMessages,
 		Options: map[string]any{
 			"temperature": temperature,
-			"num_predict": c.maxTokens, // Max output tokens for Ollama
+			"num_predict": c.maxTokens,  // Max output tokens for Ollama
+			"num_ctx":     c.numCtx(),   // Total context window (input + output)
 		},
 	}
 

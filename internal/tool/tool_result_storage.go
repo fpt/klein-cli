@@ -24,13 +24,13 @@ const (
 // These results are either small by construction or semantically important
 // (e.g. user answers, todo state) and must not be replaced with file stubs.
 var neverOffloadTools = map[string]bool{
-	"ask_user_question": true,
-	"todo_read":         true,
-	"todo_write":        true,
-	"task_create":       true,
-	"task_update":       true,
-	"task_list":         true,
-	"task_get":          true,
+	"AskUserQuestion": true,
+	"TodoRead":        true,
+	"TodoWrite":       true,
+	"TaskCreate":      true,
+	"TaskUpdate":      true,
+	"TaskList":        true,
+	"TaskGet":         true,
 }
 
 // ToolResultStorage manages offloading of large tool results to disk.

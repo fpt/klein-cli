@@ -113,7 +113,7 @@ var _ domain.ToolStateProvider = (*TaskToolManager)(nil)
 
 // registerTools registers all task tools.
 func (m *TaskToolManager) registerTools() {
-	m.RegisterTool("task_create",
+	m.RegisterTool("TaskCreate",
 		"Create a new task. Returns the new task ID. Use for tracking multi-step work items with optional dependency links.",
 		[]message.ToolArgument{
 			{Name: "subject", Description: "Short title (one line)", Required: true, Type: "string"},
@@ -122,7 +122,7 @@ func (m *TaskToolManager) registerTools() {
 		},
 		m.handleCreate)
 
-	m.RegisterTool("task_update",
+	m.RegisterTool("TaskUpdate",
 		"Update an existing task's status, subject, description, or dependency links.",
 		[]message.ToolArgument{
 			{Name: "id", Description: "Task ID to update", Required: true, Type: "string"},
@@ -134,12 +134,12 @@ func (m *TaskToolManager) registerTools() {
 		},
 		m.handleUpdate)
 
-	m.RegisterTool("task_list",
+	m.RegisterTool("TaskList",
 		"List all active (non-deleted) tasks with their status and dependency summary.",
 		[]message.ToolArgument{},
 		m.handleList)
 
-	m.RegisterTool("task_get",
+	m.RegisterTool("TaskGet",
 		"Get full details of a single task including description and dependency graph.",
 		[]message.ToolArgument{
 			{Name: "id", Description: "Task ID", Required: true, Type: "string"},

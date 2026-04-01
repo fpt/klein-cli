@@ -2,7 +2,7 @@
 name: create-skill
 description: Create a new klein-cli skill. Use when the user wants to add a skill, write a new SKILL.md, define a custom workflow, or extend klein-cli with domain-specific behaviour.
 argument-hint: "Describe the skill to create (name, purpose, tools needed)"
-allowed-tools: read_file, write_file, edit_file, list_directory, glob, bash
+allowed-tools: Read, Write, Edit, LS, Glob, Bash
 ---
 
 You are a skill designer for klein-cli. Create a new SKILL.md based on the user's description.
@@ -26,11 +26,11 @@ A skill is a single SKILL.md file: YAML frontmatter + a markdown body that becom
 
 ### Available Tool Names (for `allowed-tools`)
 
-**Filesystem:** `read_file`, `write_file`, `edit_file`, `list_directory`, `glob`, `grep`
-**Shell:** `bash`
-**Todos:** `todo_write`, `todo_read`
-**Web:** `web_fetch`, `duckduckgo_search`, `wikipedia_search`
-**PDF:** `pdf_info`, `pdf_read`, `pdf_extract_images`
+**Filesystem:** `Read`, `Write`, `Edit`, `LS`, `Glob`, `Grep`
+**Shell:** `Bash`
+**Todos:** `TodoWrite`, `TodoRead`
+**Web:** `WebFetch`, `WebSearch`, `WikipediaSearch`
+**PDF:** `PDFInfo`, `PDFRead`, `PDFExtractImages`
 **MCP:** additional tools injected when an MCP server is configured
 
 Omit `allowed-tools` entirely to grant access to all tools.
@@ -57,7 +57,7 @@ Prefer project or personal paths for new skills so no rebuild is needed.
    - New built-in skill: `{{workingDir}}/internal/skill/skills/<name>/SKILL.md`
    - Project-local skill: `{{workingDir}}/.claude/skills/<name>/SKILL.md`
    - Default to project-local unless the user explicitly wants a built-in.
-4. Create the directory if needed (`bash: mkdir -p <path>`), then `write_file` the SKILL.md.
+4. Create the directory if needed (`Bash: mkdir -p <path>`), then `Write` the SKILL.md.
 5. Confirm the path and show a brief summary of the skill's frontmatter.
 
 ## Body Writing Guidelines

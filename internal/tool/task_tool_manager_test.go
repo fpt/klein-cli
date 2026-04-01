@@ -26,7 +26,7 @@ func callTask(t *testing.T, m *TaskToolManager, tool message.ToolName, args mess
 
 func TestTaskCreate_Basic(t *testing.T) {
 	m := newTestTaskManager()
-	out := callTask(t, m, "task_create", message.ToolArgumentValues{
+	out := callTask(t, m, "TaskCreate", message.ToolArgumentValues{
 		"subject": "Implement login",
 	})
 	if !strings.Contains(out, "PASS") {
@@ -39,7 +39,7 @@ func TestTaskCreate_Basic(t *testing.T) {
 
 func TestTaskCreate_MissingSubject(t *testing.T) {
 	m := newTestTaskManager()
-	out := callTask(t, m, "task_create", message.ToolArgumentValues{})
+	out := callTask(t, m, "TaskCreate", message.ToolArgumentValues{})
 	if !strings.Contains(out, "subject is required") {
 		t.Errorf("expected validation error, got: %s", out)
 	}
@@ -47,7 +47,7 @@ func TestTaskCreate_MissingSubject(t *testing.T) {
 
 func TestTaskCreate_WithDescription(t *testing.T) {
 	m := newTestTaskManager()
-	out := callTask(t, m, "task_create", message.ToolArgumentValues{
+	out := callTask(t, m, "TaskCreate", message.ToolArgumentValues{
 		"subject":     "Add tests",
 		"description": "Write unit tests for the auth module",
 	})
@@ -55,7 +55,7 @@ func TestTaskCreate_WithDescription(t *testing.T) {
 		t.Errorf("expected PASS, got: %s", out)
 	}
 	// Verify stored
-	listOut := callTask(t, m, "task_list", message.ToolArgumentValues{})
+	listOut := callTask(t, m, "TaskList", message.ToolArgumentValues{})
 	if !strings.Contains(listOut, "Add tests") {
 		t.Errorf("task not listed: %s", listOut)
 	}
@@ -65,7 +65,7 @@ func TestTaskCreate_BlockedBy(t *testing.T) {
 	m := newTestTaskManager()
 
 	// Create blocker
-	out := callTask(t, m, "task_create", message.ToolArgumentValues{"subject": "Blocker"})
+	out := callTask(t, m, "TaskCreate", message.ToolArgumentValues{"subject": "Blocker"})
 	// Extract ID from "PASS Created task #<id>: Blocker"
 	parts := strings.Split(out, "#")
 	if len(parts) < 2 {
@@ -74,7 +74,7 @@ func TestTaskCreate_BlockedBy(t *testing.T) {
 	blockerID := strings.SplitN(parts[1], ":", 2)[0]
 
 	// Create task blocked by it
-	out2 := callTask(t, m, "task_create", message.ToolArgumentValues{
+	out2 := callTask(t, m, "TaskCreate", message.ToolArgumentValues{
 		"subject":    "Dependent",
 		"blocked_by": []interface{}{blockerID},
 	})
@@ -83,7 +83,7 @@ func TestTaskCreate_BlockedBy(t *testing.T) {
 	}
 
 	// Blocker should have Blocks populated via reverse link
-	listOut := callTask(t, m, "task_list", message.ToolArgumentValues{})
+	listOut := callTask(t, m, "TaskList", message.ToolArgumentValues{})
 	if !strings.Contains(listOut, "blocked by") {
 		t.Errorf("blocked_by not reflected in list: %s", listOut)
 	}
@@ -91,7 +91,7 @@ func TestTaskCreate_BlockedBy(t *testing.T) {
 
 func TestTaskCreate_BlockedBy_InvalidID(t *testing.T) {
 	m := newTestTaskManager()
-	out := callTask(t, m, "task_create", message.ToolArgumentValues{
+	out := callTask(t, m, "TaskCreate", message.ToolArgumentValues{
 		"subject":    "Task",
 		"blocked_by": []interface{}{"nonexistent"},
 	})
@@ -102,10 +102,10 @@ func TestTaskCreate_BlockedBy_InvalidID(t *testing.T) {
 
 func TestTaskUpdate_Status(t *testing.T) {
 	m := newTestTaskManager()
-	out := callTask(t, m, "task_create", message.ToolArgumentValues{"subject": "Task A"})
+	out := callTask(t, m, "TaskCreate", message.ToolArgumentValues{"subject": "Task A"})
 	id := extractID(t, out)
 
-	upd := callTask(t, m, "task_update", message.ToolArgumentValues{
+	upd := callTask(t, m, "TaskUpdate", message.ToolArgumentValues{
 		"id":     id,
 		"status": "in_progress",
 	})
@@ -113,7 +113,7 @@ func TestTaskUpdate_Status(t *testing.T) {
 		t.Errorf("expected PASS, got: %s", upd)
 	}
 
-	get := callTask(t, m, "task_get", message.ToolArgumentValues{"id": id})
+	get := callTask(t, m, "TaskGet", message.ToolArgumentValues{"id": id})
 	if !strings.Contains(get, "in_progress") {
 		t.Errorf("status not updated: %s", get)
 	}
@@ -121,10 +121,10 @@ func TestTaskUpdate_Status(t *testing.T) {
 
 func TestTaskUpdate_InvalidStatus(t *testing.T) {
 	m := newTestTaskManager()
-	out := callTask(t, m, "task_create", message.ToolArgumentValues{"subject": "Task"})
+	out := callTask(t, m, "TaskCreate", message.ToolArgumentValues{"subject": "Task"})
 	id := extractID(t, out)
 
-	upd := callTask(t, m, "task_update", message.ToolArgumentValues{
+	upd := callTask(t, m, "TaskUpdate", message.ToolArgumentValues{
 		"id":     id,
 		"status": "invalid",
 	})
@@ -135,15 +135,15 @@ func TestTaskUpdate_InvalidStatus(t *testing.T) {
 
 func TestTaskUpdate_InvalidTransition_CompletedIsTerminal(t *testing.T) {
 	m := newTestTaskManager()
-	out := callTask(t, m, "task_create", message.ToolArgumentValues{"subject": "Task"})
+	out := callTask(t, m, "TaskCreate", message.ToolArgumentValues{"subject": "Task"})
 	id := extractID(t, out)
 
 	// pending → in_progress → completed
-	callTask(t, m, "task_update", message.ToolArgumentValues{"id": id, "status": "in_progress"})
-	callTask(t, m, "task_update", message.ToolArgumentValues{"id": id, "status": "completed"})
+	callTask(t, m, "TaskUpdate", message.ToolArgumentValues{"id": id, "status": "in_progress"})
+	callTask(t, m, "TaskUpdate", message.ToolArgumentValues{"id": id, "status": "completed"})
 
 	// completed → pending must fail
-	upd := callTask(t, m, "task_update", message.ToolArgumentValues{"id": id, "status": "pending"})
+	upd := callTask(t, m, "TaskUpdate", message.ToolArgumentValues{"id": id, "status": "pending"})
 	if !strings.Contains(upd, "invalid transition") {
 		t.Errorf("expected transition error, got: %s", upd)
 	}
@@ -151,11 +151,11 @@ func TestTaskUpdate_InvalidTransition_CompletedIsTerminal(t *testing.T) {
 
 func TestTaskUpdate_InvalidTransition_PendingToCompleted(t *testing.T) {
 	m := newTestTaskManager()
-	out := callTask(t, m, "task_create", message.ToolArgumentValues{"subject": "Task"})
+	out := callTask(t, m, "TaskCreate", message.ToolArgumentValues{"subject": "Task"})
 	id := extractID(t, out)
 
 	// pending → completed must fail (must go through in_progress)
-	upd := callTask(t, m, "task_update", message.ToolArgumentValues{"id": id, "status": "completed"})
+	upd := callTask(t, m, "TaskUpdate", message.ToolArgumentValues{"id": id, "status": "completed"})
 	if !strings.Contains(upd, "invalid transition") {
 		t.Errorf("expected transition error, got: %s", upd)
 	}
@@ -163,24 +163,24 @@ func TestTaskUpdate_InvalidTransition_PendingToCompleted(t *testing.T) {
 
 func TestTaskUpdate_BlockedByNotCompleted(t *testing.T) {
 	m := newTestTaskManager()
-	outA := callTask(t, m, "task_create", message.ToolArgumentValues{"subject": "Blocker"})
+	outA := callTask(t, m, "TaskCreate", message.ToolArgumentValues{"subject": "Blocker"})
 	idA := extractID(t, outA)
-	outB := callTask(t, m, "task_create", message.ToolArgumentValues{
+	outB := callTask(t, m, "TaskCreate", message.ToolArgumentValues{
 		"subject":    "Dependent",
 		"blocked_by": []interface{}{idA},
 	})
 	idB := extractID(t, outB)
 
 	// Try to start B while A is still pending — must fail
-	upd := callTask(t, m, "task_update", message.ToolArgumentValues{"id": idB, "status": "in_progress"})
+	upd := callTask(t, m, "TaskUpdate", message.ToolArgumentValues{"id": idB, "status": "in_progress"})
 	if !strings.Contains(upd, "not completed") {
 		t.Errorf("expected blocker error, got: %s", upd)
 	}
 
 	// Complete A, then B can start
-	callTask(t, m, "task_update", message.ToolArgumentValues{"id": idA, "status": "in_progress"})
-	callTask(t, m, "task_update", message.ToolArgumentValues{"id": idA, "status": "completed"})
-	upd2 := callTask(t, m, "task_update", message.ToolArgumentValues{"id": idB, "status": "in_progress"})
+	callTask(t, m, "TaskUpdate", message.ToolArgumentValues{"id": idA, "status": "in_progress"})
+	callTask(t, m, "TaskUpdate", message.ToolArgumentValues{"id": idA, "status": "completed"})
+	upd2 := callTask(t, m, "TaskUpdate", message.ToolArgumentValues{"id": idB, "status": "in_progress"})
 	if !strings.Contains(upd2, "PASS") {
 		t.Errorf("expected PASS after blocker completed, got: %s", upd2)
 	}
@@ -188,17 +188,17 @@ func TestTaskUpdate_BlockedByNotCompleted(t *testing.T) {
 
 func TestTaskUpdate_AddBlockedBy(t *testing.T) {
 	m := newTestTaskManager()
-	outA := callTask(t, m, "task_create", message.ToolArgumentValues{"subject": "A"})
+	outA := callTask(t, m, "TaskCreate", message.ToolArgumentValues{"subject": "A"})
 	idA := extractID(t, outA)
-	outB := callTask(t, m, "task_create", message.ToolArgumentValues{"subject": "B"})
+	outB := callTask(t, m, "TaskCreate", message.ToolArgumentValues{"subject": "B"})
 	idB := extractID(t, outB)
 
-	callTask(t, m, "task_update", message.ToolArgumentValues{
+	callTask(t, m, "TaskUpdate", message.ToolArgumentValues{
 		"id":            idB,
 		"add_blocked_by": []interface{}{idA},
 	})
 
-	get := callTask(t, m, "task_get", message.ToolArgumentValues{"id": idB})
+	get := callTask(t, m, "TaskGet", message.ToolArgumentValues{"id": idB})
 	if !strings.Contains(get, idA) {
 		t.Errorf("blocked_by not set: %s", get)
 	}
@@ -206,7 +206,7 @@ func TestTaskUpdate_AddBlockedBy(t *testing.T) {
 
 func TestTaskUpdate_NotFound(t *testing.T) {
 	m := newTestTaskManager()
-	out := callTask(t, m, "task_update", message.ToolArgumentValues{
+	out := callTask(t, m, "TaskUpdate", message.ToolArgumentValues{
 		"id":     "deadbeef",
 		"status": "completed",
 	})
@@ -217,7 +217,7 @@ func TestTaskUpdate_NotFound(t *testing.T) {
 
 func TestTaskList_Empty(t *testing.T) {
 	m := newTestTaskManager()
-	out := callTask(t, m, "task_list", message.ToolArgumentValues{})
+	out := callTask(t, m, "TaskList", message.ToolArgumentValues{})
 	if !strings.Contains(out, "No tasks") {
 		t.Errorf("expected empty list, got: %s", out)
 	}
@@ -225,15 +225,15 @@ func TestTaskList_Empty(t *testing.T) {
 
 func TestTaskList_HidesDeleted(t *testing.T) {
 	m := newTestTaskManager()
-	out := callTask(t, m, "task_create", message.ToolArgumentValues{"subject": "Visible"})
+	out := callTask(t, m, "TaskCreate", message.ToolArgumentValues{"subject": "Visible"})
 	id := extractID(t, out)
-	callTask(t, m, "task_create", message.ToolArgumentValues{"subject": "ToDelete"})
-	outD := callTask(t, m, "task_create", message.ToolArgumentValues{"subject": "ToDelete2"})
+	callTask(t, m, "TaskCreate", message.ToolArgumentValues{"subject": "ToDelete"})
+	outD := callTask(t, m, "TaskCreate", message.ToolArgumentValues{"subject": "ToDelete2"})
 	idD := extractID(t, outD)
 
-	callTask(t, m, "task_update", message.ToolArgumentValues{"id": idD, "status": "deleted"})
+	callTask(t, m, "TaskUpdate", message.ToolArgumentValues{"id": idD, "status": "deleted"})
 
-	list := callTask(t, m, "task_list", message.ToolArgumentValues{})
+	list := callTask(t, m, "TaskList", message.ToolArgumentValues{})
 	if strings.Contains(list, "ToDelete2") {
 		t.Errorf("deleted task should be hidden: %s", list)
 	}
@@ -245,14 +245,14 @@ func TestTaskList_HidesDeleted(t *testing.T) {
 
 func TestTaskList_ShowsBlocksDeps(t *testing.T) {
 	m := newTestTaskManager()
-	outA := callTask(t, m, "task_create", message.ToolArgumentValues{"subject": "A"})
+	outA := callTask(t, m, "TaskCreate", message.ToolArgumentValues{"subject": "A"})
 	idA := extractID(t, outA)
-	callTask(t, m, "task_create", message.ToolArgumentValues{
+	callTask(t, m, "TaskCreate", message.ToolArgumentValues{
 		"subject":    "B",
 		"blocked_by": []interface{}{idA},
 	})
 
-	list := callTask(t, m, "task_list", message.ToolArgumentValues{})
+	list := callTask(t, m, "TaskList", message.ToolArgumentValues{})
 	if !strings.Contains(list, "blocks:") {
 		t.Errorf("expected 'blocks:' in list for A, got: %s", list)
 	}
@@ -263,19 +263,19 @@ func TestTaskList_ShowsBlocksDeps(t *testing.T) {
 
 func TestTaskGet_FullDetail(t *testing.T) {
 	m := newTestTaskManager()
-	callTask(t, m, "task_create", message.ToolArgumentValues{
+	callTask(t, m, "TaskCreate", message.ToolArgumentValues{
 		"subject":     "Full detail",
 		"description": "Some details here",
 	})
 	// List to get the ID
-	list := callTask(t, m, "task_list", message.ToolArgumentValues{})
+	list := callTask(t, m, "TaskList", message.ToolArgumentValues{})
 	parts := strings.Split(list, "#")
 	if len(parts) < 2 {
 		t.Fatalf("could not parse list: %s", list)
 	}
 	id := strings.SplitN(parts[1], ":", 2)[0]
 
-	get := callTask(t, m, "task_get", message.ToolArgumentValues{"id": id})
+	get := callTask(t, m, "TaskGet", message.ToolArgumentValues{"id": id})
 	if !strings.Contains(get, "Full detail") {
 		t.Errorf("subject missing: %s", get)
 	}
@@ -286,7 +286,7 @@ func TestTaskGet_FullDetail(t *testing.T) {
 
 func TestTaskGet_NotFound(t *testing.T) {
 	m := newTestTaskManager()
-	out := callTask(t, m, "task_get", message.ToolArgumentValues{"id": "missing"})
+	out := callTask(t, m, "TaskGet", message.ToolArgumentValues{"id": "missing"})
 	if !strings.Contains(out, "not found") {
 		t.Errorf("expected not found, got: %s", out)
 	}
@@ -301,8 +301,8 @@ func TestGetToolState_Empty(t *testing.T) {
 
 func TestGetToolState_Summary(t *testing.T) {
 	m := newTestTaskManager()
-	callTask(t, m, "task_create", message.ToolArgumentValues{"subject": "A"})
-	callTask(t, m, "task_create", message.ToolArgumentValues{"subject": "B"})
+	callTask(t, m, "TaskCreate", message.ToolArgumentValues{"subject": "A"})
+	callTask(t, m, "TaskCreate", message.ToolArgumentValues{"subject": "B"})
 
 	s := m.GetToolState()
 	if !strings.Contains(s, "2 tasks") {
@@ -316,7 +316,7 @@ func TestGetToolState_Summary(t *testing.T) {
 func TestTaskToolMetadata(t *testing.T) {
 	m := newTestTaskManager()
 	tools := m.GetTools()
-	for _, name := range []message.ToolName{"task_create", "task_update", "task_list", "task_get"} {
+	for _, name := range []message.ToolName{"TaskCreate", "TaskUpdate", "TaskList", "TaskGet"} {
 		tool, ok := tools[name]
 		if !ok {
 			t.Errorf("tool %q not registered", name)

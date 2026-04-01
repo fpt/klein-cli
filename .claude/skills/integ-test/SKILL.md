@@ -80,7 +80,7 @@ For each ❌ cell:
    | **Model quality** | Correct tool calls, correct approach, but output values wrong (wrong algorithm, hallucinated content) | Note as model limitation; no code change proposed |
    | **Token budget** | Very low output tokens (≤200), thinking-capable model, task incomplete | Increase `maxTokens` in backend JSON or disable thinking |
    | **Tool abandonment** | Turn 2+ makes no tool calls; response is text-only explanation | Strengthen task instructions in prompt.txt; check IterationAdvisor hints |
-   | **Edit loop** | Repeated failed `edit_file` calls with stale `old_string` | Already mitigated by IterationAdvisor; check if threshold is too high |
+   | **Edit loop** | Repeated failed `Edit` calls with stale `old_string` | Already mitigated by IterationAdvisor; check if threshold is too high |
    | **Prompt/check mismatch** | Agent did something reasonable but check.sh expected a different format | Relax the check or clarify the prompt |
    | **Framework/tool bug** | Tool returns an error, wrong file path, binary crash | File a bug; propose code fix |
 

@@ -12,7 +12,7 @@ import (
 	"github.com/fpt/klein-cli/pkg/message"
 )
 
-// MemoryToolManager provides memory_search and memory_get tools for the claw memory system.
+// MemoryToolManager provides MemorySearch and MemoryGet tools for the claw memory system.
 type MemoryToolManager struct {
 	tools   map[message.ToolName]message.Tool
 	baseDir string // e.g. ~/.klein/claw/memory
@@ -29,7 +29,7 @@ func NewMemoryToolManager(baseDir string) domain.ToolManager {
 }
 
 func (m *MemoryToolManager) register() {
-	m.RegisterTool("memory_search",
+	m.RegisterTool("MemorySearch",
 		"Search memory files (MEMORY.md and daily notes) for a keyword. Returns matching lines with file paths and line numbers.",
 		[]message.ToolArgument{
 			{Name: "query", Description: "Keyword or phrase to search for (case-insensitive)", Required: true, Type: "string"},
@@ -37,7 +37,7 @@ func (m *MemoryToolManager) register() {
 		},
 		m.handleMemorySearch)
 
-	m.RegisterTool("memory_get",
+	m.RegisterTool("MemoryGet",
 		"Read a specific memory file. Use 'MEMORY.md' for long-term memory, or 'daily/YYYY-MM-DD.md' for a daily note. Returns the file content or empty string if not found.",
 		[]message.ToolArgument{
 			{Name: "path", Description: "Relative path within the memory directory (e.g., 'MEMORY.md', 'daily/2024-01-15.md')", Required: true, Type: "string"},

@@ -42,30 +42,30 @@ func defaultRules() []routerRule {
 			skipIfSkill: "github",
 			hint: "The prompt contains a GitHub URL. " +
 				"Use get_github_content/search_github_code/tree_github_repo MCP tools when available; " +
-				"use web_fetch with raw.githubusercontent.com for raw file access; " +
-				"use the gh CLI (bash) for issues, PRs, workflows, and releases. " +
-				"Avoid fetching github.com HTML pages with web_fetch. " +
+				"use WebFetch with raw.githubusercontent.com for raw file access; " +
+				"use the gh CLI (Bash) for issues, PRs, workflows, and releases. " +
+				"Avoid fetching github.com HTML pages with WebFetch. " +
 				"The 'github' skill has comprehensive guidance if needed.",
 			reminder: "GitHub URL detected — github skill guidance is already in context.",
 		},
 		{
-			// Non-GitHub HTTP URL: nudge toward web_fetch
+			// Non-GitHub HTTP URL: nudge toward WebFetch
 			match: func(p string) bool {
 				return reHTTPURL.MatchString(p) && !reGitHub.MatchString(p)
 			},
 			hint: "The prompt contains a URL. " +
-				"Use web_fetch to retrieve the page as markdown text. " +
-				"If the intent is to search rather than fetch a specific page, use duckduckgo_search instead.",
+				"Use WebFetch to retrieve the page as markdown text. " +
+				"If the intent is to search rather than fetch a specific page, use WebSearch instead.",
 		},
 		{
-			// PDF file reference: steer away from read_file
+			// PDF file reference: steer away from Read
 			match: func(p string) bool {
 				lower := strings.ToLower(p)
 				return rePDFExt.MatchString(p) || strings.Contains(lower, "pdf file") || strings.Contains(lower, "pdf document")
 			},
 			hint: "The prompt references a PDF. " +
-				"Use pdf_info to inspect metadata and pdf_read to extract text content. " +
-				"Do not use read_file on PDF files — it returns binary data.",
+				"Use PDFInfo to inspect metadata and PDFRead to extract text content. " +
+				"Do not use Read on PDF files — it returns binary data.",
 		},
 	}
 }

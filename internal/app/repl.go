@@ -233,7 +233,7 @@ func StartInteractiveMode(ctx context.Context, a *Agent, skillName string) {
 		modelID = mi.ModelID()
 	}
 
-	// Wire the ask_user_question tool with an interactive handler that uses
+	// Wire the AskUserQuestion tool with an interactive handler that uses
 	// promptui for selection menus and a simple prompt for free-form input.
 	a.SetInteractiveInputHandler(makeUserInputHandler(a.OutWriter()))
 

@@ -79,7 +79,7 @@ func (m *BashToolManager) RegisterTool(name message.ToolName, description messag
 // registerBashTools registers all bash command tools
 func (m *BashToolManager) registerBashTools() {
 	// Primary Bash tool
-	m.RegisterTool("bash", "Execute shell commands with timeout and error handling. Prefer tools over shell for file reads/search (use Read/Glob/Grep/LS). Provide a short description; quote paths with spaces.",
+	m.RegisterTool("Bash", "Execute shell commands with timeout and error handling. Prefer tools over shell for file reads/search (use Read/Glob/Grep/LS). Provide a short description; quote paths with spaces.",
 		[]message.ToolArgument{
 			{
 				Name:        "command",

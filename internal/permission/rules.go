@@ -28,9 +28,9 @@ const (
 
 // PermissionRule describes a single allow or deny entry.
 //
-// Tool is the tool name (e.g. "write_file", "bash").
+// Tool is the tool name (e.g. "Write", "Bash").
 // Pattern is an optional glob matched against the tool's primary argument
-// (file path for write_file/edit_file, command string for bash).
+// (file path for Write/Edit, command string for Bash).
 // An empty Pattern matches every invocation of the tool.
 //
 // Pattern syntax:

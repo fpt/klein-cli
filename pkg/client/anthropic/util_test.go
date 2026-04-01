@@ -347,8 +347,8 @@ func (m *mockTool) Handler() func(ctx context.Context, args message.ToolArgument
 func TestConvertToolsToAnthropic(t *testing.T) {
 	// Create sample tools
 	tools := map[message.ToolName]message.Tool{
-		"read_file": &mockTool{
-			name:        "read_file",
+		"Read": &mockTool{
+			name:        "Read",
 			description: "Read contents of a file",
 			args: []message.ToolArgument{
 				{
@@ -359,8 +359,8 @@ func TestConvertToolsToAnthropic(t *testing.T) {
 				},
 			},
 		},
-		"write_file": &mockTool{
-			name:        "write_file",
+		"Write": &mockTool{
+			name:        "Write",
 			description: "Write content to a file",
 			args: []message.ToolArgument{
 				{
@@ -406,8 +406,8 @@ func TestConvertToolsToAnthropic(t *testing.T) {
 		}
 	}
 
-	// Test read_file tool
-	if readFileTool, exists := toolMap["read_file"]; exists {
+	// Test Read tool
+	if readFileTool, exists := toolMap["Read"]; exists {
 		if readFileTool.Description.Value != "Read contents of a file" {
 			t.Errorf("Expected description 'Read contents of a file', got %s", readFileTool.Description.Value)
 		}
@@ -441,11 +441,11 @@ func TestConvertToolsToAnthropic(t *testing.T) {
 			t.Errorf("Expected required fields ['path'], got %v", required)
 		}
 	} else {
-		t.Errorf("Tool 'read_file' not found in converted tools")
+		t.Errorf("Tool 'Read' not found in converted tools")
 	}
 
-	// Test write_file tool
-	if writeFileTool, exists := toolMap["write_file"]; exists {
+	// Test Write tool
+	if writeFileTool, exists := toolMap["Write"]; exists {
 		if writeFileTool.Description.Value != "Write content to a file" {
 			t.Errorf("Expected description 'Write content to a file', got %s", writeFileTool.Description.Value)
 		}
@@ -477,7 +477,7 @@ func TestConvertToolsToAnthropic(t *testing.T) {
 			t.Errorf("Expected required fields to include 'path' and 'content', got %v", required)
 		}
 	} else {
-		t.Errorf("Tool 'write_file' not found in converted tools")
+		t.Errorf("Tool 'Write' not found in converted tools")
 	}
 
 	// Test serverA.tool (should be sanitized)

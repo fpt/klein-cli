@@ -73,7 +73,7 @@ func (a *Agent) SetEventHandler(handler events.EventHandler) {
 	a.externalEventHandler = handler
 }
 
-// SetInteractiveInputHandler configures the ask_user_question tool with an
+// SetInteractiveInputHandler configures the AskUserQuestion tool with an
 // interactive handler. Call this in interactive mode before the first Invoke.
 // The handler receives the question and optional choices; it blocks until the
 // user responds or an error occurs.
@@ -123,7 +123,7 @@ func NewAgentWithOptions(llmClient domain.LLM, workingDir string, mcpToolManager
 		skills = make(skill.SkillMap)
 	}
 
-	// Create skill tool manager (provides read_skill tool)
+	// Create skill tool manager (provides ReadSkill tool)
 	skillToolManager := tool.NewSkillToolManager(skills, workingDir)
 
 	askQuestionManager := tool.NewAskUserQuestionToolManager()
@@ -467,15 +467,15 @@ func (a *Agent) handleApprovalWorkflow(ctx context.Context, reactClient domain.R
 
 // extractPermissionArg returns the primary argument used for rule pattern matching.
 // For file tools this is the path; for bash this is the command string.
-// multi_edit carries multiple paths — we return the first one; the caller may
+// MultiEdit carries multiple paths — we return the first one; the caller may
 // want to call Check per-path, but for the initial implementation one suffices.
 func extractPermissionArg(toolName string, args message.ToolArgumentValues) string {
 	switch toolName {
-	case "write_file", "edit_file":
+	case "Write", "Edit":
 		if path, ok := args["path"].(string); ok {
 			return path
 		}
-	case "multi_edit":
+	case "MultiEdit":
 		// edits is []interface{} where each element has "file_path"
 		if edits, ok := args["edits"].([]interface{}); ok && len(edits) > 0 {
 			if edit, ok := edits[0].(map[string]interface{}); ok {
@@ -484,7 +484,7 @@ func extractPermissionArg(toolName string, args message.ToolArgumentValues) stri
 				}
 			}
 		}
-	case "bash":
+	case "Bash":
 		if cmd, ok := args["command"].(string); ok {
 			return cmd
 		}
@@ -499,7 +499,7 @@ func newSessionRules(isInteractive bool) *permission.RuleSet {
 	if isInteractive {
 		return &permission.RuleSet{}
 	}
-	tools := []string{"write_file", "edit_file", "multi_edit", "bash"}
+	tools := []string{"Write", "Edit", "MultiEdit", "Bash"}
 	rules := make([]permission.PermissionRule, len(tools))
 	for i, t := range tools {
 		rules[i] = permission.PermissionRule{Tool: t, Pattern: "", Behavior: permission.RuleAllow}
@@ -511,14 +511,14 @@ func newSessionRules(isInteractive bool) *permission.RuleSet {
 //
 // For file tools the first path segment becomes a dir glob (e.g. "src/foo/bar.go" → "src/**").
 // A root-level file with an extension gets a glob on the extension (e.g. "main.go" → "*.go").
-// For bash the first whitespace-delimited word(s) become a prefix wildcard (e.g. "go build ./..." → "go build *").
+// For Bash the first whitespace-delimited word(s) become a prefix wildcard (e.g. "go build ./..." → "go build *").
 // Falls back to "*" (match all) when no useful structure is found.
 func inferPattern(toolName, arg string) string {
 	if arg == "" {
 		return "*"
 	}
 	switch toolName {
-	case "write_file", "edit_file", "multi_edit":
+	case "Write", "Edit", "MultiEdit":
 		// Normalise to forward slashes and strip leading ./
 		arg = strings.TrimPrefix(filepath.ToSlash(arg), "./")
 		if idx := strings.Index(arg, "/"); idx > 0 {
@@ -529,7 +529,7 @@ func inferPattern(toolName, arg string) string {
 			return "*" + arg[dot:]
 		}
 		return "*"
-	case "bash":
+	case "Bash":
 		// Use the first two words if there are at least two, otherwise one word
 		words := strings.Fields(arg)
 		if len(words) >= 2 {
@@ -657,7 +657,7 @@ func (a *Agent) GetTaskListDisplay() string {
 	if a.taskToolManager == nil {
 		return ""
 	}
-	result, err := a.taskToolManager.CallTool(context.Background(), "task_list", nil)
+	result, err := a.taskToolManager.CallTool(context.Background(), "TaskList", nil)
 	if err != nil || result.Error != "" {
 		return ""
 	}

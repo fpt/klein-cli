@@ -243,7 +243,7 @@ silently dropping all qwen3 tool calls and producing empty responses. Fixed in
 ### Known universal failure: `refactoring` test
 
 All Ollama models fail the `refactoring` test. Root causes observed:
-- Models call `todo_write` with incorrect field schema before reading the file
+- Models call `TodoWrite` with incorrect field schema before reading the file
 - Models produce text explanations of required changes instead of executing them via tools
 - `MultiEdit` is called with an improperly structured edits array
 - Even when some changes are applied, the check script's criteria (requiring all 6 specific

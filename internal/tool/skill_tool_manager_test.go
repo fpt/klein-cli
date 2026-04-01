@@ -19,7 +19,7 @@ func newTestSkillMap() skill.SkillMap {
 		"respond": {
 			Name:         "respond",
 			Description:  "Direct knowledge-based responses",
-			AllowedTools: []string{"read_file", "write_file", "read_skill"},
+			AllowedTools: []string{"Read", "Write", "ReadSkill"},
 			Content:      "Provide a direct response.",
 		},
 	}
@@ -28,8 +28,8 @@ func newTestSkillMap() skill.SkillMap {
 func TestSkillToolManager_GetTools(t *testing.T) {
 	m := NewSkillToolManager(newTestSkillMap(), "/work")
 	tools := m.GetTools()
-	if _, ok := tools["read_skill"]; !ok {
-		t.Error("expected read_skill tool to be registered")
+	if _, ok := tools["ReadSkill"]; !ok {
+		t.Error("expected ReadSkill tool to be registered")
 	}
 	if len(tools) != 1 {
 		t.Errorf("expected 1 tool, got %d", len(tools))
@@ -38,7 +38,7 @@ func TestSkillToolManager_GetTools(t *testing.T) {
 
 func TestSkillToolManager_ReadSkill_Existing(t *testing.T) {
 	m := NewSkillToolManager(newTestSkillMap(), "/myproject")
-	result, err := m.CallTool(context.Background(), "read_skill", message.ToolArgumentValues{"name": "code"})
+	result, err := m.CallTool(context.Background(), "ReadSkill", message.ToolArgumentValues{"name": "code"})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -58,7 +58,7 @@ func TestSkillToolManager_ReadSkill_Existing(t *testing.T) {
 
 func TestSkillToolManager_ReadSkill_NotFound(t *testing.T) {
 	m := NewSkillToolManager(newTestSkillMap(), "/work")
-	result, err := m.CallTool(context.Background(), "read_skill", message.ToolArgumentValues{"name": "nonexistent"})
+	result, err := m.CallTool(context.Background(), "ReadSkill", message.ToolArgumentValues{"name": "nonexistent"})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -75,7 +75,7 @@ func TestSkillToolManager_ReadSkill_NotFound(t *testing.T) {
 
 func TestSkillToolManager_ReadSkill_CaseInsensitive(t *testing.T) {
 	m := NewSkillToolManager(newTestSkillMap(), "/work")
-	result, err := m.CallTool(context.Background(), "read_skill", message.ToolArgumentValues{"name": "CODE"})
+	result, err := m.CallTool(context.Background(), "ReadSkill", message.ToolArgumentValues{"name": "CODE"})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -89,7 +89,7 @@ func TestSkillToolManager_ReadSkill_CaseInsensitive(t *testing.T) {
 
 func TestSkillToolManager_ReadSkill_EmptyName(t *testing.T) {
 	m := NewSkillToolManager(newTestSkillMap(), "/work")
-	result, err := m.CallTool(context.Background(), "read_skill", message.ToolArgumentValues{"name": ""})
+	result, err := m.CallTool(context.Background(), "ReadSkill", message.ToolArgumentValues{"name": ""})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -100,7 +100,7 @@ func TestSkillToolManager_ReadSkill_EmptyName(t *testing.T) {
 
 func TestSkillToolManager_ReadSkill_MissingParam(t *testing.T) {
 	m := NewSkillToolManager(newTestSkillMap(), "/work")
-	result, err := m.CallTool(context.Background(), "read_skill", message.ToolArgumentValues{})
+	result, err := m.CallTool(context.Background(), "ReadSkill", message.ToolArgumentValues{})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -111,7 +111,7 @@ func TestSkillToolManager_ReadSkill_MissingParam(t *testing.T) {
 
 func TestSkillToolManager_ReadSkill_AllowedToolsShown(t *testing.T) {
 	m := NewSkillToolManager(newTestSkillMap(), "/work")
-	result, err := m.CallTool(context.Background(), "read_skill", message.ToolArgumentValues{"name": "respond"})
+	result, err := m.CallTool(context.Background(), "ReadSkill", message.ToolArgumentValues{"name": "respond"})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}

@@ -13,7 +13,7 @@ import (
 // Return an error if input cannot be collected (e.g. non-interactive mode).
 type UserInputHandler func(question string, options []string) (string, error)
 
-// AskUserQuestionToolManager provides the ask_user_question tool.
+// AskUserQuestionToolManager provides the AskUserQuestion tool.
 // The tool pauses the ReAct loop and collects a free-form or multiple-choice
 // answer from the human operator before the agent continues.
 type AskUserQuestionToolManager struct {
@@ -81,7 +81,7 @@ func (t *genericTool) Handler() func(ctx context.Context, args message.ToolArgum
 }
 
 func (m *AskUserQuestionToolManager) registerTools() {
-	m.tools["ask_user_question"] = &askUserQuestionTool{manager: m}
+	m.tools["AskUserQuestion"] = &askUserQuestionTool{manager: m}
 }
 
 // askUserQuestionTool implements message.Tool.
@@ -89,8 +89,8 @@ type askUserQuestionTool struct {
 	manager *AskUserQuestionToolManager
 }
 
-func (t *askUserQuestionTool) RawName() message.ToolName { return "ask_user_question" }
-func (t *askUserQuestionTool) Name() message.ToolName    { return "ask_user_question" }
+func (t *askUserQuestionTool) RawName() message.ToolName { return "AskUserQuestion" }
+func (t *askUserQuestionTool) Name() message.ToolName    { return "AskUserQuestion" }
 
 func (t *askUserQuestionTool) Description() message.ToolDescription {
 	return "Ask the human user a question and wait for their answer before continuing. " +
@@ -122,7 +122,7 @@ func (t *askUserQuestionTool) Handler() func(ctx context.Context, args message.T
 	return func(ctx context.Context, args message.ToolArgumentValues) (message.ToolResult, error) {
 		question, _ := args["question"].(string)
 		if question == "" {
-			return message.NewToolResultError("ask_user_question: 'question' argument is required"), nil
+			return message.NewToolResultError("AskUserQuestion: 'question' argument is required"), nil
 		}
 
 		// Parse optional options list
@@ -142,13 +142,13 @@ func (t *askUserQuestionTool) Handler() func(ctx context.Context, args message.T
 
 		if t.manager.HandleInput == nil {
 			return message.NewToolResultError(
-				"ask_user_question: cannot prompt user in non-interactive mode"), nil
+				"AskUserQuestion: cannot prompt user in non-interactive mode"), nil
 		}
 
 		answer, err := t.manager.HandleInput(question, options)
 		if err != nil {
 			return message.NewToolResultError(
-				fmt.Sprintf("ask_user_question: failed to get user input: %v", err)), nil
+				fmt.Sprintf("AskUserQuestion: failed to get user input: %v", err)), nil
 		}
 
 		return message.ToolResult{Text: answer}, nil

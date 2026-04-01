@@ -232,7 +232,7 @@ func BuildSkillCatalog(skills SkillMap) string {
 
 	var b strings.Builder
 	b.WriteString("# Available Skills\n\n")
-	b.WriteString("Use the `read_skill` tool to read the full content of any skill.\n\n")
+	b.WriteString("Use the `ReadSkill` tool to read the full content of any skill.\n\n")
 	for _, name := range names {
 		s := skills[name]
 		desc := s.Description

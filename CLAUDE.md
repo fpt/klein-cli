@@ -308,7 +308,7 @@ go run ./cmd/gateway --config ~/.klein/claw/config.json
 
 **Claw Skill (`internal/skill/skills/claw/SKILL.md`):**
 - Messaging-optimized assistant with memory awareness
-- Allowed tools: read_file, write_file, edit_file, list_directory, glob, grep, bash, todo_write, web_fetch, web_search
+- Allowed tools: Read, Write, Edit, LS, Glob, Grep, Bash, TodoWrite, WebFetch, WebSearch
 - Guidelines: concise responses (<2000 chars), proactive memory updates, daily notes
 - `user-invocable: false` — only used by the gateway, not directly by CLI users
 
@@ -400,17 +400,17 @@ NOTE: Thinking is not a capability. It's a behavior of model.
 **Universal Tools (always available):**
 - **Todo Management**: Create, update, delete, and manage project todos
 - **Secure Filesystem**: Read, write, edit files with read→write semantics and security controls
-  - `read_file` - Read file contents (with timestamp tracking)
-  - `write_file` - Write content to files (requires prior read, validates timestamps)
-  - `list_directory` - List directory contents (allowlist restricted)
-  - `edit_file` - Edit files with exact string replacement
+  - `Read` - Read file contents (with timestamp tracking)
+  - `Write` - Write content to files (requires prior read, validates timestamps)
+  - `LS` - List directory contents (allowlist restricted)
+  - `Edit` - Edit files with exact string replacement
 - **Bash Execution**: Run shell commands with working directory and timeout controls
 
 **Specialized Tools (skill-specific):**
 - **Web Tools**: Web research and content fetching (code, respond skills)
-  - `fetch_web` - HTML to markdown conversion for text analysis
-  - `wikipedia_search` - Wikipedia content search
-  - `duckduckgo_search` - Web search capabilities
+  - `WebFetch` - HTML to markdown conversion for text analysis
+  - `WikipediaSearch` - Wikipedia content search
+  - `WebSearch` - Web search capabilities
 - **MCP Tools**: External tool server integration (when available)
   - `tree_dir`, `get_github_content`, `search_local_files`, etc.
 
@@ -623,7 +623,7 @@ if toolCall, ok := resp.(*message.ToolCallMessage); ok {
     toolName := string(toolCall.ToolName())
     
     // Only require approval for potentially destructive file operations
-    requiresApproval := toolName == "write_file" || toolName == "edit_file" || toolName == "multi_edit"
+    requiresApproval := toolName == "Write" || toolName == "Edit" || toolName == "MultiEdit"
     
     if requiresApproval && !s.autoApprove {
         r.pendingToolCall = toolCall
@@ -702,13 +702,13 @@ Each skill is a SKILL.md file containing YAML frontmatter and markdown body:
 name: code
 description: Comprehensive coding assistant for all development tasks
 allowed-tools:
-  - read_file
-  - write_file
-  - edit_file
-  - list_directory
-  - bash
-  - fetch_web
-  - duckduckgo_search
+  - Read
+  - Write
+  - Edit
+  - LS
+  - Bash
+  - WebFetch
+  - WebSearch
 argument-hint: "Describe the coding task"
 user-invocable: true
 ---

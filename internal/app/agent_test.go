@@ -46,7 +46,7 @@ func TestSkillBasedToolSelection(t *testing.T) {
 		},
 		"readonly": &skill.Skill{
 			Name:         "readonly",
-			AllowedTools: []string{"read_file", "glob", "grep"},
+			AllowedTools: []string{"Read", "Glob", "Grep"},
 			Content:      "Read-only skill",
 		},
 	}
@@ -66,7 +66,7 @@ func TestSkillBasedToolSelection(t *testing.T) {
 		tools := toolManager.GetTools()
 
 		// Should have tools from all managers
-		requiredTools := []string{"todo_write", "read_file", "write_file", "bash", "glob", "grep", "web_fetch", "web_fetch_block"}
+		requiredTools := []string{"TodoWrite", "Read", "Write", "Bash", "Glob", "Grep", "WebFetch", "WebFetchBlock"}
 		for _, toolName := range requiredTools {
 			if _, exists := tools[message.ToolName(toolName)]; !exists {
 				t.Errorf("code skill: expected tool '%s' but didn't find it", toolName)
@@ -83,15 +83,15 @@ func TestSkillBasedToolSelection(t *testing.T) {
 			t.Errorf("readonly skill: expected 3 tools, got %d", len(tools))
 		}
 
-		// Should have read_file, glob, grep
-		for _, name := range []string{"read_file", "glob", "grep"} {
+		// Should have Read, Glob, Grep
+		for _, name := range []string{"Read", "Glob", "Grep"} {
 			if _, exists := tools[message.ToolName(name)]; !exists {
 				t.Errorf("readonly skill: expected tool '%s'", name)
 			}
 		}
 
-		// Should NOT have write_file, bash, etc.
-		for _, name := range []string{"write_file", "bash", "todo_write"} {
+		// Should NOT have Write, Bash, etc.
+		for _, name := range []string{"Write", "Bash", "TodoWrite"} {
 			if _, exists := tools[message.ToolName(name)]; exists {
 				t.Errorf("readonly skill: should not have tool '%s'", name)
 			}
@@ -112,18 +112,18 @@ func TestCompositeToolManager_Agent(t *testing.T) {
 	composite := tool.NewCompositeToolManager(todoManager, fsManager, bashManager)
 	tools := composite.GetTools()
 
-	if _, exists := tools[message.ToolName("bash")]; !exists {
-		t.Error("Expected to find bash tool from bash manager")
+	if _, exists := tools[message.ToolName("Bash")]; !exists {
+		t.Error("Expected to find Bash tool from bash manager")
 	}
-	if _, exists := tools[message.ToolName("read_file")]; !exists {
-		t.Error("Expected to find read_file tool from filesystem manager")
+	if _, exists := tools[message.ToolName("Read")]; !exists {
+		t.Error("Expected to find Read tool from filesystem manager")
 	}
-	if _, exists := tools[message.ToolName("todo_write")]; !exists {
-		t.Error("Expected to find todo_write tool from todo manager")
+	if _, exists := tools[message.ToolName("TodoWrite")]; !exists {
+		t.Error("Expected to find TodoWrite tool from todo manager")
 	}
-	if tool, exists := composite.GetTool(message.ToolName("read_file")); !exists {
-		t.Error("Expected to be able to get read_file tool")
+	if tool, exists := composite.GetTool(message.ToolName("Read")); !exists {
+		t.Error("Expected to be able to get Read tool")
 	} else if tool == nil {
-		t.Error("Got nil tool when expecting read_file")
+		t.Error("Got nil tool when expecting Read")
 	}
 }

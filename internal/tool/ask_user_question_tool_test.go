@@ -10,7 +10,7 @@ import (
 
 func TestAskUserQuestion_NoHandler(t *testing.T) {
 	m := NewAskUserQuestionToolManager()
-	result, err := m.CallTool(context.Background(), "ask_user_question",
+	result, err := m.CallTool(context.Background(), "AskUserQuestion",
 		message.ToolArgumentValues{"question": "What is your name?"})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -32,7 +32,7 @@ func TestAskUserQuestion_FreeFormAnswer(t *testing.T) {
 		return "Alice", nil
 	})
 
-	result, err := m.CallTool(context.Background(), "ask_user_question",
+	result, err := m.CallTool(context.Background(), "AskUserQuestion",
 		message.ToolArgumentValues{"question": "What is your name?"})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -54,7 +54,7 @@ func TestAskUserQuestion_OptionsPassedThrough(t *testing.T) {
 	})
 
 	// Options as []interface{} (as JSON unmarshalling produces)
-	result, err := m.CallTool(context.Background(), "ask_user_question",
+	result, err := m.CallTool(context.Background(), "AskUserQuestion",
 		message.ToolArgumentValues{
 			"question": "Pick one",
 			"options":  []interface{}{"A", "B", "C"},
@@ -79,7 +79,7 @@ func TestAskUserQuestion_HandlerError(t *testing.T) {
 		return "", errors.New("cancelled by user")
 	})
 
-	result, err := m.CallTool(context.Background(), "ask_user_question",
+	result, err := m.CallTool(context.Background(), "AskUserQuestion",
 		message.ToolArgumentValues{"question": "Anything?"})
 	if err != nil {
 		t.Fatalf("unexpected hard error: %v", err)
@@ -95,7 +95,7 @@ func TestAskUserQuestion_MissingQuestion(t *testing.T) {
 		return "ok", nil
 	})
 
-	result, err := m.CallTool(context.Background(), "ask_user_question",
+	result, err := m.CallTool(context.Background(), "AskUserQuestion",
 		message.ToolArgumentValues{})
 	if err != nil {
 		t.Fatalf("unexpected hard error: %v", err)
@@ -108,11 +108,11 @@ func TestAskUserQuestion_MissingQuestion(t *testing.T) {
 func TestAskUserQuestion_ToolMetadata(t *testing.T) {
 	m := NewAskUserQuestionToolManager()
 	tools := m.GetTools()
-	tool, ok := tools["ask_user_question"]
+	tool, ok := tools["AskUserQuestion"]
 	if !ok {
-		t.Fatal("ask_user_question tool not registered")
+		t.Fatal("AskUserQuestion tool not registered")
 	}
-	if tool.Name() != "ask_user_question" {
+	if tool.Name() != "AskUserQuestion" {
 		t.Errorf("unexpected name: %s", tool.Name())
 	}
 	if string(tool.Description()) == "" {

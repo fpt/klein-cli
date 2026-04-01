@@ -11,7 +11,7 @@ import (
 	"github.com/fpt/klein-cli/pkg/message"
 )
 
-// SkillToolManager provides the read_skill tool for proactive skill discovery.
+// SkillToolManager provides the ReadSkill tool for proactive skill discovery.
 type SkillToolManager struct {
 	tools      map[message.ToolName]message.Tool
 	skills     skill.SkillMap
@@ -30,7 +30,7 @@ func NewSkillToolManager(skills skill.SkillMap, workingDir string) *SkillToolMan
 }
 
 func (m *SkillToolManager) registerTools() {
-	m.RegisterTool("read_skill",
+	m.RegisterTool("ReadSkill",
 		"Read the full content of a skill by name. Returns the skill's instructions and guidelines. Use this to understand what a skill does before following its instructions.",
 		[]message.ToolArgument{
 			{Name: "name", Description: "Name of the skill to read (case-insensitive)", Required: true, Type: "string"},

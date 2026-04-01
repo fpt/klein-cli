@@ -67,7 +67,7 @@ func main() {
 	var serve = flag.Bool("serve", false, "Start Connect-gRPC server mode for gateway integration")
 	var serveAddr = flag.String("serve-addr", ":50051", "Connect server listen address")
 	var sessionsDir = flag.String("sessions-dir", "", "Directory for per-session persistence files (default: ~/.klein/claw/sessions/)")
-	var memoryDir = flag.String("memory-dir", "", "Directory for memory files used by memory_search/memory_get tools (e.g., ~/.klein/claw/memory/)")
+	var memoryDir = flag.String("memory-dir", "", "Directory for memory files used by MemorySearch/MemoryGet tools (e.g., ~/.klein/claw/memory/)")
 	var help = flag.Bool("h", false, "Show this help message")
 	var helpLong = flag.Bool("help", false, "Show this help message")
 

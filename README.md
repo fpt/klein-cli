@@ -134,9 +134,9 @@ Rules that survive across sessions can be stored in JSON files at three levels (
 ```json
 {
   "rules": [
-    {"tool": "write_file", "pattern": "src/**",    "behavior": "allow"},
-    {"tool": "bash",       "pattern": "go *",      "behavior": "allow"},
-    {"tool": "bash",       "pattern": "rm -rf *",  "behavior": "deny"}
+    {"tool": "Write", "pattern": "src/**",    "behavior": "allow"},
+    {"tool": "Bash",  "pattern": "go *",      "behavior": "allow"},
+    {"tool": "Bash",  "pattern": "rm -rf *",  "behavior": "deny"}
   ]
 }
 ```

@@ -12,10 +12,10 @@ func TestInferPattern_FileInSubdir(t *testing.T) {
 	cases := []struct {
 		tool, arg, want string
 	}{
-		{"write_file", "src/foo/bar.go", "src/**"},
-		{"edit_file", "pkg/agent/react/react.go", "pkg/**"},
-		{"multi_edit", "internal/tool/task.go", "internal/**"},
-		{"write_file", "./src/main.go", "src/**"}, // strip leading ./
+		{"Write", "src/foo/bar.go", "src/**"},
+		{"Edit", "pkg/agent/react/react.go", "pkg/**"},
+		{"MultiEdit", "internal/tool/task.go", "internal/**"},
+		{"Write", "./src/main.go", "src/**"}, // strip leading ./
 	}
 	for _, c := range cases {
 		got := inferPattern(c.tool, c.arg)
@@ -34,9 +34,9 @@ func TestInferPattern_RootLevelFile(t *testing.T) {
 		{"Makefile", "*"}, // no extension
 	}
 	for _, c := range cases {
-		got := inferPattern("write_file", c.arg)
+		got := inferPattern("Write", c.arg)
 		if got != c.want {
-			t.Errorf("inferPattern(write_file, %q) = %q, want %q", c.arg, got, c.want)
+			t.Errorf("inferPattern(Write, %q) = %q, want %q", c.arg, got, c.want)
 		}
 	}
 }
@@ -52,15 +52,15 @@ func TestInferPattern_Bash(t *testing.T) {
 		{"ls", "ls *"},
 	}
 	for _, c := range cases {
-		got := inferPattern("bash", c.arg)
+		got := inferPattern("Bash", c.arg)
 		if got != c.want {
-			t.Errorf("inferPattern(bash, %q) = %q, want %q", c.arg, got, c.want)
+			t.Errorf("inferPattern(Bash, %q) = %q, want %q", c.arg, got, c.want)
 		}
 	}
 }
 
 func TestInferPattern_EmptyArg(t *testing.T) {
-	for _, tool := range []string{"write_file", "bash", "multi_edit"} {
+	for _, tool := range []string{"Write", "Bash", "MultiEdit"} {
 		if got := inferPattern(tool, ""); got != "*" {
 			t.Errorf("inferPattern(%q, \"\") = %q, want *", tool, got)
 		}
@@ -79,11 +79,11 @@ func TestSessionRules_AllowOverridesPrompt(t *testing.T) {
 	// Build a RuleSet as session rules would look after "Yes, for src/**"
 	rs := &permission.RuleSet{
 		Rules: []permission.PermissionRule{
-			{Tool: "write_file", Pattern: "src/**", Behavior: permission.RuleAllow},
+			{Tool: "Write", Pattern: "src/**", Behavior: permission.RuleAllow},
 		},
 	}
 
-	behavior, matched := rs.Check("write_file", "src/main.go")
+	behavior, matched := rs.Check("Write", "src/main.go")
 	if !matched {
 		t.Fatal("expected match for src/main.go against src/**")
 	}
@@ -92,7 +92,7 @@ func TestSessionRules_AllowOverridesPrompt(t *testing.T) {
 	}
 
 	// A path outside src/ should not match
-	_, matched2 := rs.Check("write_file", "other/main.go")
+	_, matched2 := rs.Check("Write", "other/main.go")
 	if matched2 {
 		t.Error("src/** should not match other/main.go")
 	}
@@ -102,26 +102,26 @@ func TestSessionRules_BlanketAllow(t *testing.T) {
 	// "Always (this session)" adds empty-pattern rule for the specific tool
 	rs := &permission.RuleSet{
 		Rules: []permission.PermissionRule{
-			{Tool: "write_file", Pattern: "", Behavior: permission.RuleAllow},
+			{Tool: "Write", Pattern: "", Behavior: permission.RuleAllow},
 		},
 	}
 
 	for _, path := range []string{"src/main.go", "other/file.txt", "Makefile"} {
-		b, ok := rs.Check("write_file", path)
+		b, ok := rs.Check("Write", path)
 		if !ok || b != permission.RuleAllow {
 			t.Errorf("blanket allow should match %q", path)
 		}
 	}
 	// A different tool must NOT match
-	_, ok := rs.Check("bash", "rm -rf /")
+	_, ok := rs.Check("Bash", "rm -rf /")
 	if ok {
-		t.Error("write_file blanket allow must not cover bash")
+		t.Error("Write blanket allow must not cover bash")
 	}
 }
 
 func TestNewSessionRules_NonInteractive(t *testing.T) {
 	rs := newSessionRules(false)
-	for _, tool := range []string{"write_file", "edit_file", "multi_edit", "bash"} {
+	for _, tool := range []string{"Write", "Edit", "MultiEdit", "Bash"} {
 		b, ok := rs.Check(tool, "anything")
 		if !ok || b != permission.RuleAllow {
 			t.Errorf("non-interactive: tool %q should be pre-approved", tool)
@@ -140,12 +140,12 @@ func TestSessionRules_ToolScoped(t *testing.T) {
 	// Each "Always (this session)" adds a rule for exactly the pending tool
 	rs := &permission.RuleSet{
 		Rules: []permission.PermissionRule{
-			{Tool: "write_file", Pattern: "", Behavior: permission.RuleAllow},
-			// bash NOT added
+			{Tool: "Write", Pattern: "", Behavior: permission.RuleAllow},
+			// Bash NOT added
 		},
 	}
-	_, bashMatched := rs.Check("bash", "go build ./...")
+	_, bashMatched := rs.Check("Bash", "go build ./...")
 	if bashMatched {
-		t.Error("bash should still require approval when only write_file was blanket-approved")
+		t.Error("bash should still require approval when only Write was blanket-approved")
 	}
 }

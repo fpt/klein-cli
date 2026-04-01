@@ -88,7 +88,7 @@ func TestMatchPattern_StandardGlob(t *testing.T) {
 
 func TestRuleSet_Check_NoRules(t *testing.T) {
 	rs := &RuleSet{}
-	_, matched := rs.Check("write_file", "src/main.go")
+	_, matched := rs.Check("Write", "src/main.go")
 	if matched {
 		t.Error("empty rule set should not match")
 	}
@@ -96,7 +96,7 @@ func TestRuleSet_Check_NoRules(t *testing.T) {
 
 func TestRuleSet_Check_NilRuleSet(t *testing.T) {
 	var rs *RuleSet
-	_, matched := rs.Check("write_file", "src/main.go")
+	_, matched := rs.Check("Write", "src/main.go")
 	if matched {
 		t.Error("nil rule set should not match")
 	}
@@ -104,9 +104,9 @@ func TestRuleSet_Check_NilRuleSet(t *testing.T) {
 
 func TestRuleSet_Check_ToolMismatch(t *testing.T) {
 	rs := &RuleSet{Rules: []PermissionRule{
-		{Tool: "bash", Pattern: "", Behavior: RuleAllow},
+		{Tool: "Bash", Pattern: "", Behavior: RuleAllow},
 	}}
-	_, matched := rs.Check("write_file", "src/main.go")
+	_, matched := rs.Check("Write", "src/main.go")
 	if matched {
 		t.Error("tool mismatch should not match")
 	}
@@ -114,9 +114,9 @@ func TestRuleSet_Check_ToolMismatch(t *testing.T) {
 
 func TestRuleSet_Check_AllowRule(t *testing.T) {
 	rs := &RuleSet{Rules: []PermissionRule{
-		{Tool: "write_file", Pattern: "src/**", Behavior: RuleAllow},
+		{Tool: "Write", Pattern: "src/**", Behavior: RuleAllow},
 	}}
-	behavior, matched := rs.Check("write_file", "src/main.go")
+	behavior, matched := rs.Check("Write", "src/main.go")
 	if !matched {
 		t.Fatal("expected match")
 	}
@@ -127,9 +127,9 @@ func TestRuleSet_Check_AllowRule(t *testing.T) {
 
 func TestRuleSet_Check_DenyRule(t *testing.T) {
 	rs := &RuleSet{Rules: []PermissionRule{
-		{Tool: "bash", Pattern: "rm -rf *", Behavior: RuleDeny},
+		{Tool: "Bash", Pattern: "rm -rf *", Behavior: RuleDeny},
 	}}
-	behavior, matched := rs.Check("bash", "rm -rf /")
+	behavior, matched := rs.Check("Bash", "rm -rf /")
 	if !matched {
 		t.Fatal("expected match")
 	}
@@ -141,10 +141,10 @@ func TestRuleSet_Check_DenyRule(t *testing.T) {
 func TestRuleSet_Check_FirstMatchWins(t *testing.T) {
 	// deny comes first in the list → should win even though allow follows
 	rs := &RuleSet{Rules: []PermissionRule{
-		{Tool: "write_file", Pattern: "src/**", Behavior: RuleDeny},
-		{Tool: "write_file", Pattern: "src/**", Behavior: RuleAllow},
+		{Tool: "Write", Pattern: "src/**", Behavior: RuleDeny},
+		{Tool: "Write", Pattern: "src/**", Behavior: RuleAllow},
 	}}
-	behavior, matched := rs.Check("write_file", "src/main.go")
+	behavior, matched := rs.Check("Write", "src/main.go")
 	if !matched {
 		t.Fatal("expected match")
 	}
@@ -155,10 +155,10 @@ func TestRuleSet_Check_FirstMatchWins(t *testing.T) {
 
 func TestRuleSet_Check_EmptyPattern_MatchesAll(t *testing.T) {
 	rs := &RuleSet{Rules: []PermissionRule{
-		{Tool: "write_file", Pattern: "", Behavior: RuleAllow},
+		{Tool: "Write", Pattern: "", Behavior: RuleAllow},
 	}}
 	for _, path := range []string{"anything.go", "deep/nested/file.txt"} {
-		b, ok := rs.Check("write_file", path)
+		b, ok := rs.Check("Write", path)
 		if !ok || b != RuleAllow {
 			t.Errorf("empty pattern should match %q", path)
 		}
@@ -192,17 +192,17 @@ func TestLoadForProject_PriorityOrder(t *testing.T) {
 	dir := t.TempDir()
 	kleinDir := filepath.Join(dir, ".klein")
 
-	// Project file: deny write_file in src/
+	// Project file: deny Write in src/
 	writeJSON(t, filepath.Join(kleinDir, "permissions.json"), `{
-		"rules": [{"tool":"write_file","pattern":"src/**","behavior":"deny"}]
+		"rules": [{"tool":"Write","pattern":"src/**","behavior":"deny"}]
 	}`)
-	// Local file: allow write_file in src/ (overrides project deny)
+	// Local file: allow Write in src/ (overrides project deny)
 	writeJSON(t, filepath.Join(kleinDir, "permissions.local.json"), `{
-		"rules": [{"tool":"write_file","pattern":"src/**","behavior":"allow"}]
+		"rules": [{"tool":"Write","pattern":"src/**","behavior":"allow"}]
 	}`)
 
 	rs := LoadForProject(dir)
-	behavior, matched := rs.Check("write_file", "src/main.go")
+	behavior, matched := rs.Check("Write", "src/main.go")
 	if !matched {
 		t.Fatal("expected a match")
 	}
@@ -227,10 +227,10 @@ func TestLoadForProject_MergesAllFiles(t *testing.T) {
 	kleinDir := filepath.Join(dir, ".klein")
 
 	writeJSON(t, filepath.Join(kleinDir, "permissions.json"), `{
-		"rules": [{"tool":"bash","pattern":"go build *","behavior":"allow"}]
+		"rules": [{"tool":"Bash","pattern":"go build *","behavior":"allow"}]
 	}`)
 	writeJSON(t, filepath.Join(kleinDir, "permissions.local.json"), `{
-		"rules": [{"tool":"write_file","pattern":"src/**","behavior":"allow"}]
+		"rules": [{"tool":"Write","pattern":"src/**","behavior":"allow"}]
 	}`)
 
 	rs := LoadForProject(dir)
@@ -238,10 +238,10 @@ func TestLoadForProject_MergesAllFiles(t *testing.T) {
 		t.Errorf("expected 2 merged rules, got %d", len(rs.Rules))
 	}
 	// Both tools should be findable.
-	if b, ok := rs.Check("bash", "go build ./..."); !ok || b != RuleAllow {
-		t.Error("bash rule not found after merge")
+	if b, ok := rs.Check("Bash", "go build ./..."); !ok || b != RuleAllow {
+		t.Error("Bash rule not found after merge")
 	}
-	if b, ok := rs.Check("write_file", "src/main.go"); !ok || b != RuleAllow {
-		t.Error("write_file rule not found after merge")
+	if b, ok := rs.Check("Write", "src/main.go"); !ok || b != RuleAllow {
+		t.Error("Write rule not found after merge")
 	}
 }

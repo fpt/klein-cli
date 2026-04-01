@@ -279,17 +279,17 @@ NOTE: Thinking is not a capability. It's a behavior of model.
 **Universal Tools (always available):**
 - **Todo Management**: Create, update, delete, and manage project todos
 - **Secure Filesystem**: Read, write, edit files with read→write semantics and security controls
-  - `read_file` - Read file contents (with timestamp tracking)
-  - `write_file` - Write content to files (requires prior read, validates timestamps)
-  - `list_directory` - List directory contents (allowlist restricted)
-  - `edit_file` - Edit files with exact string replacement
+  - `Read` - Read file contents (with timestamp tracking)
+  - `Write` - Write content to files (requires prior read, validates timestamps)
+  - `LS` - List directory contents (allowlist restricted)
+  - `Edit` - Edit files with exact string replacement
 - **Bash Execution**: Run shell commands with working directory and timeout controls
 
 **Specialized Tools (skill-specific):**
 - **Web Tools**: Web research and content fetching (code, respond skills)
-  - `fetch_web` - HTML to markdown conversion for text analysis
-  - `wikipedia_search` - Wikipedia content search
-  - `duckduckgo_search` - Web search capabilities
+  - `WebFetch` - HTML to markdown conversion for text analysis
+  - `WikipediaSearch` - Wikipedia content search
+  - `WebSearch` - Web search capabilities
 - **MCP Tools**: External tool server integration (when available)
   - `tree_dir`, `get_github_content`, `search_local_files`, etc.
 
@@ -441,13 +441,13 @@ Each skill is defined in a `SKILL.md` file using YAML frontmatter for metadata a
 name: code
 description: Comprehensive coding assistant for all development tasks
 allowed-tools:
-  - read_file
-  - write_file
-  - edit_file
-  - list_directory
-  - bash
-  - fetch_web
-  - duckduckgo_search
+  - Read
+  - Write
+  - Edit
+  - LS
+  - Bash
+  - WebFetch
+  - WebSearch
 argument-hint: "Describe what you want to build or change"
 user-invocable: true
 ---
@@ -514,10 +514,10 @@ mkdir -p .claude/skills/custom-analysis
 name: custom-analysis
 description: Custom analysis workflow for specialized tasks
 allowed-tools:
-  - read_file
-  - list_directory
-  - bash
-  - duckduckgo_search
+  - Read
+  - LS
+  - Bash
+  - WebSearch
 argument-hint: "Describe what you want to analyze"
 user-invocable: true
 ---

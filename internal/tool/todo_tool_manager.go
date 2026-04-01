@@ -179,7 +179,7 @@ var _ domain.ToolStateProvider = (*TodoToolManager)(nil)
 func (m *TodoToolManager) registerTodoTools() {
 	// TodoWrite - Write/update todo list
 	// Note: TodoRead removed - todos are injected into prompt context instead
-	m.RegisterTool("todo_write", "Write or update the todo list with tasks and their status. Use statuses: pending, in_progress, completed (accepts 'done' as completed). Keep ≤5 items.",
+	m.RegisterTool("TodoWrite", "Write or update the todo list with tasks and their status. Use statuses: pending, in_progress, completed (accepts 'done' as completed). Keep ≤5 items.",
 		[]message.ToolArgument{
 			{
 				Name:        "todos",
@@ -193,14 +193,14 @@ func (m *TodoToolManager) registerTodoTools() {
 
 // registerTaskTools registers small compatibility stubs for task tools
 func (m *TodoToolManager) registerTaskTools() {
-	// exit_plan_mode: acknowledge plan and signal ready
-	m.RegisterTool("exit_plan_mode", "Acknowledge plan and exit planning mode (stub).",
+	// ExitPlanMode: acknowledge plan and signal ready
+	m.RegisterTool("ExitPlanMode", "Acknowledge plan and exit planning mode (stub).",
 		[]message.ToolArgument{
 			{Name: "plan", Description: "Concise implementation plan", Required: true, Type: "string"},
 		}, m.handleExitPlanMode)
 
 	// task: sub-agent launcher (stub)
-	m.RegisterTool("task", "Launch a sub-agent (stub). Not supported; use glob/grep/read_file/web_fetch directly.",
+	m.RegisterTool("task", "Launch a sub-agent (stub). Not supported; use Glob/Grep/Read/WebFetch directly.",
 		[]message.ToolArgument{
 			{Name: "description", Description: "Short task description", Required: true, Type: "string"},
 			{Name: "prompt", Description: "Detailed task for the agent", Required: true, Type: "string"},
@@ -220,9 +220,9 @@ func (m *TodoToolManager) handleExitPlanMode(ctx context.Context, args message.T
 // handleTaskStub informs that the Task sub-agent is not supported
 func (m *TodoToolManager) handleTaskStub(ctx context.Context, args message.ToolArgumentValues) (message.ToolResult, error) {
 	desc, _ := args["description"].(string)
-	msg := "Task sub-agent is not supported in this build. Use glob/grep to search, read_file/list_directory/edit_file/write_file for files, and web_fetch for URLs."
+	msg := "Task sub-agent is not supported in this build. Use Glob/Grep to search, Read/LS/Edit/Write for files, and WebFetch for URLs."
 	if desc != "" {
-		msg = fmt.Sprintf("Task not supported. Description: %q. Use glob/grep/read_file/web_fetch directly.", desc)
+		msg = fmt.Sprintf("Task not supported. Description: %q. Use Glob/Grep/Read/WebFetch directly.", desc)
 	}
 	return message.NewToolResultText(msg), nil
 }
@@ -372,7 +372,7 @@ func (m *TodoToolManager) GetTodosForPrompt() string {
 		result += fmt.Sprintf("## %s (%d items):\n", status, len(items))
 		for _, item := range items {
 			// Use raw API format for LLM consumption (not display format with emojis)
-			// This ensures LLM uses correct format when calling todo_write tool
+			// This ensures LLM uses correct format when calling TodoWrite tool
 			normalized := item.Status
 			if normalized == "done" {
 				normalized = "completed"

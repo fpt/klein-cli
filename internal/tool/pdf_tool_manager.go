@@ -24,12 +24,12 @@ import (
 )
 
 const (
-	pdfMaxPagesDefault    = 20      // default page cap for pdf_read
-	pdfMaxImagesPerCall   = 10      // max images returned per pdf_extract_images call
+	pdfMaxPagesDefault    = 20      // default page cap for PDFRead
+	pdfMaxImagesPerCall   = 10      // max images returned per PDFExtractImages call
 	pdfMaxTextOutputChars = 100_000 // cap text output at ~100K chars
 )
 
-// PDFToolManager provides pdf_info, pdf_read, and pdf_extract_images tools.
+// PDFToolManager provides PDFInfo, PDFRead, and PDFExtractImages tools.
 type PDFToolManager struct {
 	tools      map[message.ToolName]message.Tool
 	workingDir string
@@ -46,14 +46,14 @@ func NewPDFToolManager(workingDir string) domain.ToolManager {
 }
 
 func (m *PDFToolManager) register() {
-	m.RegisterTool("pdf_info",
+	m.RegisterTool("PDFInfo",
 		"Get PDF metadata: page count, title, author, subject, page dimensions, bookmarks. Use this first to understand a PDF before reading content.",
 		[]message.ToolArgument{
 			{Name: "path", Description: "Local file path or URL (http/https) to the PDF", Required: true, Type: "string"},
 		},
 		m.handlePDFInfo)
 
-	m.RegisterTool("pdf_read",
+	m.RegisterTool("PDFRead",
 		"Extract text content from PDF pages. Accepts local paths or URLs. Quality varies by PDF; some pages may be image-based. Capped at 20 pages per call.",
 		[]message.ToolArgument{
 			{Name: "path", Description: "Local file path or URL (http/https) to the PDF", Required: true, Type: "string"},
@@ -61,7 +61,7 @@ func (m *PDFToolManager) register() {
 		},
 		m.handlePDFRead)
 
-	m.RegisterTool("pdf_extract_images",
+	m.RegisterTool("PDFExtractImages",
 		"Extract embedded images from PDF pages and return as base64-encoded JPEG for vision analysis. Accepts local paths or URLs. Max 10 images per call.",
 		[]message.ToolArgument{
 			{Name: "path", Description: "Local file path or URL (http/https) to the PDF", Required: true, Type: "string"},
@@ -349,7 +349,7 @@ func (m *PDFToolManager) handlePDFRead(ctx context.Context, args message.ToolArg
 
 		content.WriteString(fmt.Sprintf("\n--- Page %d ---\n", pageNr))
 		if text == "" {
-			content.WriteString("[No extractable text - page may be image-based. Use pdf_extract_images to analyze.]\n")
+			content.WriteString("[No extractable text - page may be image-based. Use PDFExtractImages to analyze.]\n")
 			emptyPages++
 		} else {
 			remaining := pdfMaxTextOutputChars - totalChars
@@ -370,7 +370,7 @@ func (m *PDFToolManager) handlePDFRead(ctx context.Context, args message.ToolArg
 	header.WriteString(fmt.Sprintf("# PDF Text: %s (%d pages total)\n", filepath.Base(absPath), pageCount))
 
 	if emptyPages > 0 {
-		header.WriteString(fmt.Sprintf("NOTE: %d page(s) had no extractable text (likely image-based). Use pdf_extract_images for vision analysis.\n", emptyPages))
+		header.WriteString(fmt.Sprintf("NOTE: %d page(s) had no extractable text (likely image-based). Use PDFExtractImages for vision analysis.\n", emptyPages))
 	}
 	if poorQualityPages > 0 {
 		header.WriteString(fmt.Sprintf("NOTE: %d page(s) had poor text extraction quality (custom fonts or complex encoding).\n", poorQualityPages))

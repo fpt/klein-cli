@@ -14,7 +14,7 @@ func TestParseSkillMD_WithFrontmatter(t *testing.T) {
 	data := []byte(`---
 name: test-skill
 description: A test skill
-allowed-tools: read_file, write_file, grep
+allowed-tools: Read, Write, Grep
 argument-hint: "[filename]"
 disable-model-invocation: true
 ---
@@ -37,7 +37,7 @@ Second paragraph.
 	if len(s.AllowedTools) != 3 {
 		t.Fatalf("expected 3 allowed tools, got %d", len(s.AllowedTools))
 	}
-	if s.AllowedTools[0] != "read_file" || s.AllowedTools[1] != "write_file" || s.AllowedTools[2] != "grep" {
+	if s.AllowedTools[0] != "Read" || s.AllowedTools[1] != "Write" || s.AllowedTools[2] != "Grep" {
 		t.Errorf("unexpected allowed tools: %v", s.AllowedTools)
 	}
 	if s.ArgumentHint != "[filename]" {
@@ -238,8 +238,8 @@ func TestBuildSkillCatalog_Multiple(t *testing.T) {
 	if clawIdx >= codeIdx {
 		t.Error("expected skills to be sorted alphabetically")
 	}
-	if !strings.Contains(result, "read_skill") {
-		t.Error("expected catalog to mention read_skill tool")
+	if !strings.Contains(result, "ReadSkill") {
+		t.Error("expected catalog to mention ReadSkill tool")
 	}
 }
 
@@ -287,7 +287,7 @@ func newMockToolManager(names ...string) *mockToolManager {
 
 func TestFilteredToolManager_AllTools(t *testing.T) {
 	s := &Skill{AllowedTools: nil} // empty = all tools
-	source := newMockToolManager("read_file", "write_file", "grep")
+	source := newMockToolManager("Read", "Write", "Grep")
 	result := s.FilterTools(source)
 	if result != source {
 		t.Error("expected source manager returned directly when no allowed-tools")
@@ -295,26 +295,26 @@ func TestFilteredToolManager_AllTools(t *testing.T) {
 }
 
 func TestFilteredToolManager_SubsetTools(t *testing.T) {
-	source := newMockToolManager("read_file", "write_file", "grep", "bash")
-	fm := NewFilteredToolManager(source, []string{"read_file", "grep"})
+	source := newMockToolManager("Read", "Write", "Grep", "Bash")
+	fm := NewFilteredToolManager(source, []string{"Read", "Grep"})
 	tools := fm.GetTools()
 	if len(tools) != 2 {
 		t.Fatalf("expected 2 tools, got %d", len(tools))
 	}
-	if _, ok := tools["read_file"]; !ok {
-		t.Error("expected read_file in filtered tools")
+	if _, ok := tools["Read"]; !ok {
+		t.Error("expected Read in filtered tools")
 	}
-	if _, ok := tools["grep"]; !ok {
-		t.Error("expected grep in filtered tools")
+	if _, ok := tools["Grep"]; !ok {
+		t.Error("expected Grep in filtered tools")
 	}
-	if _, ok := tools["write_file"]; ok {
-		t.Error("write_file should not be in filtered tools")
+	if _, ok := tools["Write"]; ok {
+		t.Error("Write should not be in filtered tools")
 	}
 }
 
 func TestFilteredToolManager_UnknownToolIgnored(t *testing.T) {
-	source := newMockToolManager("read_file", "write_file")
-	fm := NewFilteredToolManager(source, []string{"read_file", "NonExistent"})
+	source := newMockToolManager("Read", "Write")
+	fm := NewFilteredToolManager(source, []string{"Read", "NonExistent"})
 	tools := fm.GetTools()
 	if len(tools) != 1 {
 		t.Fatalf("expected 1 tool, got %d", len(tools))
@@ -322,23 +322,23 @@ func TestFilteredToolManager_UnknownToolIgnored(t *testing.T) {
 }
 
 func TestFilteredToolManager_CallTool(t *testing.T) {
-	source := newMockToolManager("read_file", "write_file")
-	fm := NewFilteredToolManager(source, []string{"read_file"})
+	source := newMockToolManager("Read", "Write")
+	fm := NewFilteredToolManager(source, []string{"Read"})
 
-	result, err := fm.CallTool(context.Background(), "read_file", nil)
+	result, err := fm.CallTool(context.Background(), "Read", nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if result.Text != "called:read_file" {
+	if result.Text != "called:Read" {
 		t.Errorf("unexpected result: %q", result.Text)
 	}
 }
 
 func TestFilteredToolManager_CallToolDenied(t *testing.T) {
-	source := newMockToolManager("read_file", "write_file")
-	fm := NewFilteredToolManager(source, []string{"read_file"})
+	source := newMockToolManager("Read", "Write")
+	fm := NewFilteredToolManager(source, []string{"Read"})
 
-	result, err := fm.CallTool(context.Background(), "write_file", nil)
+	result, err := fm.CallTool(context.Background(), "Write", nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}

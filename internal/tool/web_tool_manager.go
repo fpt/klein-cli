@@ -44,26 +44,26 @@ func NewWebToolManager() domain.ToolManager {
 }
 
 func (m *WebToolManager) registerWebTools() {
-	// web_fetch — default mode returns dense text block summaries.
-	m.RegisterTool("web_fetch",
-		"Fetch a webpage and extract content. Default mode returns a summary of dense text blocks with DOM paths; use web_fetch_block to retrieve full content of specific blocks. Set mode='full' for complete markdown.",
+	// WebFetch — default mode returns dense text block summaries.
+	m.RegisterTool("WebFetch",
+		"Fetch a webpage and extract content. Default mode returns a summary of dense text blocks with DOM paths; use WebFetchBlock to retrieve full content of specific blocks. Set mode='full' for complete markdown.",
 		[]message.ToolArgument{
 			{Name: "url", Description: "URL of the webpage to fetch", Required: true, Type: "string"},
 			{Name: "mode", Description: "Extraction mode: 'blocks' (default) for block summaries, 'full' for complete markdown", Required: false, Type: "string"},
 		},
 		m.handleFetchWeb)
 
-	// web_fetch_block — retrieve full content of specific blocks from cache.
-	m.RegisterTool("web_fetch_block",
-		"Retrieve full content of specific text blocks from a previously fetched webpage. Use after web_fetch to get detailed content of interesting blocks.",
+	// WebFetchBlock — retrieve full content of specific blocks from cache.
+	m.RegisterTool("WebFetchBlock",
+		"Retrieve full content of specific text blocks from a previously fetched webpage. Use after WebFetch to get detailed content of interesting blocks.",
 		[]message.ToolArgument{
 			{Name: "url", Description: "URL of the webpage (should match a previous WebFetch call)", Required: true, Type: "string"},
 			{Name: "block_indices", Description: "Comma-separated block indices to retrieve (e.g., '1,3,5')", Required: true, Type: "string"},
 		},
 		m.handleFetchWebBlock)
 
-	// web_search (stub): declare interface compatibility; return informative message
-	m.RegisterTool("web_search", "Search the web (stub). Not implemented in this build. Provide URLs or use web_fetch with a concrete link.",
+	// WebSearch (stub): declare interface compatibility; return informative message
+	m.RegisterTool("WebSearch", "Search the web (stub). Not implemented in this build. Provide URLs or use WebFetch with a concrete link.",
 		[]message.ToolArgument{
 			{Name: "query", Description: "Search query", Required: true, Type: "string"},
 			{Name: "allowed_domains", Description: "Only include results from these domains", Required: false, Type: "array"},
@@ -132,7 +132,7 @@ func (m *WebToolManager) fetchAndParse(ctx context.Context, urlStr string) (*goq
 	// Reject non-text content types (images are handled separately in handleFetchWeb)
 	ct := resp.Header.Get("Content-Type")
 	if ct != "" && !strings.HasPrefix(ct, "text/") && !strings.Contains(ct, "html") && !strings.Contains(ct, "xml") && !strings.Contains(ct, "json") {
-		return nil, nil, fmt.Errorf("unsupported content type %q — web_fetch only handles HTML/text pages directly; binary content (PDF, images) is handled automatically by URL or content type detection", ct)
+		return nil, nil, fmt.Errorf("unsupported content type %q — WebFetch only handles HTML/text pages directly; binary content (PDF, images) is handled automatically by URL or content type detection", ct)
 	}
 
 	doc, err := goquery.NewDocumentFromReader(resp.Body)
@@ -330,13 +330,13 @@ func (m *WebToolManager) handleFetchWeb(ctx context.Context, args message.ToolAr
 		mode = "blocks"
 	}
 
-	// If URL looks like a PDF, download to temp file for pdf_read/pdf_info tools
+	// If URL looks like a PDF, download to temp file for PDFRead/PDFInfo tools
 	if isPDFURL(urlStr) {
 		filePath, size, err := m.fetchPDF(ctx, urlStr)
 		if err != nil {
 			return message.NewToolResultError(fmt.Sprintf("failed to download PDF: %v", err)), nil
 		}
-		desc := fmt.Sprintf("PDF downloaded from %s (%dKB) and saved to: %s\nUse pdf_info and pdf_read tools with this file path to extract content.", urlStr, size/1024, filePath)
+		desc := fmt.Sprintf("PDF downloaded from %s (%dKB) and saved to: %s\nUse PDFInfo and PDFRead tools with this file path to extract content.", urlStr, size/1024, filePath)
 		return message.NewToolResultText(desc), nil
 	}
 
@@ -361,7 +361,7 @@ func (m *WebToolManager) handleFetchWeb(ctx context.Context, args message.ToolAr
 				if pdfErr != nil {
 					return message.NewToolResultError(fmt.Sprintf("failed to download PDF: %v", pdfErr)), nil
 				}
-				desc := fmt.Sprintf("PDF downloaded from %s (%dKB) and saved to: %s\nUse pdf_info and pdf_read tools with this file path to extract content.", urlStr, size/1024, filePath)
+				desc := fmt.Sprintf("PDF downloaded from %s (%dKB) and saved to: %s\nUse PDFInfo and PDFRead tools with this file path to extract content.", urlStr, size/1024, filePath)
 				return message.NewToolResultText(desc), nil
 			}
 			// Image content type — download for vision analysis
@@ -543,9 +543,9 @@ func parseBlockIndices(s string) ([]int, error) {
 // handleWebSearchStub returns a compatibility message explaining unavailability
 func (m *WebToolManager) handleWebSearchStub(ctx context.Context, args message.ToolArgumentValues) (message.ToolResult, error) {
 	query, _ := args["query"].(string)
-	msg := "web_search is not supported in this build. Provide relevant URLs or documents, or use web_fetch with a specific URL."
+	msg := "WebSearch is not supported in this build. Provide relevant URLs or documents, or use WebFetch with a specific URL."
 	if query != "" {
-		msg = fmt.Sprintf("web_search not available. Query: %q. Please supply URLs, or use web_fetch.", query)
+		msg = fmt.Sprintf("WebSearch not available. Query: %q. Please supply URLs, or use WebFetch.", query)
 	}
 	return message.NewToolResultText(msg), nil
 }

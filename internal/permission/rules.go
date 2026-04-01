@@ -138,6 +138,22 @@ func userPermissionsPath() string {
 	return filepath.Join(homeDir, ".klein", "permissions.json")
 }
 
+// AppendToProjectFile appends rule to {workingDir}/.klein/permissions.json,
+// creating the file (and directory) if necessary.
+func AppendToProjectFile(workingDir string, rule PermissionRule) error {
+	path := filepath.Join(workingDir, ".klein", "permissions.json")
+	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
+		return err
+	}
+	existing := loadFileSilent(path)
+	existing = append(existing, rule)
+	data, err := json.MarshalIndent(ruleFile{Rules: existing}, "", "  ")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(path, append(data, '\n'), 0600)
+}
+
 // loadFileSilent loads rules from a JSON file, returning nil on any error.
 func loadFileSilent(path string) []PermissionRule {
 	if path == "" {

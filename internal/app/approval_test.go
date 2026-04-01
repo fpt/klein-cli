@@ -76,7 +76,7 @@ func TestInferPattern_UnknownTool(t *testing.T) {
 // ---- session rules precedence ----
 
 func TestSessionRules_AllowOverridesPrompt(t *testing.T) {
-	// Build a RuleSet as session rules would look after "Yes, for src/**"
+	// Build a RuleSet as permRules would look after "Always (save to project)" for src/**
 	rs := &permission.RuleSet{
 		Rules: []permission.PermissionRule{
 			{Tool: "Write", Pattern: "src/**", Behavior: permission.RuleAllow},
@@ -99,7 +99,7 @@ func TestSessionRules_AllowOverridesPrompt(t *testing.T) {
 }
 
 func TestSessionRules_BlanketAllow(t *testing.T) {
-	// "Always (this session)" adds empty-pattern rule for the specific tool
+	// "Always (save to project)" with empty pattern covers the specific tool broadly
 	rs := &permission.RuleSet{
 		Rules: []permission.PermissionRule{
 			{Tool: "Write", Pattern: "", Behavior: permission.RuleAllow},
@@ -137,7 +137,7 @@ func TestNewSessionRules_Interactive(t *testing.T) {
 }
 
 func TestSessionRules_ToolScoped(t *testing.T) {
-	// Each "Always (this session)" adds a rule for exactly the pending tool
+	// A saved rule covers exactly the tool it was created for
 	rs := &permission.RuleSet{
 		Rules: []permission.PermissionRule{
 			{Tool: "Write", Pattern: "", Behavior: permission.RuleAllow},

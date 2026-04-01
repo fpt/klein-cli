@@ -245,3 +245,55 @@ func TestLoadForProject_MergesAllFiles(t *testing.T) {
 		t.Error("Write rule not found after merge")
 	}
 }
+
+// ---- AppendToProjectFile ----
+
+func TestAppendToProjectFile_CreatesFile(t *testing.T) {
+	dir := t.TempDir()
+	rule := PermissionRule{Tool: "Write", Pattern: "src/**", Behavior: RuleAllow}
+	if err := AppendToProjectFile(dir, rule); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	rs := LoadForProject(dir)
+	if b, ok := rs.Check("Write", "src/main.go"); !ok || b != RuleAllow {
+		t.Error("saved rule not found after reload")
+	}
+}
+
+func TestAppendToProjectFile_Accumulates(t *testing.T) {
+	dir := t.TempDir()
+	r1 := PermissionRule{Tool: "Write", Pattern: "src/**", Behavior: RuleAllow}
+	r2 := PermissionRule{Tool: "Bash", Pattern: "go build *", Behavior: RuleAllow}
+	if err := AppendToProjectFile(dir, r1); err != nil {
+		t.Fatalf("first append: %v", err)
+	}
+	if err := AppendToProjectFile(dir, r2); err != nil {
+		t.Fatalf("second append: %v", err)
+	}
+	rs := LoadForProject(dir)
+	if len(rs.Rules) != 2 {
+		t.Errorf("expected 2 rules, got %d", len(rs.Rules))
+	}
+}
+
+func TestAppendToProjectFile_ExistingFilePreserved(t *testing.T) {
+	dir := t.TempDir()
+	kleinDir := filepath.Join(dir, ".klein")
+	writeJSON(t, filepath.Join(kleinDir, "permissions.json"), `{
+		"rules": [{"tool":"Edit","pattern":"","behavior":"allow"}]
+	}`)
+	rule := PermissionRule{Tool: "Write", Pattern: "src/**", Behavior: RuleAllow}
+	if err := AppendToProjectFile(dir, rule); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	rs := LoadForProject(dir)
+	if len(rs.Rules) != 2 {
+		t.Errorf("expected 2 rules after append, got %d", len(rs.Rules))
+	}
+	if _, ok := rs.Check("Edit", "any"); !ok {
+		t.Error("original Edit rule was lost")
+	}
+	if _, ok := rs.Check("Write", "src/foo.go"); !ok {
+		t.Error("new Write rule not found")
+	}
+}

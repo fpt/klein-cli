@@ -155,6 +155,27 @@ npm install, npm run, npm test
 
 Permission rules control which tool calls are automatically allowed or blocked, without prompting.
 
+### Interactive approval dialog
+
+When a destructive tool call (`Write`, `Edit`, `MultiEdit`, `Bash`) requires approval, klein shows:
+
+```
+> Proceed with this action?
+  Yes
+  Always (save to project)
+  No
+```
+
+| Choice | Effect |
+|--------|--------|
+| **Yes** | Allow this one call |
+| **Always (save to project)** | Append an allow rule to `.klein/permissions.json` (persists across sessions); also takes effect immediately for the rest of the current session |
+| **No** | Cancel the tool call |
+
+The pattern saved by "Always (save to project)" is inferred from the argument:
+- File tools: first path segment + `/**` (e.g. `src/foo/bar.go` → `src/**`)
+- Bash: first two words + ` *` (e.g. `go build ./...` → `go build *`)
+
 ### File locations (merged in priority order, lowest first)
 
 | File | Scope | Notes |

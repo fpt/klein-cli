@@ -413,8 +413,7 @@ func (a *Agent) handleApprovalWorkflow(ctx context.Context, reactClient domain.R
 	fmt.Fprintf(writer, "\nAbout to write file(s):\n")
 	fmt.Fprintf(writer, "%s\n\n", lastMessage.TruncatedString())
 
-	scopedLabel := fmt.Sprintf("Yes, for %s", inferPattern(toolName, arg))
-	items := []string{"Yes", scopedLabel, "Always (this session)", "No"}
+	items := []string{"Yes", "Always (save to project)", "No"}
 
 	prompt := promptui.Select{
 		Label: "Proceed with this action?",
@@ -438,22 +437,17 @@ func (a *Agent) handleApprovalWorkflow(ctx context.Context, reactClient domain.R
 	case "Yes":
 		fmt.Fprintf(writer, "Proceeding...\n\n")
 		return reactClient.Resume(ctx)
-	case scopedLabel:
+	case "Always (save to project)":
 		pattern := inferPattern(toolName, arg)
-		a.sessionRules.Rules = append(a.sessionRules.Rules, permission.PermissionRule{
-			Tool:     toolName,
-			Pattern:  pattern,
-			Behavior: permission.RuleAllow,
-		})
-		fmt.Fprintf(writer, "Proceeding (session rule added: %s %s)...\n\n", toolName, pattern)
-		return reactClient.Resume(ctx)
-	case "Always (this session)":
-		a.sessionRules.Rules = append(a.sessionRules.Rules, permission.PermissionRule{
-			Tool:     toolName,
-			Pattern:  "",
-			Behavior: permission.RuleAllow,
-		})
-		fmt.Fprintf(writer, "Proceeding (all future %s calls approved this session)...\n\n", toolName)
+		rule := permission.PermissionRule{Tool: toolName, Pattern: pattern, Behavior: permission.RuleAllow}
+		if saveErr := permission.AppendToProjectFile(a.workingDir, rule); saveErr != nil {
+			fmt.Fprintf(writer, "Warning: could not save rule: %v\n", saveErr)
+		} else {
+			fmt.Fprintf(writer, "Rule saved to .klein/permissions.json (%s %s).\n", toolName, pattern)
+		}
+		// Also add to in-memory permRules so subsequent calls in this session are covered.
+		a.permRules.Rules = append([]permission.PermissionRule{rule}, a.permRules.Rules...)
+		fmt.Fprintf(writer, "Proceeding...\n\n")
 		return reactClient.Resume(ctx)
 	case "No":
 		fmt.Fprintf(writer, "Cancelled.\n")

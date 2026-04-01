@@ -179,7 +179,15 @@ func (m *BashToolManager) handleBash(ctx context.Context, args message.ToolArgum
 		}
 	}
 
-	// Security validation - prevent dangerous commands
+	// §6.4 Injection detection — before whitelist/approval.
+	if blocked := checkInjection(command); blocked != nil {
+		return *blocked, nil
+	}
+	// §6.5 Hardcoded deny rules — cannot be overridden by configuration.
+	if blocked := checkBuiltinDeny(command); blocked != nil {
+		return *blocked, nil
+	}
+	// Remaining lightweight validation.
 	if err := m.validateCommand(command); err != nil {
 		return message.NewToolResultError(err.Error()), nil
 	}
@@ -197,49 +205,27 @@ func (m *BashToolManager) handleBash(ctx context.Context, args message.ToolArgum
 	return message.NewToolResultText(result), nil
 }
 
-// validateCommand performs security validation on commands
+// validateCommand performs lightweight validation after injection/deny checks.
 func (m *BashToolManager) validateCommand(command string) error {
-	// Remove leading/trailing whitespace
 	command = strings.TrimSpace(command)
-
 	if command == "" {
 		return fmt.Errorf("command cannot be empty")
 	}
 
-	// Block dangerous commands
-	dangerousCommands := []string{
-		"rm -rf /",
+	// Block additional destructive patterns not covered by builtinDenyRules.
+	additional := []string{
 		"sudo rm",
 		"mkfs",
 		"dd if=",
-		":(){ :|:& };:", // Fork bomb
 		"chmod -R 777 /",
 		"> /dev/sda",
 	}
-
-	commandLower := strings.ToLower(command)
-	for _, dangerous := range dangerousCommands {
-		if strings.Contains(commandLower, dangerous) {
-			return fmt.Errorf("dangerous command blocked: %s", dangerous)
+	lower := strings.ToLower(command)
+	for _, pattern := range additional {
+		if strings.Contains(lower, pattern) {
+			return fmt.Errorf("SECURITY: Command blocked — dangerous pattern: %s", pattern)
 		}
 	}
-
-	// Block commands that try to modify system files
-	if strings.Contains(commandLower, "/etc/") ||
-		strings.Contains(commandLower, "/bin/") ||
-		strings.Contains(commandLower, "/sbin/") ||
-		strings.Contains(commandLower, "/usr/bin/") {
-		// Allow read operations
-		if !strings.HasPrefix(commandLower, "cat ") &&
-			!strings.HasPrefix(commandLower, "less ") &&
-			!strings.HasPrefix(commandLower, "head ") &&
-			!strings.HasPrefix(commandLower, "tail ") &&
-			!strings.HasPrefix(commandLower, "grep ") &&
-			!strings.HasPrefix(commandLower, "ls ") {
-			return fmt.Errorf("modifying system directories is not allowed")
-		}
-	}
-
 	return nil
 }
 

@@ -125,6 +125,20 @@ func (c *UserConfig) GetProjectHistoryFile(projectPath string) (string, error) {
 	return filepath.Join(projectDir, "history.txt"), nil
 }
 
+// GetProjectMemoryDir returns the memory directory path for a specific project.
+// Creates $HOME/.klein/projects/{project-hash}/memory/ if it doesn't exist.
+func (c *UserConfig) GetProjectMemoryDir(projectPath string) (string, error) {
+	projectDir, err := c.GetProjectDataDir(projectPath)
+	if err != nil {
+		return "", err
+	}
+	memoryDir := filepath.Join(projectDir, "memory")
+	if err := os.MkdirAll(memoryDir, 0755); err != nil {
+		return "", fmt.Errorf("failed to create memory directory: %w", err)
+	}
+	return memoryDir, nil
+}
+
 // generateProjectHash creates a safe directory name from a project path
 func generateProjectHash(projectPath string) string {
 	// Claude Code uses full path with slashes replaced by dashes

@@ -57,6 +57,7 @@ type Agent struct {
 	allowedToolsOverride   []string            // CLI override for skill's allowed-tools
 	externalEventHandler   events.EventHandler // optional: forward events to external consumers (e.g., Connect server)
 	recentlyReadFiles      []string            // up to 5 most recently read unique file paths
+	memoryDir              string              // $HOME/.klein/projects/<hash>/memory/ (interactive mode only)
 }
 
 // WorkingDir returns the agent's working directory.
@@ -219,7 +220,20 @@ func NewAgentWithOptions(llmClient domain.LLM, workingDir string, mcpToolManager
 		taskToolManager = tool.NewInMemoryTaskToolManager()
 	}
 
+	// Compute memory directory for interactive mode; empty string in one-shot/test mode.
+	var memoryDir string
+	if isInteractiveMode {
+		if userConfig, err := config.DefaultUserConfig(); err == nil {
+			if dir, err := userConfig.GetProjectMemoryDir(workingDir); err == nil {
+				memoryDir = dir
+			}
+		}
+	}
+
 	fsConfig := infra.DefaultFileSystemConfig(workingDir)
+	if memoryDir != "" {
+		fsConfig.AllowedDirectories = append(fsConfig.AllowedDirectories, memoryDir)
+	}
 	filesystemManager := tool.NewFileSystemToolManager(fsRepo, fsConfig, workingDir)
 
 	bashConfig := tool.BashConfig{
@@ -314,9 +328,10 @@ func NewAgentWithOptions(llmClient domain.LLM, workingDir string, mcpToolManager
 		settings:           settings,
 		logger:             logger.WithComponent("agent"),
 		out:                out,
-		router:        NewSkillsRouter(),
-		sessionRules:  newSessionRules(isInteractiveMode),
-		permRules:     permRules,
+		router:             NewSkillsRouter(),
+		sessionRules:       newSessionRules(isInteractiveMode),
+		permRules:          permRules,
+		memoryDir:          memoryDir,
 	}
 
 	// Wire spawn_agent callback (two-phase init: callback references the agent).
@@ -383,6 +398,22 @@ func (a *Agent) Invoke(ctx context.Context, userInput string, skillName string, 
 	// content. Runs before catalog/prompt injection so dedup checks see a clean slate.
 	if err := a.sharedState.CleanupMandatory(); err != nil {
 		a.logger.Warn("Mandatory cleanup failed, continuing", "error", err)
+	}
+
+	// Inject memory system prompt (interactive mode only; re-read on every call
+	// so the agent sees the latest MEMORY.md after it writes to it).
+	if memoryPrompt := a.buildMemorySystemPrompt(); memoryPrompt != "" {
+		const memoryMarker = "[[MEMORY_SYSTEM]]\n"
+		candidate := memoryMarker + memoryPrompt
+		var lastMemory string
+		for _, msg := range a.sharedState.GetMessages() {
+			if msg.Type() == message.MessageTypeSystem && strings.HasPrefix(msg.Content(), memoryMarker) {
+				lastMemory = msg.Content()
+			}
+		}
+		if lastMemory == "" || lastMemory != candidate {
+			a.sharedState.AddMessage(message.NewSystemMessage(candidate))
+		}
 	}
 
 	// Inject skill catalog into system prompt
@@ -910,6 +941,75 @@ func (a *Agent) recordRecentlyRead(path string) {
 	if len(a.recentlyReadFiles) > 5 {
 		a.recentlyReadFiles = a.recentlyReadFiles[:5]
 	}
+}
+
+// buildMemorySystemPrompt constructs the memory system prompt by reading the
+// current MEMORY.md index and composing it with instructions for all four
+// memory types. Returns "" when memoryDir is empty (non-interactive mode).
+func (a *Agent) buildMemorySystemPrompt() string {
+	if a.memoryDir == "" {
+		return ""
+	}
+
+	memoryFile := filepath.Join(a.memoryDir, "MEMORY.md")
+	var memoryContent string
+	if data, err := os.ReadFile(memoryFile); err == nil {
+		memoryContent = string(data)
+	}
+
+	prompt := fmt.Sprintf(`# Memory System
+
+You have a persistent, file-based memory system at %q. Use it to remember
+information across conversations so you can tailor future behavior to this user.
+
+## Memory Types
+
+- **user**: The user's role, goals, expertise, and preferences.
+- **feedback**: Guidance about how to approach work — corrections AND confirmations.
+  Lead with the rule, then a **Why:** and **How to apply:** line.
+- **project**: Ongoing work, goals, decisions, bugs, or incidents (not derivable
+  from code or git history). Convert relative dates to absolute dates.
+  Lead with the fact, then **Why:** and **How to apply:** lines.
+- **reference**: Pointers to external resources (Linear projects, dashboards, Slack
+  channels, etc.) and their purpose.
+
+## How to Save a Memory
+
+**Step 1** — write the memory to its own file (e.g., %s) using this frontmatter:
+
+`+"```"+`markdown
+---
+name: <memory name>
+description: <one-line description>
+type: <user|feedback|project|reference>
+---
+
+<memory content>
+`+"```"+`
+
+**Step 2** — add a pointer to that file in %s. MEMORY.md is an index; never
+write memory content directly into it. Keep it under 200 lines.
+
+## What NOT to Save
+
+- Code patterns, conventions, or architecture (read the code instead).
+- Git history or who-changed-what (use git log).
+- Debugging solutions already reflected in the code.
+- Anything already in CLAUDE.md.
+- Ephemeral task details from the current conversation.
+
+## Current Memory Index (MEMORY.md)
+`, a.memoryDir,
+		filepath.Join(a.memoryDir, "memory_name.md"),
+		memoryFile)
+
+	if memoryContent == "" {
+		prompt += "(empty — no memories saved yet)\n"
+	} else {
+		prompt += memoryContent + "\n"
+	}
+
+	return prompt
 }
 
 const (

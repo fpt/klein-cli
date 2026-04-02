@@ -21,7 +21,7 @@ testsuite/
 **Run command:**
 ```bash
 make build && \
-OLLAMA_HOST=192.168.101.151:11434 \
+BACKENDS=openai \
 CLI=./output/klein \
 [TESTS=fibonacci,coding] \
 [BACKENDS=ollama_gpt_oss_20b,anthropic] \

@@ -1,0 +1,11 @@
+This directory contains a small Go project spread across multiple files.
+Use spawn_agent to explore the codebase — spawn one sub-agent to read each
+of the following files: config.go, server.go, and users.go.
+
+After all sub-agents complete, report these three facts:
+1. The value of AppVersion (from config.go)
+2. The value of ListenPort (from server.go)
+3. The fields of the User struct (from users.go)
+
+You MUST use spawn_agent for the file exploration. Do not read the files
+directly in the main agent. Spawn a separate sub-agent for each file.

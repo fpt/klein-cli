@@ -1,0 +1,9 @@
+{
+  "name": "e4b",
+  "llm": {
+    "backend": "ollama",
+    "model": "gemma4:e4b",
+    "thinking": true,
+    "maxTokens": 8192
+  }
+}

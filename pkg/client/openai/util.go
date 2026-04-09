@@ -1,132 +1,80 @@
 package openai
 
 import (
-	"github.com/openai/openai-go/v2/shared"
+	"strings"
+
+	"github.com/openai/openai-go/v3/shared"
 )
 
-// Model constants
-const (
-	modelGPT5      = "gpt-5" // TODO: Should use the official OpenAI model names
-	modelGPT5Mini  = "gpt-5-mini"
-	modelGPT5Nano  = "gpt-5-nano"
-	modelGPT4o     = shared.ChatModelGPT4o
-	modelGPT4oMini = shared.ChatModelGPT4oMini
-)
+// defaultModel is used when an unknown model name is supplied.
+const defaultModel = shared.ChatModelGPT5Mini
 
-// getOpenAIModel maps user-friendly model names to actual OpenAI model identifiers
+// getOpenAIModel maps user-supplied model names to actual OpenAI model identifiers.
+// Unknown names fall back to the default.
 func getOpenAIModel(model string) string {
-	// Normalize the model name
-	switch model {
-	case modelGPT5:
-		return modelGPT5
-	case modelGPT5Mini:
-		return modelGPT5Mini
-	case modelGPT5Nano:
-		return modelGPT5Nano
-	case modelGPT4o:
-		return modelGPT4o
-	case modelGPT4oMini:
-		return modelGPT4oMini
-
-	default:
-		// If it's already a valid OpenAI model name, return as-is
-		if isValidOpenAIModel(model) {
-			return model
-		}
-		// Default to GPT-5 Mini for unknown models (most versatile option)
-		return modelGPT5Mini
+	if isValidOpenAIModel(model) {
+		return model
 	}
+	return defaultModel
 }
 
-// isValidOpenAIModel checks if a model name is a valid OpenAI model
+// isValidOpenAIModel checks if model belongs to a supported family using prefix matching,
+// so dated variants (e.g. "gpt-5.4-mini-2026-03-17") are accepted automatically.
 func isValidOpenAIModel(model string) bool {
-	validModels := map[string]bool{
-		"gpt-5":       true,
-		"gpt-5-mini":  true,
-		"gpt-5-nano":  true,
-		"gpt-4o":      true,
-		"gpt-4o-mini": true,
+	for _, p := range []string{"gpt-5.4", "gpt-5.3", "gpt-5.2", "gpt-5.1", "gpt-5"} {
+		if strings.HasPrefix(model, p) {
+			return true
+		}
 	}
-	return validModels[model]
+	return false
 }
 
-// getModelCapabilities returns capabilities for a given OpenAI model
+// ModelCapabilities describes the feature set of an OpenAI model.
 type ModelCapabilities struct {
 	SupportsVision      bool
 	SupportsToolCalling bool
 	SupportsStructured  bool
-	SupportsThinking    bool // Reasoning models support enhanced thinking with ReasoningEffort parameters
-	// MaxTokens configures default max output tokens (per-generation limit)
+	// SupportsThinking indicates reasoning_effort is supported.
+	SupportsThinking bool
+	// MaxTokens is the default max output tokens for a single generation.
 	MaxTokens int
-	// MaxContextWindow is the model's approximate input context window size
-	// (prompt capacity). Used for utilization reporting.
+	// MaxContextWindow is the approximate prompt-capacity context window.
 	MaxContextWindow     int
 	SupportsSystemPrompt bool
 }
 
-var modelCapabilities = map[string]ModelCapabilities{
-	modelGPT5: {
-		SupportsVision:       true,
-		SupportsToolCalling:  true,
-		SupportsStructured:   true,
-		SupportsThinking:     true, // GPT-5 supports reasoning
-		MaxTokens:            16384,
-		MaxContextWindow:     128000,
-		SupportsSystemPrompt: true,
-	},
-	modelGPT5Mini: {
-		SupportsVision:       true,
-		SupportsToolCalling:  true,
-		SupportsStructured:   true,
-		SupportsThinking:     true, // GPT-5-mini supports reasoning
-		MaxTokens:            16384,
-		MaxContextWindow:     128000,
-		SupportsSystemPrompt: true,
-	},
-	modelGPT5Nano: {
-		SupportsVision:       true,
-		SupportsToolCalling:  true,
-		SupportsStructured:   true,
-		SupportsThinking:     true, // GPT-5-nano supports reasoning
-		MaxTokens:            8192, // Nano likely has lower token limit
-		MaxContextWindow:     128000,
-		SupportsSystemPrompt: true,
-	},
-	modelGPT4o: {
-		SupportsVision:       true,
-		SupportsToolCalling:  true,
-		SupportsStructured:   true,
-		SupportsThinking:     false, // GPT-4o does NOT support reasoning_effort
-		MaxTokens:            8192,
-		MaxContextWindow:     128000,
-		SupportsSystemPrompt: true,
-	},
-	modelGPT4oMini: {
-		SupportsVision:       true,
-		SupportsToolCalling:  true,
-		SupportsStructured:   true,
-		SupportsThinking:     false, // GPT-4o-mini does NOT support reasoning_effort
-		MaxTokens:            4096,
-		MaxContextWindow:     128000,
-		SupportsSystemPrompt: true,
-	},
+// capGPT5 is the capability profile for all GPT-5.x variants.
+var capGPT5 = ModelCapabilities{
+	SupportsVision:       true,
+	SupportsToolCalling:  true,
+	SupportsStructured:   true,
+	SupportsThinking:     true,
+	MaxTokens:            32768,
+	MaxContextWindow:     128000,
+	SupportsSystemPrompt: true,
 }
 
-// getModelCapabilities returns the capabilities of a specific OpenAI model
+// capGPT5Nano has slightly lower output limits.
+var capGPT5Nano = ModelCapabilities{
+	SupportsVision:       true,
+	SupportsToolCalling:  true,
+	SupportsStructured:   true,
+	SupportsThinking:     true,
+	MaxTokens:            16384,
+	MaxContextWindow:     128000,
+	SupportsSystemPrompt: true,
+}
+
+// getModelCapabilities returns the capability profile for a model.
+// Prefix matching handles dated variants automatically.
 func getModelCapabilities(model string) ModelCapabilities {
-	switch model {
-	case modelGPT5:
-		return modelCapabilities[modelGPT5]
-	case modelGPT5Mini:
-		return modelCapabilities[modelGPT5Mini]
-	case modelGPT5Nano:
-		return modelCapabilities[modelGPT5Nano]
-	case modelGPT4o:
-		return modelCapabilities[modelGPT4o]
-	case modelGPT4oMini:
-		return modelCapabilities[modelGPT4oMini]
+	switch {
+	case strings.HasPrefix(model, "gpt-5.4-nano"),
+		strings.HasPrefix(model, "gpt-5-nano"):
+		return capGPT5Nano
+	case strings.HasPrefix(model, "gpt-5"):
+		return capGPT5
 	default:
-		// Default to GPT-5 Mini for unknown models (most versatile option)
-		return modelCapabilities[modelGPT5Mini]
+		return capGPT5 // default to gpt-5-mini profile
 	}
 }

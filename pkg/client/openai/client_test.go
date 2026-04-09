@@ -9,10 +9,15 @@ func TestGetOpenAIModel(t *testing.T) {
 		input    string
 		expected string
 	}{
-		{"gpt-4o", "gpt-4o"},
-		{"gpt-4o-mini", "gpt-4o-mini"},
+		{"gpt-5.4", "gpt-5.4"},
+		{"gpt-5.4-mini", "gpt-5.4-mini"},
+		{"gpt-5.4-nano-2026-03-17", "gpt-5.4-nano-2026-03-17"}, // dated variant
+		{"gpt-5.2-pro", "gpt-5.2-pro"},
+		{"gpt-5.1-mini", "gpt-5.1-mini"},
 		{"gpt-5", "gpt-5"},
 		{"gpt-5-mini", "gpt-5-mini"},
+		{"gpt-5-nano", "gpt-5-nano"},
+		{"gpt-5-chat-latest", "gpt-5-chat-latest"},
 		{"unknown-model", "gpt-5-mini"}, // default fallback
 	}
 
@@ -31,42 +36,44 @@ func TestGetModelCapabilities(t *testing.T) {
 		expectedToolCalling  bool
 		expectedStructured   bool
 		expectedSystemPrompt bool
+		expectedThinking     bool
 	}{
-		{"gpt-4o", true, true, true, true},
-		{"gpt-4o-mini", true, true, true, true},
-		{"gpt-5", true, true, true, true},
-		{"gpt-5-mini", true, true, true, true},
-		{"unknown-model", true, true, true, true}, // default capabilities (gpt-5-mini)
+		{"gpt-5.4", true, true, true, true, true},
+		{"gpt-5.4-mini", true, true, true, true, true},
+		{"gpt-5.4-nano", true, true, true, true, true},
+		{"gpt-5.4-nano-2026-03-17", true, true, true, true, true},
+		{"gpt-5.2-pro", true, true, true, true, true},
+		{"gpt-5.1-mini", true, true, true, true, true},
+		{"gpt-5", true, true, true, true, true},
+		{"gpt-5-mini", true, true, true, true, true},
+		{"gpt-5-nano", true, true, true, true, true},
+		{"unknown-model", true, true, true, true, true}, // default → gpt-5 profile
 	}
 
 	for _, tc := range testCases {
 		caps := getModelCapabilities(tc.model)
 
 		if caps.SupportsVision != tc.expectedVision {
-			t.Errorf("Model %s vision support: got %v, expected %v", tc.model, caps.SupportsVision, tc.expectedVision)
+			t.Errorf("Model %s vision: got %v, expected %v", tc.model, caps.SupportsVision, tc.expectedVision)
 		}
-
 		if caps.SupportsToolCalling != tc.expectedToolCalling {
-			t.Errorf("Model %s tool calling support: got %v, expected %v", tc.model, caps.SupportsToolCalling, tc.expectedToolCalling)
+			t.Errorf("Model %s tool calling: got %v, expected %v", tc.model, caps.SupportsToolCalling, tc.expectedToolCalling)
 		}
-
 		if caps.SupportsStructured != tc.expectedStructured {
-			t.Errorf("Model %s structured output support: got %v, expected %v", tc.model, caps.SupportsStructured, tc.expectedStructured)
+			t.Errorf("Model %s structured: got %v, expected %v", tc.model, caps.SupportsStructured, tc.expectedStructured)
 		}
-
 		if caps.SupportsSystemPrompt != tc.expectedSystemPrompt {
-			t.Errorf("Model %s system prompt support: got %v, expected %v", tc.model, caps.SupportsSystemPrompt, tc.expectedSystemPrompt)
+			t.Errorf("Model %s system prompt: got %v, expected %v", tc.model, caps.SupportsSystemPrompt, tc.expectedSystemPrompt)
+		}
+		if caps.SupportsThinking != tc.expectedThinking {
+			t.Errorf("Model %s thinking: got %v, expected %v", tc.model, caps.SupportsThinking, tc.expectedThinking)
 		}
 	}
 }
 
-// Test that the client can be created without API key (will fail at runtime, but should compile and validate)
 func TestNewOpenAIClient_NoAPIKey(t *testing.T) {
-	// This test assumes OPENAI_API_KEY is not set in the test environment
-	// In a real environment, this would check for the environment variable
-	_, err := NewOpenAIClient("gpt-4o", 0)
+	_, err := NewOpenAIClient("gpt-5-mini", 0)
 	if err == nil {
-		// If no error, the API key was set in the environment, which is fine for testing
 		t.Skip("OPENAI_API_KEY is set in environment, skipping test")
 	}
 
@@ -76,21 +83,15 @@ func TestNewOpenAIClient_NoAPIKey(t *testing.T) {
 	}
 }
 
-// Test the new IsToolCapable method
 func TestIsToolCapable(t *testing.T) {
-	// Test with a mock client to avoid requiring API key
-	core := &OpenAICore{
-		model: "gpt-4o", // This model supports tool calling
-	}
+	core := &OpenAICore{model: "gpt-5-mini"}
 	client := NewOpenAIClientFromCore(core)
 
-	// Cast back to concrete type to access IsToolCapable method
 	concreteClient, ok := client.(*OpenAIClient)
 	if !ok {
 		t.Fatal("Expected *OpenAIClient type")
 	}
-
 	if !concreteClient.IsToolCapable() {
-		t.Error("Expected gpt-4o to support tool calling")
+		t.Error("Expected gpt-5-mini to support tool calling")
 	}
 }

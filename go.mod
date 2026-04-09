@@ -12,7 +12,8 @@ require (
 	github.com/manifoldco/promptui v0.9.0
 	github.com/mark3labs/mcp-go v0.44.0
 	github.com/ollama/ollama v0.16.3
-	github.com/openai/openai-go/v2 v2.7.1
+	github.com/openai/openai-go/v3 v3.31.0
+	github.com/pdfcpu/pdfcpu v0.11.1
 	github.com/pkg/errors v0.9.1
 	golang.org/x/net v0.50.0
 	golang.org/x/term v0.40.0
@@ -44,7 +45,6 @@ require (
 	github.com/hhrutter/tiff v1.0.2 // indirect
 	github.com/mailru/easyjson v0.9.1 // indirect
 	github.com/mattn/go-runewidth v0.0.19 // indirect
-	github.com/pdfcpu/pdfcpu v0.11.1 // indirect
 	github.com/spf13/cast v1.10.0 // indirect
 	github.com/tidwall/gjson v1.18.0 // indirect
 	github.com/tidwall/match v1.2.0 // indirect

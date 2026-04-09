@@ -8,8 +8,8 @@ import (
 
 	"github.com/fpt/klein-cli/pkg/agent/domain"
 	"github.com/fpt/klein-cli/pkg/message"
-	"github.com/openai/openai-go/v2"
-	"github.com/openai/openai-go/v2/responses"
+	"github.com/openai/openai-go/v3/packages/param"
+	"github.com/openai/openai-go/v3/responses"
 )
 
 // convertArgumentToProperty converts a ToolArgument to OpenAI property schema
@@ -310,26 +310,26 @@ func convertToolChoice(toolChoice domain.ToolChoice) *responses.ResponseNewParam
 	switch toolChoice.Type {
 	case domain.ToolChoiceAuto:
 		return &responses.ResponseNewParamsToolChoiceUnion{
-			OfToolChoiceMode: openai.Opt(responses.ToolChoiceOptionsAuto),
+			OfToolChoiceMode: param.NewOpt(responses.ToolChoiceOptionsAuto),
 		}
 	case domain.ToolChoiceAny:
 		return &responses.ResponseNewParamsToolChoiceUnion{
-			OfToolChoiceMode: openai.Opt(responses.ToolChoiceOptionsRequired),
+			OfToolChoiceMode: param.NewOpt(responses.ToolChoiceOptionsRequired),
 		}
 	case domain.ToolChoiceTool:
 		// For specific tool choice, we'll use required mode for now
 		// TODO: Implement specific function tool choice when available in API
 		return &responses.ResponseNewParamsToolChoiceUnion{
-			OfToolChoiceMode: openai.Opt(responses.ToolChoiceOptionsRequired),
+			OfToolChoiceMode: param.NewOpt(responses.ToolChoiceOptionsRequired),
 		}
 	case domain.ToolChoiceNone:
 		return &responses.ResponseNewParamsToolChoiceUnion{
-			OfToolChoiceMode: openai.Opt(responses.ToolChoiceOptionsNone),
+			OfToolChoiceMode: param.NewOpt(responses.ToolChoiceOptionsNone),
 		}
 	default:
 		// Default to auto
 		return &responses.ResponseNewParamsToolChoiceUnion{
-			OfToolChoiceMode: openai.Opt(responses.ToolChoiceOptionsAuto),
+			OfToolChoiceMode: param.NewOpt(responses.ToolChoiceOptionsAuto),
 		}
 	}
 }

@@ -1,0 +1,9 @@
+{
+  "name": "gemma4_26b",
+  "llm": {
+    "backend": "ollama",
+    "model": "gemma4:26b",
+    "thinking": true,
+    "maxTokens": 8192
+  }
+}

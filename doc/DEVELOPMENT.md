@@ -515,14 +515,14 @@ klein-cli/
 - `gpt-oss:latest` - **Recommended** - Best balanced model with native tool calling
 
 **Anthropic Models:**
-- `claude-3-7-sonnet-latest` - Default Claude model with native tool calling
-- `claude-3-5-haiku-latest` - Faster Claude model with native tool calling
-- `claude-sonnet-4-20250514` - Latest Claude Sonnet 4 with native tool calling
+- `claude-opus-4-7` - Most capable model for complex reasoning and agentic coding
+- `claude-sonnet-4-6` - Best combination of speed and intelligence (default)
+- `claude-haiku-4-5` - Fastest model with near-frontier intelligence
 
 **OpenAI Models:**
-- `gpt-4o` - Latest GPT-4 Omni (vision, tool calling, structured output)
-- `gpt-4o-mini` - Smaller, faster GPT-4 Omni
-- `gpt-3.5-turbo` - Fast and cost-effective for most tasks
+- `gpt-5.4` - Full model (vision, tool calling, structured output)
+- `gpt-5.4-mini` - Smaller, faster (default)
+- `gpt-5.4-nano` - Lightest weight
 
 **Google Gemini Models:**
 - `gemini-2.5-flash-lite` - **Recommended** - Latest, fastest, most efficient

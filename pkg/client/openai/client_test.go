@@ -11,14 +11,10 @@ func TestGetOpenAIModel(t *testing.T) {
 	}{
 		{"gpt-5.4", "gpt-5.4"},
 		{"gpt-5.4-mini", "gpt-5.4-mini"},
+		{"gpt-5.4-nano", "gpt-5.4-nano"},
 		{"gpt-5.4-nano-2026-03-17", "gpt-5.4-nano-2026-03-17"}, // dated variant
-		{"gpt-5.2-pro", "gpt-5.2-pro"},
-		{"gpt-5.1-mini", "gpt-5.1-mini"},
-		{"gpt-5", "gpt-5"},
-		{"gpt-5-mini", "gpt-5-mini"},
-		{"gpt-5-nano", "gpt-5-nano"},
-		{"gpt-5-chat-latest", "gpt-5-chat-latest"},
-		{"unknown-model", "gpt-5-mini"}, // default fallback
+		{"unknown-model", "gpt-5.4-mini"},                       // default fallback
+		{"gpt-5-mini", "gpt-5.4-mini"},                          // old model → default
 	}
 
 	for _, tc := range testCases {
@@ -37,17 +33,13 @@ func TestGetModelCapabilities(t *testing.T) {
 		expectedStructured   bool
 		expectedSystemPrompt bool
 		expectedThinking     bool
+		expectedMaxTokens    int
 	}{
-		{"gpt-5.4", true, true, true, true, true},
-		{"gpt-5.4-mini", true, true, true, true, true},
-		{"gpt-5.4-nano", true, true, true, true, true},
-		{"gpt-5.4-nano-2026-03-17", true, true, true, true, true},
-		{"gpt-5.2-pro", true, true, true, true, true},
-		{"gpt-5.1-mini", true, true, true, true, true},
-		{"gpt-5", true, true, true, true, true},
-		{"gpt-5-mini", true, true, true, true, true},
-		{"gpt-5-nano", true, true, true, true, true},
-		{"unknown-model", true, true, true, true, true}, // default → gpt-5 profile
+		{"gpt-5.4", true, true, true, true, true, 32768},
+		{"gpt-5.4-mini", true, true, true, true, true, 32768},
+		{"gpt-5.4-nano", true, true, true, true, true, 16384},
+		{"gpt-5.4-nano-2026-03-17", true, true, true, true, true, 16384}, // dated variant
+		{"unknown-model", true, true, true, true, true, 32768},            // default → gpt-5.4 profile
 	}
 
 	for _, tc := range testCases {
@@ -68,11 +60,14 @@ func TestGetModelCapabilities(t *testing.T) {
 		if caps.SupportsThinking != tc.expectedThinking {
 			t.Errorf("Model %s thinking: got %v, expected %v", tc.model, caps.SupportsThinking, tc.expectedThinking)
 		}
+		if caps.MaxTokens != tc.expectedMaxTokens {
+			t.Errorf("Model %s max tokens: got %v, expected %v", tc.model, caps.MaxTokens, tc.expectedMaxTokens)
+		}
 	}
 }
 
 func TestNewOpenAIClient_NoAPIKey(t *testing.T) {
-	_, err := NewOpenAIClient("gpt-5-mini", 0)
+	_, err := NewOpenAIClient("gpt-5.4-mini", 0)
 	if err == nil {
 		t.Skip("OPENAI_API_KEY is set in environment, skipping test")
 	}
@@ -84,7 +79,7 @@ func TestNewOpenAIClient_NoAPIKey(t *testing.T) {
 }
 
 func TestIsToolCapable(t *testing.T) {
-	core := &OpenAICore{model: "gpt-5-mini"}
+	core := &OpenAICore{model: "gpt-5.4-mini"}
 	client := NewOpenAIClientFromCore(core)
 
 	concreteClient, ok := client.(*OpenAIClient)
@@ -92,6 +87,6 @@ func TestIsToolCapable(t *testing.T) {
 		t.Fatal("Expected *OpenAIClient type")
 	}
 	if !concreteClient.IsToolCapable() {
-		t.Error("Expected gpt-5-mini to support tool calling")
+		t.Error("Expected gpt-5.4-mini to support tool calling")
 	}
 }

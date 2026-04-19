@@ -17,29 +17,49 @@ func TestGetAnthropicModel(t *testing.T) {
 		expected anthropic.Model
 	}{
 		{
-			name:     "claude-3-7-sonnet-latest",
-			input:    "claude-3-7-sonnet-latest",
-			expected: anthropic.ModelClaudeSonnet4_5,
+			name:     "claude-opus-4-7",
+			input:    "claude-opus-4-7",
+			expected: anthropic.ModelClaudeOpus4_7,
 		},
 		{
-			name:     "claude-3-5-haiku-latest",
+			name:     "claude-sonnet-4-6",
+			input:    "claude-sonnet-4-6",
+			expected: anthropic.ModelClaudeSonnet4_6,
+		},
+		{
+			name:     "claude-haiku-4-5",
+			input:    "claude-haiku-4-5",
+			expected: anthropic.ModelClaudeHaiku4_5_20251001,
+		},
+		{
+			name:     "claude-haiku-4-5-20251001",
+			input:    "claude-haiku-4-5-20251001",
+			expected: anthropic.ModelClaudeHaiku4_5_20251001,
+		},
+		{
+			name:     "claude-3-5-haiku-latest (legacy alias)",
 			input:    "claude-3-5-haiku-latest",
-			expected: anthropic.ModelClaudeHaiku4_5,
+			expected: anthropic.ModelClaudeHaiku4_5_20251001,
 		},
 		{
-			name:     "claude-sonnet-4-20250514",
+			name:     "claude-sonnet-4-20250514 (legacy alias)",
 			input:    "claude-sonnet-4-20250514",
-			expected: anthropic.ModelClaudeSonnet4_5,
+			expected: anthropic.ModelClaudeSonnet4_6,
 		},
 		{
-			name:     "unknown model defaults to claude-3-7-sonnet-latest",
+			name:     "claude-3-7-sonnet-latest (legacy alias)",
+			input:    "claude-3-7-sonnet-latest",
+			expected: anthropic.ModelClaudeSonnet4_6,
+		},
+		{
+			name:     "unknown model defaults to claude-sonnet-4-6",
 			input:    "unknown-model",
-			expected: anthropic.ModelClaudeSonnet4_5,
+			expected: anthropic.ModelClaudeSonnet4_6,
 		},
 		{
-			name:     "empty string defaults to claude-3-7-sonnet-latest",
+			name:     "empty string defaults to claude-sonnet-4-6",
 			input:    "",
-			expected: anthropic.ModelClaudeSonnet4_5,
+			expected: anthropic.ModelClaudeSonnet4_6,
 		},
 	}
 
@@ -60,22 +80,27 @@ func TestSupportsThinking(t *testing.T) {
 		expected bool
 	}{
 		{
-			name:     "claude-opus-4 supports thinking",
-			model:    "claude-opus-4-20250514",
+			name:     "claude-opus-4-7 supports thinking",
+			model:    "claude-opus-4-7",
 			expected: true,
 		},
 		{
-			name:     "claude-sonnet-4 supports thinking",
-			model:    "claude-sonnet-4-20250514",
+			name:     "claude-sonnet-4-6 supports thinking",
+			model:    "claude-sonnet-4-6",
 			expected: true,
 		},
 		{
-			name:     "claude-3-7-sonnet supports thinking",
-			model:    "claude-3-7-sonnet-latest",
-			expected: true,
+			name:     "claude-haiku-4-5 does NOT support thinking",
+			model:    "claude-haiku-4-5",
+			expected: false,
 		},
 		{
-			name:     "claude-3-5-haiku does NOT support thinking",
+			name:     "claude-haiku-4-5-20251001 does NOT support thinking",
+			model:    "claude-haiku-4-5-20251001",
+			expected: false,
+		},
+		{
+			name:     "claude-3-5-haiku-latest does NOT support thinking",
 			model:    "claude-3-5-haiku-latest",
 			expected: false,
 		},

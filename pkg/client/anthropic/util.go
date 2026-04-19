@@ -15,36 +15,30 @@ import (
 
 // getAnthropicModel maps common model names to Anthropic model constants
 func getAnthropicModel(model string) anthropic.Model {
-	// Map common model names to Anthropic model constants
 	switch model {
+	case "claude-opus-4-7":
+		return anthropic.ModelClaudeOpus4_7
+	case "claude-sonnet-4-6":
+		return anthropic.ModelClaudeSonnet4_6
+	case "claude-haiku-4-5", "claude-haiku-4-5-20251001", "claude-3-5-haiku-latest":
+		return anthropic.ModelClaudeHaiku4_5_20251001
+	// Legacy aliases
 	case "claude-opus-4-20250514":
-		return anthropic.ModelClaudeOpus4_20250514
-	case "claude-sonnet-4-20250514":
-		return anthropic.ModelClaudeSonnet4_5
-	case "claude-3-7-sonnet-latest":
-		return anthropic.ModelClaudeSonnet4_5
-	case "claude-3-5-haiku-latest":
-		return anthropic.ModelClaudeHaiku4_5
+		return anthropic.ModelClaudeOpus4_7
+	case "claude-sonnet-4-20250514", "claude-3-7-sonnet-latest":
+		return anthropic.ModelClaudeSonnet4_6
 	}
 
-	// Default to Claude Sonnet 3.7
-	return anthropic.ModelClaudeSonnet4_5
+	// Default to Claude Sonnet 4.6
+	return anthropic.ModelClaudeSonnet4_6
 }
 
 // supportsThinking checks if the model supports thinking functionality
 func supportsThinking(model string) bool {
 	switch model {
-	case "claude-opus-4-20250514":
-		return true
-	case "claude-sonnet-4-20250514":
-		return true
-	case "claude-3-7-sonnet-latest":
-		return true
-	case "claude-3-5-haiku-latest":
-		return false // Haiku doesn't support thinking
+	case "claude-haiku-4-5", "claude-haiku-4-5-20251001", "claude-3-5-haiku-latest":
+		return false
 	}
-
-	// Default to true for Sonnet models (conservative approach)
 	return true
 }
 

@@ -7,7 +7,7 @@ import (
 )
 
 // defaultModel is used when an unknown model name is supplied.
-const defaultModel = shared.ChatModelGPT5Mini
+const defaultModel = shared.ChatModelGPT5_4Mini
 
 // getOpenAIModel maps user-supplied model names to actual OpenAI model identifiers.
 // Unknown names fall back to the default.
@@ -18,15 +18,10 @@ func getOpenAIModel(model string) string {
 	return defaultModel
 }
 
-// isValidOpenAIModel checks if model belongs to a supported family using prefix matching,
+// isValidOpenAIModel checks if model belongs to the gpt-5.4 family using prefix matching,
 // so dated variants (e.g. "gpt-5.4-mini-2026-03-17") are accepted automatically.
 func isValidOpenAIModel(model string) bool {
-	for _, p := range []string{"gpt-5.4", "gpt-5.3", "gpt-5.2", "gpt-5.1", "gpt-5"} {
-		if strings.HasPrefix(model, p) {
-			return true
-		}
-	}
-	return false
+	return strings.HasPrefix(model, "gpt-5.4")
 }
 
 // ModelCapabilities describes the feature set of an OpenAI model.
@@ -69,12 +64,9 @@ var capGPT5Nano = ModelCapabilities{
 // Prefix matching handles dated variants automatically.
 func getModelCapabilities(model string) ModelCapabilities {
 	switch {
-	case strings.HasPrefix(model, "gpt-5.4-nano"),
-		strings.HasPrefix(model, "gpt-5-nano"):
+	case strings.HasPrefix(model, "gpt-5.4-nano"):
 		return capGPT5Nano
-	case strings.HasPrefix(model, "gpt-5"):
-		return capGPT5
 	default:
-		return capGPT5 // default to gpt-5-mini profile
+		return capGPT5
 	}
 }

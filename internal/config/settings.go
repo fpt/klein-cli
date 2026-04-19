@@ -225,7 +225,7 @@ func GetDefaultLLMSettingsForBackend(backend string) LLMSettings {
 	case "anthropic", "claude":
 		return LLMSettings{
 			Backend:   "anthropic",
-			Model:     "claude-sonnet-4-5-20250929",
+			Model:     "claude-sonnet-4-6",
 			BaseURL:   "",
 			Thinking:  true,
 			MaxTokens: 0,
@@ -233,7 +233,7 @@ func GetDefaultLLMSettingsForBackend(backend string) LLMSettings {
 	case "openai":
 		return LLMSettings{
 			Backend:   "openai",
-			Model:     "gpt-5-mini",
+			Model:     "gpt-5.4-mini",
 			BaseURL:   "",
 			Thinking:  true,
 			MaxTokens: 0,

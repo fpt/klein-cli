@@ -74,8 +74,8 @@ Settings are loaded from the first file found in order:
 | Backend | Default model | Default base_url |
 |---------|--------------|-----------------|
 | `ollama` | `gpt-oss:latest` | `http://localhost:11434` |
-| `anthropic` | `claude-sonnet-4-5-20250929` | *(Anthropic API)* |
-| `openai` | `gpt-5-mini` | *(OpenAI API)* |
+| `anthropic` | `claude-sonnet-4-6` | *(Anthropic API)* |
+| `openai` | `gpt-5.4-mini` | *(OpenAI API)* |
 | `gemini` | `gemini-2.5-flash-lite` | *(Google API)* |
 
 ### `agent` — Agent behaviour
@@ -125,7 +125,7 @@ npm install, npm run, npm test
 {
   "llm": {
     "backend": "anthropic",
-    "model": "claude-sonnet-4-5-20250929",
+    "model": "claude-sonnet-4-6",
     "thinking": true,
     "max_tokens": 4096
   },
@@ -262,7 +262,7 @@ description: What this skill does
 allowed-tools: Read, Write, Bash, WebFetch
 argument-hint: "Describe what you want"
 user-invocable: true
-model: claude-sonnet-4-5-20250929
+model: claude-sonnet-4-6
 disable-model-invocation: false
 ---
 ```
@@ -298,7 +298,7 @@ The gateway (`klein-claw`) reads its config from `$HOME/.klein/claw/config.json`
 | `agent_addr` | string | `"http://localhost:50051"` | klein Connect-gRPC server address |
 | `working_dir` | string | — | Working directory passed to the agent |
 | `default_skill` | string | `"claw"` | Skill used for incoming messages |
-| `default_model` | string | `"claude-sonnet-4-5-20250929"` | LLM model |
+| `default_model` | string | `"claude-sonnet-4-6"` | LLM model |
 | `max_iterations` | int | `15` | ReAct loop cap per message |
 | `session_timeout` | string | `"30m"` | Inactivity timeout (Go duration, e.g. `"1h"`) |
 | `sessions_dir` | string | `~/.klein/claw/sessions/` | Per-session persistence directory |
@@ -338,7 +338,7 @@ The gateway (`klein-claw`) reads its config from `$HOME/.klein/claw/config.json`
   "agent_addr": "http://localhost:50051",
   "working_dir": "/Users/you/projects/myapp",
   "default_skill": "claw",
-  "default_model": "claude-sonnet-4-5-20250929",
+  "default_model": "claude-sonnet-4-6",
   "max_iterations": 15,
   "session_timeout": "30m",
   "discord": {

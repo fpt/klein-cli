@@ -72,7 +72,7 @@ klein "Create an HTTP server with a health check endpoint"
 
 # Use different backends
 klein -b anthropic "Analyze this codebase"
-klein -b openai -m gpt-5-mini "Create a console program which calculates fibonacci number in Golang."
+klein -b openai -m gpt-5.4-mini "Create a console program which calculates fibonacci number in Golang."
 
 # Offline use
 klein -b ollama -m gpt-oss:latest "Write a simple main.go that prints 'Hello, world!'. Use write tool."
@@ -80,8 +80,8 @@ klein -b ollama -m gpt-oss:latest "Write a simple main.go that prints 'Hello, wo
 
 ## Supported Models
 
-- **Anthropic**: `claude-3-7-sonnet-latest`, `claude-sonnet-4-20250514`
-- **OpenAI**: `gpt-5`, `gpt-5-mini`
+- **Anthropic**: `claude-opus-4-7`, `claude-sonnet-4-6`, `claude-haiku-4-5`
+- **OpenAI**: `gpt-5.4`, `gpt-5.4-mini`, `gpt-5.4-nano`
 - **Ollama**: `gpt-oss:latest`
 - **Google Gemini**: `gemini-2.5`, `gemini-2.5-flash`
 
@@ -174,7 +174,7 @@ KLEIN CLI uses a unified configuration system with settings stored in `~/.klein/
 **Override with Command Line:**
 ```bash
 # Override backend and model
-klein -b anthropic -m claude-3-7-sonnet-latest "Analyze this code"
+klein -b anthropic -m claude-sonnet-4-6 "Analyze this code"
 
 # Use custom settings file
 klein --settings ./my-settings.json "Create a simple web server in Golang."
@@ -304,7 +304,7 @@ Optional periodic prompt execution. Configure in `config.json`:
 | `agent_addr` | `http://localhost:50051` | Connect-gRPC server address |
 | `working_dir` | `.` | Agent working directory |
 | `default_skill` | `claw` | Skill used for message handling |
-| `default_model` | `claude-sonnet-4-5-20250929` | LLM model |
+| `default_model` | `claude-sonnet-4-6` | LLM model |
 | `max_iterations` | `15` | ReAct loop cap per invocation |
 | `discord.token` | | Discord bot token (required) |
 | `discord.allowed_guild_ids` | `[]` | Guild allowlist (empty = all) |

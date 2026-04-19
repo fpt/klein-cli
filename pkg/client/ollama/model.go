@@ -16,7 +16,25 @@ type OllamaModel struct {
 
 	// Context indicates the context length of the model
 	Context int `json:"context"`
+
+	// Per-model sampling parameters (zero values = use global defaults)
+	Temperature float64 `json:"temperature,omitempty"`
+	TopP        float64 `json:"top_p,omitempty"`
+	TopK        int     `json:"top_k,omitempty"`
+
+	// UseThinkToken: model uses <|think|> token at the start of the system prompt
+	// to enable thinking, instead of the Think API parameter (e.g. gemma4).
+	UseThinkToken bool `json:"use_think_token,omitempty"`
 }
+
+// SamplingParams holds per-model sampling configuration returned by GetModelSamplingParams.
+type SamplingParams struct {
+	Temperature float64
+	TopP        float64 // 0 = not set
+	TopK        int     // 0 = not set
+}
+
+const defaultTemperature = 0.1
 
 // This is from https://ollama.com/search
 // List must be kept in sync with the Ollama models by human.
@@ -49,6 +67,11 @@ var ollamaModels = []OllamaModel{
 		Vision:  true,  // Has vision capability
 		Context: 8192,  // Standard context for Gemma models
 	},
+	// gemma4 family — native function calling + thinking via <|think|> system prompt token.
+	// Official sampling params from https://ai.google.dev/gemma/docs/core/model_card_4:
+	// temperature=1.0, top_p=0.95, top_k=64.
+	{Name: "gemma4", Tool: true, Think: true, Vision: true, Context: 128000,
+		Temperature: 1.0, TopP: 0.95, TopK: 64, UseThinkToken: true},
 	// qwen3.5 family
 	{Name: "qwen3.5:0.6b", Tool: true, Think: true, Vision: true, Context: 256000},
 	{Name: "qwen3.5:0.8b", Tool: true, Think: true, Vision: true, Context: 256000},
@@ -131,6 +154,36 @@ func GetModelContextWindow(model string) int {
 		}
 	}
 	return 0
+}
+
+// GetModelSamplingParams returns the recommended sampling parameters for a model.
+// Models without explicit settings get the global default temperature.
+func GetModelSamplingParams(model string) SamplingParams {
+	modelLower := strings.ToLower(model)
+	for _, m := range ollamaModels {
+		if strings.Contains(modelLower, strings.ToLower(m.Name)) {
+			if m.Temperature != 0 {
+				return SamplingParams{
+					Temperature: m.Temperature,
+					TopP:        m.TopP,
+					TopK:        m.TopK,
+				}
+			}
+		}
+	}
+	return SamplingParams{Temperature: defaultTemperature}
+}
+
+// UseThinkTokenModel returns true if the model uses the <|think|> system prompt token
+// for thinking instead of the Think API parameter (e.g. gemma4 family).
+func UseThinkTokenModel(model string) bool {
+	modelLower := strings.ToLower(model)
+	for _, m := range ollamaModels {
+		if strings.Contains(modelLower, strings.ToLower(m.Name)) {
+			return m.UseThinkToken
+		}
+	}
+	return false
 }
 
 // IsJSONSchemaCapableModel checks if a model supports JSON Schema format for structured output

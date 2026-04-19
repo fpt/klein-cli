@@ -11,7 +11,6 @@ import (
 	"github.com/pkg/errors"
 )
 
-const temperature = 0.1 // Default temperature for Ollama chat requests
 
 // OllamaCore contains shared Ollama client resources and core functionality
 // This allows efficient resource sharing between different Ollama client types
@@ -78,6 +77,23 @@ func (c *OllamaCore) numCtx() int {
 		return maxNumCtx
 	}
 	return c.contextSize
+}
+
+// buildChatOptions creates Ollama options map with model-appropriate sampling parameters.
+func (c *OllamaCore) buildChatOptions() map[string]any {
+	params := GetModelSamplingParams(c.model)
+	opts := map[string]any{
+		"temperature": params.Temperature,
+		"num_predict": c.maxTokens,
+		"num_ctx":     c.numCtx(),
+	}
+	if params.TopP > 0 {
+		opts["top_p"] = params.TopP
+	}
+	if params.TopK > 0 {
+		opts["top_k"] = params.TopK
+	}
+	return opts
 }
 
 // Model returns the model name
@@ -223,11 +239,7 @@ func (c *OllamaClient) ChatWithToolChoice(ctx context.Context, messages []messag
 	chatRequest := &api.ChatRequest{
 		Model:    c.model,
 		Messages: ollamaMessages,
-		Options: map[string]any{
-			"temperature": temperature,
-			"num_predict": c.maxTokens,  // Max output tokens for Ollama
-			"num_ctx":     c.numCtx(),   // Total context window (input + output)
-		},
+		Options:  c.buildChatOptions(),
 	}
 
 	// Handle tool choice for tool-capable models
@@ -243,10 +255,18 @@ func (c *OllamaClient) ChatWithToolChoice(ctx context.Context, messages []messag
 		}
 	}
 
-	// Apply thinking parameter for models that declare thinking capability.
-	// Use c.thinking (from settings JSON) rather than the enableThinking caller arg,
-	// because the ReAct agent always passes enableThinking=true regardless of settings.
-	if IsThinkingCapableModel(c.model) {
+	// Handle thinking capability.
+	// UseThinkToken models (e.g. gemma4) use <|think|> at the start of the system prompt
+	// instead of the Think API parameter.  Multi-turn spec: strip thinking from history.
+	if UseThinkTokenModel(c.model) {
+		chatRequest.Messages = stripThinkingFromHistory(chatRequest.Messages)
+		if c.thinking {
+			injectThinkToken(chatRequest.Messages)
+		}
+	} else if IsThinkingCapableModel(c.model) {
+		// Apply thinking parameter for models that declare thinking capability.
+		// Use c.thinking (from settings JSON) rather than the enableThinking caller arg,
+		// because the ReAct agent always passes enableThinking=true regardless of settings.
 		chatRequest.Think = &api.ThinkValue{Value: c.thinking}
 	}
 
@@ -267,15 +287,20 @@ func (c *OllamaClient) chatWithOptions(ctx context.Context, messages []message.M
 	chatRequest := &api.ChatRequest{
 		Model:    c.model,
 		Messages: ollamaMessages,
-		Options: map[string]any{
-			"temperature": temperature,
-			"num_predict": c.maxTokens,  // Max output tokens for Ollama
-			"num_ctx":     c.numCtx(),   // Total context window (input + output)
-		},
+		Options:  c.buildChatOptions(),
 	}
 
-	// Set thinking parameter if supported
-	if IsThinkingCapableModel(c.model) {
+	// Handle thinking capability.
+	if UseThinkTokenModel(c.model) {
+		useThinking := c.thinking
+		if enableThinking != nil {
+			useThinking = *enableThinking
+		}
+		chatRequest.Messages = stripThinkingFromHistory(chatRequest.Messages)
+		if useThinking {
+			injectThinkToken(chatRequest.Messages)
+		}
+	} else if IsThinkingCapableModel(c.model) {
 		if enableThinking != nil {
 			// Use provided thinking setting (from ChatWithThinking)
 			chatRequest.Think = &api.ThinkValue{Value: *enableThinking}

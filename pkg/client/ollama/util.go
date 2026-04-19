@@ -3,6 +3,7 @@ package ollama
 import (
 	"encoding/base64"
 	"fmt"
+	"strings"
 
 	pkgLogger "github.com/fpt/klein-cli/pkg/logger"
 	"github.com/fpt/klein-cli/pkg/message"
@@ -148,6 +149,32 @@ func toOllamaMessages(messages []message.Message) []api.Message {
 	}
 
 	return ollamaMessages
+}
+
+// injectThinkToken prepends <|think|> to the first system message to enable
+// thinking for gemma4-family models (per official model card).
+func injectThinkToken(messages []api.Message) {
+	const thinkToken = "<|think|>"
+	for i, msg := range messages {
+		if msg.Role == "system" {
+			if !strings.HasPrefix(msg.Content, thinkToken) {
+				messages[i].Content = thinkToken + "\n" + msg.Content
+			}
+			return
+		}
+	}
+}
+
+// stripThinkingFromHistory removes the Thinking field from all messages.
+// Required for gemma4-family models: per the model card, past thinking content
+// must not appear in conversation history.
+func stripThinkingFromHistory(messages []api.Message) []api.Message {
+	result := make([]api.Message, len(messages))
+	copy(result, messages)
+	for i := range result {
+		result[i].Thinking = ""
+	}
+	return result
 }
 
 // convertToOllamaTools converts domain tools to Ollama API tool format

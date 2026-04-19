@@ -5,7 +5,7 @@ This document records empirical findings from running the klein-cli matrix test 
 
 ## Test Suite
 
-Seven test cases cover the main capability areas:
+Nine test cases cover the main capability areas:
 
 | Test | What it measures |
 |------|-----------------|
@@ -13,8 +13,10 @@ Seven test cases cover the main capability areas:
 | `fibonacci` | Multi-turn edit: create then modify a file via `Edit` tool |
 | `long_text` | Long document processing and summarisation |
 | `memory_state` | Multi-turn conversation with state retention |
+| `plan_mode` | EnterPlanMode → plan approval → file creation |
 | `refactoring` | Two-turn coordinated multi-step code refactoring |
 | `research_scenario` | Text-only reasoning — no tools required |
+| `sub_agent_explore` | Spawning sub-agents via `spawn_agent` tool |
 | `web_search` | Fetch and analyse a web page via `WebFetch` tool |
 
 ## Results
@@ -180,6 +182,71 @@ silently dropping all qwen3 tool calls and producing empty responses. Fixed in
 
 ---
 
+### ✅ gemma4:26b — Perfect score (9/9)
+
+| coding | fibonacci | long_text | memory_state | plan_mode | refactoring | research_scenario | sub_agent_explore | web_search |
+|--------|-----------|-----------|--------------|-----------|-------------|-------------------|-------------------|------------|
+| ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+
+**Score: 9/9** (tested 2026-04-19)
+
+- **Tool calling**: Native Ollama JSON tool calling
+- **Thinking**: `UseThinkToken` — enabled via `<|think|>` prepended to the system prompt
+  (not the `Think` API parameter). Past thinking stripped from history per official model card.
+- **Vision**: ✅ multimodal
+- **Context**: 128K tokens
+- **Sampling**: `temperature=1.0`, `top_p=0.95`, `top_k=64` (per official model card)
+- **Backend config**: `testsuite/backends/ollama_gemma4_26b.json` (`maxTokens: 8192`)
+- **Notes**: First Ollama model to achieve a perfect 9/9 score including `refactoring`,
+  `plan_mode`, and `sub_agent_explore`. The `UseThinkToken` mechanism is required — without
+  `<|think|>` in the system prompt, thinking is not activated.
+
+---
+
+### 🟡 gemma4:e4b — Partial (4/9)
+
+| coding | fibonacci | long_text | memory_state | plan_mode | refactoring | research_scenario | sub_agent_explore | web_search |
+|--------|-----------|-----------|--------------|-----------|-------------|-------------------|-------------------|------------|
+| ✅ | ❌ | ❌ | ✅ | ❌ | ❌ | ✅ | ❌ | ✅ |
+
+**Score: 4/9** (tested 2026-04-19)
+
+- **Tool calling**: Native Ollama JSON tool calling
+- **Thinking**: `UseThinkToken` (same as 26b)
+- **Context**: 128K tokens
+- **Sampling**: `temperature=1.0`, `top_p=0.95`, `top_k=64`
+- **Backend config**: `testsuite/backends/ollama_gemma4_e4b.json` (`maxTokens: 8192`)
+- **Known issues** (model quality — no code fix):
+  - `fibonacci` / `plan_mode`: Deep thinking phase produces an empty response body — model
+    plans the change in the thinking channel but emits no tool call
+  - `long_text`: Forgets specific named details across turns (e.g. character name "Evangeline")
+  - `refactoring` / `sub_agent_explore`: Partial execution / hallucinated sub-agent results
+- **Notes**: Passes all tool-calling tests that fit in a single turn. Struggles with
+  multi-turn tasks that require acting after extended reasoning. Use 26b for agentic work.
+
+---
+
+### ✅ qwen3.6 — Strong performer (8/9, effectively 9/9)
+
+| coding | fibonacci | long_text | memory_state | plan_mode | refactoring | research_scenario | sub_agent_explore | web_search |
+|--------|-----------|-----------|--------------|-----------|-------------|-------------------|-------------------|------------|
+| ✅ | ❌* | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+
+**Score: 8/9** (tested 2026-04-19) — *fibonacci failure was a `check.sh` bug (now fixed), not a model issue
+
+- **Tool calling**: Native Ollama JSON tool calling
+- **Thinking**: `Think` API parameter; disabled by default (`"thinking": false`) to preserve
+  output token budget
+- **Vision**: ✅ multimodal
+- **Context**: 256K tokens
+- **Sampling**: no override — inherits global default (`temperature=0.1`)
+- **Backend config**: `testsuite/backends/ollama_qwen3.6.json` (`maxTokens: 8192`)
+- **Notes**: Excellent all-round performer. The `fibonacci` check.sh required "fibonacci" and
+  "10" on the same line — the model correctly described them on separate lines. After fixing
+  the check, this is effectively 9/9.
+
+---
+
 ### ✅ qwen3.5:9b — Strong performer (6/7)
 
 | coding | fibonacci | long_text | memory_state | refactoring | research_scenario | web_search |
@@ -223,15 +290,18 @@ silently dropping all qwen3 tool calls and producing empty responses. Fixed in
 
 | Model | Tool calling | Thinking | Matrix score |
 |-------|-------------|----------|--------------|
-| gpt-oss:20b | ✅ Native | ✅ | 6/7 |
-| qwen3.5:9b | ✅ Native | ✅ | 6/7 |
-| GLM-4.5-Air:Q3_K_M | ✅ Native | ✅ | 6/7 |
-| gpt-oss:120b | ✅ Native | ✅ | 5/7 (slow — CPU-bound) |
-| qwen3:14b | ✅ Native* | ✅ | 5/7 |
-| GLM-4.5-Air:Q2_K | ✅ Native | ✅ | 5/7 |
-| qwen3:30b | ✅ Native* | ✅† | 4/7 |
-| qwen3:8b | ✅ Native* | ✅ | 4/7 |
-| qwen3:4b | ✅ Native* | ✅ | 4/7 |
+| gemma4:26b | ✅ Native | ✅ UseThinkToken | **9/9** ✅ |
+| qwen3.6 | ✅ Native | ✅ Think API | 8/9 (effectively 9/9†) |
+| gpt-oss:20b | ✅ Native | ✅ Think API | 6/7‡ |
+| qwen3.5:9b | ✅ Native | ✅ Think API | 6/7‡ |
+| GLM-4.5-Air:Q3_K_M | ✅ Native | ✅ Think API | 6/7‡ |
+| gpt-oss:120b | ✅ Native | ✅ Think API | 5/7‡ (slow — CPU-bound) |
+| qwen3:14b | ✅ Native* | ✅ Think API | 5/7‡ |
+| GLM-4.5-Air:Q2_K | ✅ Native | ✅ Think API | 5/7‡ |
+| gemma4:e4b | ✅ Native | ✅ UseThinkToken | 4/9 |
+| qwen3:30b | ✅ Native* | ✅† | 4/7‡ |
+| qwen3:8b | ✅ Native* | ✅ Think API | 4/7‡ |
+| qwen3:4b | ✅ Native* | ✅ Think API | 4/7‡ |
 | glm-4.7-flash | ❌ XML only | ❌ | 1/4 |
 | lfm2.5-thinking | ❌ | ❌ | 1/4 |
 | rnj-1:8b | ❌ | ❌ | 1/4 |
@@ -239,6 +309,8 @@ silently dropping all qwen3 tool calls and producing empty responses. Fixed in
 
 \* Required streaming fix: qwen3 sends tool calls in intermediate streaming chunks, not the final chunk.
 † qwen3:30b ignores `think: false` — outputs reasoning as content, exhausting token budget before tool calls.
+† qwen3.6 fibonacci failure was a `check.sh` line-matching bug (fixed Apr 2026), not a model issue.
+‡ Score on 7-test suite; `plan_mode` and `sub_agent_explore` tests added later.
 
 ### Known universal failure: `refactoring` test
 
@@ -272,7 +344,16 @@ and model limitations. The test may need relaxed pass criteria or a more guided 
    search step would improve reliability across all model sizes.
 7. **Large models on insufficient VRAM are impractical**: gpt-oss:120b (60 GB) on a 12 GB
    GPU runs at ~10 min/test. Only useful if a GPU with sufficient VRAM is available.
-8. **New Ollama architectures may have deeply broken chat support at launch**: qwen3.5 uses
+9. **Some models use system-prompt tokens instead of the Think API**: gemma4 activates
+   thinking via `<|think|>` prepended to the system prompt, not the `Think` API parameter.
+   The model card must be consulted to determine the correct mechanism. Additionally, the
+   gemma4 model card specifies that past thinking must be stripped from conversation history
+   (`UseThinkToken` flag in the registry handles both injection and stripping).
+10. **Model size matters within the same family**: gemma4:26b achieves 9/9 while gemma4:e4b
+    achieves only 4/9. The e4b variant struggles with multi-turn tasks that require acting
+    after extended reasoning — the thinking phase exhausts the response without emitting a
+    tool call. Prefer larger variants for agentic tasks.
+11. **New Ollama architectures may have deeply broken chat support at launch**: qwen3.5 uses
    a new `qwen35moe` architecture. Early v0.17.x releases crashed on both system messages
    and tool calls. Ollama fixed it shortly after. Always verify basic multi-turn chat with a
    system message before committing a new model family to `model.go`.

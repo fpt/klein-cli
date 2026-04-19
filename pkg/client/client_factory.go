@@ -76,17 +76,10 @@ func NewStructuredClient[T any](client domain.LLM) (domain.StructuredLLM[T], err
 	// Determine the appropriate structured client based on the client type
 	switch c := client.(type) {
 	case *ollama.OllamaClient:
-		// For Ollama clients, check if the model supports JSON Schema or native tool calling
-		if ollama.IsJSONSchemaCapableModel(c.Model()) {
-			// Use JSON Schema-based structured client
-			return ollama.NewOllamaStructuredClient[T](c.OllamaCore), nil
-		} else if ollama.IsToolCapableModel(c.Model()) {
-			// Use generic tool calling-based structured client
+		if ollama.IsToolCapableModel(c.Model()) {
 			return NewToolCallingStructuredClient[T](c), nil
-		} else {
-			// Model doesn't support either JSON Schema or tool calling
-			return nil, fmt.Errorf("model %s does not support structured output", c.Model())
 		}
+		return nil, fmt.Errorf("model %s does not support structured output", c.Model())
 	case *anthropic.AnthropicClient:
 		// For Anthropic, use the generic tool calling-based structured client
 		return NewToolCallingStructuredClient[T](c), nil

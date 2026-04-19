@@ -99,7 +99,6 @@ Present:
 ## Available Backends
 
 List with `ls testsuite/backends/` or read `doc/OLLAMA_MODELS.md` for capability notes.
-Ollama backends require `OLLAMA_HOST=192.168.101.151:11434`.
 Cloud backends (anthropic, openai, gemini) require the corresponding `*_API_KEY` env var.
 
 $ARGUMENTS

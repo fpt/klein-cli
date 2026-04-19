@@ -86,7 +86,7 @@ make build
 ### Step 5 — Run integration tests
 
 ```bash
-OLLAMA_HOST=192.168.101.151:11434 CLI=./output/klein BACKENDS=<backend_name> ./testsuite/matrix_runner.sh
+CLI=./output/klein BACKENDS=<backend_name> ./testsuite/matrix_runner.sh
 ```
 
 Run in background if it will take a while. Use the same failure analysis from the `integ-test` skill:

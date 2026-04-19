@@ -72,6 +72,8 @@ var ollamaModels = []OllamaModel{
 	// temperature=1.0, top_p=0.95, top_k=64.
 	{Name: "gemma4", Tool: true, Think: true, Vision: true, Context: 128000,
 		Temperature: 1.0, TopP: 0.95, TopK: 64, UseThinkToken: true},
+	// qwen3.6 family — tool calling, thinking, vision; 256K context
+	{Name: "qwen3.6", Tool: true, Think: true, Vision: true, Context: 256000},
 	// qwen3.5 family
 	{Name: "qwen3.5:0.6b", Tool: true, Think: true, Vision: true, Context: 256000},
 	{Name: "qwen3.5:0.8b", Tool: true, Think: true, Vision: true, Context: 256000},

@@ -15,7 +15,7 @@ echo "Testing AI-generated multi-step Fibonacci program..."
 response_content=$("$EXTRACT_RESPONSE" "$output_file")
 
 # Check if the response contains mentions of both phases of the task
-if ! echo "$response_content" | grep -i -q "fibonacci.*10" && ! echo "$response_content" | grep -i -q "10.*fibonacci"; then
+if ! echo "$response_content" | tr '\n' ' ' | grep -i -q "fibonacci.*10\|10.*fibonacci"; then
     echo "✗ Basic Fibonacci generation task not found in klein response"
     echo "Response content was:"
     echo "$response_content"

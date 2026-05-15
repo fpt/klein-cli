@@ -5,15 +5,21 @@ import (
 	"encoding/json"
 	"fmt"
 
+	jschema "github.com/santhosh-tekuri/jsonschema/v6"
+
 	"github.com/fpt/klein-cli/pkg/agent/domain"
 	"github.com/fpt/klein-cli/pkg/message"
 )
 
-// InvokeWithSchema sends a one-shot prompt to the LLM and constrains the response
-// to match the provided JSON Schema. The schema must be a JSON Schema object with
-// a top-level "properties" key (i.e. {"type":"object","properties":{...}}).
+const schemaMaxRetries = 3
+
+// InvokeWithSchema sends a prompt to the LLM and constrains the response to match
+// the provided JSON Schema. The schema must be a JSON Schema object with a top-level
+// "properties" key (i.e. {"type":"object","properties":{...}}).
 //
-// Requires a tool-capable backend. Returns the structured response as a map.
+// Requires a tool-capable backend. Retries up to schemaMaxRetries times when the
+// model's response does not pass JSON Schema validation, feeding the validation
+// error back so the model can self-correct. Returns the validated map on success.
 func InvokeWithSchema(ctx context.Context, llm domain.LLM, prompt string, schema map[string]any) (map[string]any, error) {
 	toolCallingLLM, ok := llm.(domain.ToolCallingLLM)
 	if !ok {
@@ -23,6 +29,12 @@ func InvokeWithSchema(ctx context.Context, llm domain.LLM, prompt string, schema
 	toolArgs, err := schemaPropsToToolArgs(schema)
 	if err != nil {
 		return nil, err
+	}
+
+	// Compile schema once for validation on every attempt.
+	validator, err := compileSchema(schema)
+	if err != nil {
+		return nil, fmt.Errorf("--json-schema: failed to compile schema for validation: %w", err)
 	}
 
 	respond := &respondTool{
@@ -35,35 +47,70 @@ func InvokeWithSchema(ctx context.Context, llm domain.LLM, prompt string, schema
 	}
 	toolCallingLLM.SetToolManager(&respondToolManager{respondTool: respond})
 
+	toolChoice := domain.ToolChoice{Type: domain.ToolChoiceTool, Name: "respond"}
+
+	// Seed conversation: system instruction + user prompt.
 	msgs := []message.Message{
 		message.NewSystemMessage(
 			"You must call the 'respond' tool with your answer. Do not respond in any other format."),
 		message.NewChatMessage(message.MessageTypeUser, prompt),
 	}
 
-	resp, err := toolCallingLLM.ChatWithToolChoice(
-		ctx, msgs,
-		domain.ToolChoice{Type: domain.ToolChoiceTool, Name: "respond"},
-		false, nil,
-	)
-	if err != nil {
-		return nil, fmt.Errorf("LLM call failed: %w", err)
+	var lastValidationErr error
+	for attempt := 1; attempt <= schemaMaxRetries; attempt++ {
+		resp, err := toolCallingLLM.ChatWithToolChoice(ctx, msgs, toolChoice, false, nil)
+		if err != nil {
+			return nil, fmt.Errorf("LLM call failed (attempt %d): %w", attempt, err)
+		}
+
+		toolCallMsg, ok := resp.(*message.ToolCallMessage)
+		if !ok {
+			return nil, fmt.Errorf("expected tool call response, got %T (attempt %d)", resp, attempt)
+		}
+
+		// Marshal arguments → map for validation and return.
+		raw, err := json.Marshal(toolCallMsg.ToolArguments())
+		if err != nil {
+			return nil, fmt.Errorf("failed to marshal response: %w", err)
+		}
+		var result map[string]any
+		if err := json.Unmarshal(raw, &result); err != nil {
+			return nil, fmt.Errorf("failed to unmarshal response: %w", err)
+		}
+
+		// Validate against the compiled schema.
+		if valErr := validator.Validate(result); valErr == nil {
+			return result, nil
+		} else {
+			lastValidationErr = valErr
+		}
+
+		if attempt == schemaMaxRetries {
+			break
+		}
+
+		// Append the failed tool call + a tool-result error to the conversation
+		// so the model sees exactly what was wrong and can correct itself.
+		msgs = append(msgs, toolCallMsg)
+		msgs = append(msgs, message.NewToolResultMessage(
+			toolCallMsg.ID(),
+			"",
+			fmt.Sprintf("VALIDATION ERROR: Your response does not match the required JSON Schema.\n\n%s\n\nPlease call 'respond' again with a corrected response.", lastValidationErr),
+		))
 	}
 
-	toolCallMsg, ok := resp.(*message.ToolCallMessage)
-	if !ok {
-		return nil, fmt.Errorf("expected tool call response, got %T", resp)
-	}
+	return nil, fmt.Errorf("response did not match schema after %d attempts: %w", schemaMaxRetries, lastValidationErr)
+}
 
-	raw, err := json.Marshal(toolCallMsg.ToolArguments())
-	if err != nil {
-		return nil, fmt.Errorf("failed to marshal response: %w", err)
+// compileSchema compiles a map[string]any JSON Schema into a validator using
+// santhosh-tekuri/jsonschema/v6. The schema is registered under an in-memory URL.
+func compileSchema(schema map[string]any) (*jschema.Schema, error) {
+	c := jschema.NewCompiler()
+	const schemaURL = "schema://inline"
+	if err := c.AddResource(schemaURL, schema); err != nil {
+		return nil, err
 	}
-	var result map[string]any
-	if err := json.Unmarshal(raw, &result); err != nil {
-		return nil, fmt.Errorf("failed to unmarshal response: %w", err)
-	}
-	return result, nil
+	return c.Compile(schemaURL)
 }
 
 // schemaPropsToToolArgs converts a JSON Schema object's properties into
@@ -111,3 +158,4 @@ func schemaPropsToToolArgs(schema map[string]any) ([]message.ToolArgument, error
 	}
 	return args, nil
 }
+

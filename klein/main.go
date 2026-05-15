@@ -2,10 +2,12 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"os"
 	"strings"
+
 	"github.com/fpt/klein-cli/internal/app"
 	"github.com/fpt/klein-cli/internal/config"
 	connectserver "github.com/fpt/klein-cli/internal/connectrpc"
@@ -43,6 +45,7 @@ func printUsage() {
 	fmt.Println("  klein -f prompts.txt                     # Multi-turn from file (no memory)")
 	fmt.Println("  klein -v \"Debug this issue\"              # Enable verbose debug logging")
 	fmt.Println("  klein -l                                 # Show conversation history")
+	fmt.Println("  klein --json-schema schema.json \"...\"   # Structured output matching JSON Schema")
 	fmt.Println()
 }
 
@@ -64,6 +67,7 @@ func main() {
 	var verbose = flag.Bool("v", false, "Enable verbose logging (debug level)")
 	var verboseLong = flag.Bool("verbose", false, "Enable verbose logging (debug level)")
 	var allowedTools = flag.String("allowed-tools", "", "Comma-separated list of allowed tools (overrides skill's allowed-tools)")
+	var jsonSchema = flag.String("json-schema", "", "Path to a JSON Schema file; constrains the response to that schema (one-shot, no tools)")
 	var serve = flag.Bool("serve", false, "Start Connect-gRPC server mode for gateway integration")
 	var serveAddr = flag.String("serve-addr", ":50051", "Connect server listen address")
 	var sessionsDir = flag.String("sessions-dir", "", "Directory for per-session persistence files (default: ~/.klein/claw/sessions/)")
@@ -230,6 +234,16 @@ func main() {
 		return
 	}
 
+	// JSON Schema mode: bypass skill/agent system, emit raw JSON to stdout.
+	if *jsonSchema != "" {
+		if len(args) == 0 {
+			fmt.Fprintln(os.Stderr, "Error: --json-schema requires a prompt argument")
+			os.Exit(1)
+		}
+		executeWithSchema(ctx, llmClient, strings.Join(args, " "), *jsonSchema)
+		return
+	}
+
 	// Determine if we should run in interactive mode or one-shot mode
 	if len(args) > 0 {
 		userInput := strings.Join(args, " ")
@@ -296,6 +310,35 @@ func executeMultiTurnFile(ctx context.Context, a *app.Agent, filePath string, sk
 	}
 
 	fmt.Println("All turns completed.")
+}
+
+// executeWithSchema performs a one-shot structured output call using the provided
+// JSON Schema file. The agent/skill system is bypassed; the raw JSON result is
+// written to stdout so callers can pipe it directly.
+func executeWithSchema(ctx context.Context, llm domain.LLM, prompt string, schemaPath string) {
+	schemaBytes, err := os.ReadFile(schemaPath)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error: cannot read schema file %q: %v\n", schemaPath, err)
+		os.Exit(1)
+	}
+	var schema map[string]any
+	if err := json.Unmarshal(schemaBytes, &schema); err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %q is not valid JSON: %v\n", schemaPath, err)
+		os.Exit(1)
+	}
+
+	result, err := client.InvokeWithSchema(ctx, llm, prompt, schema)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		os.Exit(1)
+	}
+
+	out, err := json.MarshalIndent(result, "", "  ")
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error: failed to format result: %v\n", err)
+		os.Exit(1)
+	}
+	fmt.Println(string(out))
 }
 
 // printTokenUsage prints a [usage] line to stderr if the client exposes token usage.

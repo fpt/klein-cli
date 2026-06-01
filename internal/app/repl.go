@@ -10,6 +10,7 @@ import (
 	"syscall"
 
 	"github.com/chzyer/readline"
+	"github.com/fpt/klein-cli/internal/claude"
 	"github.com/fpt/klein-cli/internal/tool"
 	"github.com/fpt/klein-cli/pkg/agent/domain"
 	"github.com/manifoldco/promptui"
@@ -247,6 +248,12 @@ func StartInteractiveMode(ctx context.Context, a *Agent, skillName string) {
 	fmt.Println("💬 Commands start with '/', everything else goes to the AI agent!")
 	fmt.Println("⌨️ Arrow keys to navigate; Tab for completion; Ctrl+R searches this session's input.")
 	fmt.Println(strings.Repeat("=", 60))
+
+	// On a fresh session inject project context then offer to import CC history.
+	if len(a.GetMessageState().GetMessages()) == 0 {
+		a.InjectContextFile()
+		offerClaudeHistoryImport(a)
+	}
 
 	if preview := a.GetConversationPreview(6); preview != "" {
 		fmt.Print("\n")
@@ -488,6 +495,43 @@ func makePlanApprovalHandler(w io.Writer) tool.PlanApprovalHandler {
 			return false, false, nil
 		}
 	}
+}
+
+// offerClaudeHistoryImport checks whether a Claude Code session file exists for
+// the agent's working directory. When one is found the user is prompted to import
+// it (y/n). Errors are printed as informational warnings, never fatal.
+func offerClaudeHistoryImport(a *Agent) {
+	jsonlPath, err := claude.FindLatestSession(a.WorkingDir())
+	if err != nil {
+		fmt.Printf("⚠️  Could not check for Claude history: %v\n", err)
+		return
+	}
+	if jsonlPath == "" {
+		return // no history available
+	}
+
+	prompt := promptui.Select{
+		Label: "Claude Code history found. Import it into this session?",
+		Items: []string{"Yes", "No"},
+		Templates: &promptui.SelectTemplates{
+			Label:    "{{ . }}",
+			Active:   "> {{ . | cyan }}",
+			Inactive: "  {{ . }}",
+			Selected: "{{ . | bold }}",
+		},
+		Size: 2,
+	}
+	_, result, err := prompt.Run()
+	if err != nil || result != "Yes" {
+		return
+	}
+
+	count, err := a.ImportClaudeHistory(jsonlPath)
+	if err != nil {
+		fmt.Printf("⚠️  Failed to import Claude history: %v\n", err)
+		return
+	}
+	fmt.Printf("✅ Imported %d messages from Claude Code history.\n", count)
 }
 
 func showStatus(a *Agent) {

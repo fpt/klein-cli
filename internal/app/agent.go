@@ -14,6 +14,7 @@ import (
 
 	"github.com/manifoldco/promptui"
 
+	"github.com/fpt/klein-cli/internal/claude"
 	"github.com/fpt/klein-cli/internal/config"
 	"github.com/fpt/klein-cli/internal/infra"
 	"github.com/fpt/klein-cli/internal/permission"
@@ -851,6 +852,35 @@ func (a *Agent) OutWriter() io.Writer {
 		return a.out
 	}
 	return os.Stdout
+}
+
+// ImportClaudeHistory loads messages from the given Claude Code *.jsonl session
+// file and appends them to the shared message state. It also saves the updated
+// state so the imported history survives the next restart.
+func (a *Agent) ImportClaudeHistory(jsonlPath string) (int, error) {
+	msgs, err := claude.ImportMessages(jsonlPath)
+	if err != nil {
+		return 0, err
+	}
+	for _, m := range msgs {
+		a.sharedState.AddMessage(m)
+	}
+	if saveErr := a.sharedState.SaveToFile(); saveErr != nil {
+		// Non-fatal: history is in memory even if persist fails.
+		a.logger.Warn("Failed to persist imported history", "error", saveErr)
+	}
+	return len(msgs), nil
+}
+
+// InjectContextFile reads AGENTS.md or CLAUDE.md from the working directory
+// and prepends it as a system message. Does nothing when neither file exists.
+func (a *Agent) InjectContextFile() {
+	content, err := claude.FindContextFile(a.workingDir)
+	if err != nil || content == "" {
+		return
+	}
+	a.sharedState.AddMessage(message.NewSystemMessage(
+		"# Project Context\n\n" + content))
 }
 
 // setupEventHandlers configures event handlers to convert events back to output format.

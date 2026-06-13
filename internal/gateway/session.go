@@ -30,7 +30,18 @@ type Session struct {
 	AgentSessionID string // Connect RPC session ID
 	Skill          string
 	LastActivity   time.Time
-	mu             sync.Mutex
+	mu             sync.Mutex // protects mutable fields above
+
+	// invokeMu serializes agent invocations for this peer. The agent session and
+	// its message state are not safe for concurrent use, so two quick messages
+	// from the same peer must not invoke the agent simultaneously.
+	invokeMu sync.Mutex
+}
+
+// LockInvoke acquires the per-session invocation lock and returns a release func.
+func (s *Session) LockInvoke() func() {
+	s.invokeMu.Lock()
+	return s.invokeMu.Unlock
 }
 
 // SessionManager manages per-peer sessions with inactivity timeout.

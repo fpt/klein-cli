@@ -63,6 +63,15 @@ func (c *MessageState) Clear() {
 	}
 }
 
+// clearInMemory resets only the in-memory message slice, leaving any persisted
+// session file untouched. Used during compaction, which rebuilds the in-memory
+// history and relies on the next SaveToFile to persist it — deleting the file
+// here would open a data-loss window if the process exits before that save
+// (notably mid-run compaction, which has no save of its own).
+func (c *MessageState) clearInMemory() {
+	c.Messages = make([]message.Message, 0)
+}
+
 // ResetTokenCounters clears the internal token counters snapshot
 func (c *MessageState) ResetTokenCounters() {
 	c.tokenInput, c.tokenOutput, c.tokenTotal = 0, 0, 0

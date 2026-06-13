@@ -8,6 +8,7 @@ import (
 	"io"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"sync"
 
 	"connectrpc.com/connect"
@@ -18,6 +19,7 @@ import (
 	"github.com/fpt/klein-cli/internal/app"
 	"github.com/fpt/klein-cli/internal/config"
 	"github.com/fpt/klein-cli/internal/infra"
+	"github.com/fpt/klein-cli/internal/skill"
 	"github.com/fpt/klein-cli/pkg/agent/domain"
 	"github.com/fpt/klein-cli/pkg/agent/events"
 	client "github.com/fpt/klein-cli/pkg/client"
@@ -30,7 +32,11 @@ type AgentServer struct {
 
 	mu       sync.RWMutex
 	sessions map[string]*sessionState
-	nextID   int
+	// keyToSession maps a persistence key to its current sessionID, so a peer
+	// that reconnects (e.g. after the gateway's inactivity timeout) replaces its
+	// prior session instead of leaking a new agent every cycle.
+	keyToSession map[string]string
+	nextID       int
 
 	// Shared dependencies for creating agents
 	settings        *config.Settings
@@ -40,13 +46,15 @@ type AgentServer struct {
 }
 
 type sessionState struct {
-	agent *app.Agent
+	agent          *app.Agent
+	persistenceKey string
 }
 
 // NewAgentServer creates a Connect AgentService handler.
 func NewAgentServer(settings *config.Settings, mcpToolManagers map[string]domain.ToolManager, logger *pkgLogger.Logger, sessionsDir string) *AgentServer {
 	return &AgentServer{
 		sessions:        make(map[string]*sessionState),
+		keyToSession:    make(map[string]string),
 		settings:        settings,
 		mcpToolManagers: mcpToolManagers,
 		logger:          logger.WithComponent("connect-server"),
@@ -57,8 +65,11 @@ func NewAgentServer(settings *config.Settings, mcpToolManagers map[string]domain
 func (s *AgentServer) StartSession(ctx context.Context, req *connect.Request[agentv1.StartSessionRequest]) (*connect.Response[agentv1.StartSessionResponse], error) {
 	msg := req.Msg
 
-	// Merge request settings with server defaults
-	settings := s.settings
+	// Merge request settings with server defaults. Work on a per-session COPY so
+	// one session's model/iteration overrides never leak into the shared server
+	// defaults (and so concurrent StartSession calls don't race on them).
+	settingsCopy := *s.settings
+	settings := &settingsCopy
 	if msg.Settings != nil {
 		if msg.Settings.Model != "" {
 			settings.LLM.Model = msg.Settings.Model
@@ -99,9 +110,20 @@ func (s *AgentServer) StartSession(ctx context.Context, req *connect.Request[age
 	}
 
 	s.mu.Lock()
+	// Evict any prior session for the same persistence key so reconnecting peers
+	// don't leak an agent per reconnect. History survives via the persistence file.
+	if persistenceKey != "" {
+		if oldID, ok := s.keyToSession[persistenceKey]; ok {
+			delete(s.sessions, oldID)
+			s.logger.Info("Evicted prior session for persistence key", "old_session_id", oldID, "persistence_key", persistenceKey)
+		}
+	}
 	s.nextID++
 	sessionID := fmt.Sprintf("session-%d", s.nextID)
-	s.sessions[sessionID] = &sessionState{agent: agent}
+	s.sessions[sessionID] = &sessionState{agent: agent, persistenceKey: persistenceKey}
+	if persistenceKey != "" {
+		s.keyToSession[persistenceKey] = sessionID
+	}
 	s.mu.Unlock()
 
 	s.logger.Info("Session started", "session_id", sessionID, "working_dir", workingDir, "persistence_key", persistenceKey)
@@ -121,6 +143,14 @@ func (s *AgentServer) ClearSession(ctx context.Context, req *connect.Request[age
 		return nil, err
 	}
 	session.agent.ClearHistory()
+	// Drop the session so it can be garbage collected; the persistence file (if
+	// any) retains history for the next StartSession.
+	s.mu.Lock()
+	delete(s.sessions, req.Msg.SessionId)
+	if session.persistenceKey != "" && s.keyToSession[session.persistenceKey] == req.Msg.SessionId {
+		delete(s.keyToSession, session.persistenceKey)
+	}
+	s.mu.Unlock()
 	s.logger.Info("Session cleared", "session_id", req.Msg.SessionId)
 	return connect.NewResponse(&agentv1.ClearSessionResponse{}), nil
 }
@@ -136,8 +166,18 @@ func (s *AgentServer) Invoke(ctx context.Context, req *connect.Request[agentv1.I
 		skillName = "code"
 	}
 
+	// The agent emits events from its own goroutine (thinking drainer) as well as
+	// the main Invoke goroutine; connect.ServerStream.Send is not safe for
+	// concurrent use, so serialize all sends behind this mutex.
+	var sendMu sync.Mutex
+	send := func(ev *agentv1.InvokeEvent) {
+		sendMu.Lock()
+		defer sendMu.Unlock()
+		_ = stream.Send(ev)
+	}
+
 	// Send STARTED status
-	_ = stream.Send(&agentv1.InvokeEvent{
+	send(&agentv1.InvokeEvent{
 		Event: &agentv1.InvokeEvent_Status{
 			Status: &agentv1.StatusEvent{State: agentv1.InvokeState_STARTED},
 		},
@@ -147,7 +187,7 @@ func (s *AgentServer) Invoke(ctx context.Context, req *connect.Request[agentv1.I
 	session.agent.SetEventHandler(func(event events.AgentEvent) {
 		protoEvent := translateEvent(event)
 		if protoEvent != nil {
-			_ = stream.Send(protoEvent)
+			send(protoEvent)
 		}
 	})
 	defer session.agent.SetEventHandler(nil)
@@ -163,7 +203,7 @@ func (s *AgentServer) Invoke(ctx context.Context, req *connect.Request[agentv1.I
 
 	// Send final message or error
 	if invokeErr != nil {
-		_ = stream.Send(&agentv1.InvokeEvent{
+		send(&agentv1.InvokeEvent{
 			Event: &agentv1.InvokeEvent_Error{Error: invokeErr.Error()},
 		})
 		return nil // Don't return error — we sent it via stream
@@ -181,12 +221,12 @@ func (s *AgentServer) Invoke(ctx context.Context, req *connect.Request[agentv1.I
 				TotalTokens:  int32(result.TotalTokens()),
 			}
 		}
-		_ = stream.Send(&agentv1.InvokeEvent{
+		send(&agentv1.InvokeEvent{
 			Event: &agentv1.InvokeEvent_Final{Final: final},
 		})
 	}
 
-	_ = stream.Send(&agentv1.InvokeEvent{
+	send(&agentv1.InvokeEvent{
 		Event: &agentv1.InvokeEvent_Status{
 			Status: &agentv1.StatusEvent{State: agentv1.InvokeState_COMPLETED},
 		},
@@ -209,13 +249,32 @@ func (s *AgentServer) GetConversationPreview(ctx context.Context, req *connect.R
 }
 
 func (s *AgentServer) ListScenarios(ctx context.Context, req *connect.Request[agentv1.ListScenariosRequest]) (*connect.Response[agentv1.ListScenariosResponse], error) {
-	return connect.NewResponse(&agentv1.ListScenariosResponse{
-		Scenarios: []*agentv1.Scenario{
-			{Name: "code", Description: "Comprehensive coding assistant"},
-			{Name: "respond", Description: "Direct knowledge-based responses"},
-			{Name: "claw", Description: "Personal AI assistant for messaging"},
-		},
-	}), nil
+	// Enumerate the actually-loaded skills rather than a hardcoded list, so
+	// renamed/removed skills (e.g. the deleted "respond") never appear.
+	skills, err := skill.LoadSkills(".")
+	if err != nil {
+		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to load skills: %w", err))
+	}
+
+	names := make([]string, 0, len(skills))
+	for name, sk := range skills {
+		// claw is gateway-internal (user-invocable:false); still surface it for
+		// the gateway, but skip any other non-invocable skills.
+		if !sk.UserInvocable && name != "claw" {
+			continue
+		}
+		names = append(names, name)
+	}
+	sort.Strings(names)
+
+	scenarios := make([]*agentv1.Scenario, 0, len(names))
+	for _, name := range names {
+		scenarios = append(scenarios, &agentv1.Scenario{
+			Name:        name,
+			Description: skills[name].Description,
+		})
+	}
+	return connect.NewResponse(&agentv1.ListScenariosResponse{Scenarios: scenarios}), nil
 }
 
 // SubmitClientEvent, GetTodos, WriteTodos, SetSettings use the unimplemented defaults for now.

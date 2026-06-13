@@ -25,44 +25,43 @@ func NewLLMClient(settings config.LLMSettings) (domain.LLM, error) {
 	}
 }
 
-// NewClientWithToolManager creates a tool calling client appropriate for the underlying LLM client
-// Takes a base LLM client and adds tool management capabilities to it
+// NewClientWithToolManager creates a tool calling client appropriate for the
+// underlying LLM client. It ALWAYS returns a fresh wrapper built from the shared
+// core (rather than mutating the passed-in client) so that distinct agents
+// (e.g. a parent and a spawned sub-agent) get independent tool managers and do
+// not clobber each other mid-run. Cross-call telemetry (token usage) lives on
+// the shared core, so the original client still reports accurate usage.
 func NewClientWithToolManager(client domain.LLM, toolManager domain.ToolManager) (domain.ToolCallingLLM, error) {
-	// Check if the client is already a tool calling client
-	if toolCallingClient, ok := client.(domain.ToolCallingLLM); ok {
-		// Set the tool manager and return
-		toolCallingClient.SetToolManager(toolManager)
-		return toolCallingClient, nil
-	}
-
-	// Determine the appropriate tool calling client based on the client type
+	// Build a fresh wrapper from the shared core based on the concrete type.
 	switch c := client.(type) {
 	case *ollama.OllamaClient:
-		// For Ollama clients, use the embedded OllamaCore to create a new tool calling client
-		// This will automatically choose between native tool calling or schema-based based on model capabilities
+		// Ollama automatically chooses native tool calling vs schema-based on
+		// model capabilities.
 		toolClient := ollama.NewOllamaClientFromCore(c.OllamaCore)
 		toolClient.SetToolManager(toolManager)
 		return toolClient, nil
 	case *anthropic.AnthropicClient:
-		// For Anthropic clients, use the embedded AnthropicCore to create a new tool calling client
 		toolClient := anthropic.NewAnthropicClientFromCore(c.AnthropicCore)
 		toolClient.SetToolManager(toolManager)
 		return toolClient, nil
 	case *openai.OpenAIClient:
-		// For OpenAI clients, use the embedded OpenAICore to create a new tool calling client
 		toolClient := openai.NewOpenAIClientFromCore(c.OpenAICore)
 		toolClient.SetToolManager(toolManager)
 		return toolClient, nil
 	case *gemini.GeminiClient:
-		// For Gemini clients, use the embedded GeminiCore to create a new tool calling client
 		toolClient := gemini.NewGeminiClientFromCore(c.GeminiCore)
 		toolClient.SetToolManager(toolManager)
 		return toolClient, nil
-	default:
-		// For unknown clients, we cannot create a tool calling client
-		// since we need specific core implementations
-		return nil, fmt.Errorf("unsupported client type for tool calling: %T", client)
 	}
+
+	// Fallback: an unknown client that already supports tool calling. We cannot
+	// clone it, so mutate in place (legacy behavior).
+	if toolCallingClient, ok := client.(domain.ToolCallingLLM); ok {
+		toolCallingClient.SetToolManager(toolManager)
+		return toolCallingClient, nil
+	}
+
+	return nil, fmt.Errorf("unsupported client type for tool calling: %T", client)
 }
 
 // NewStructuredClient creates a structured client for the given type T and base LLM client

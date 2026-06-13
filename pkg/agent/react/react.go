@@ -39,6 +39,11 @@ type ReAct struct {
 	// stub so they don't consume the full context window.
 	// If nil, results are stored verbatim.
 	toolResultTransform func(toolUseID, toolName, content string) string
+
+	// bashWhitelist holds the commands that don't require user approval.
+	// Set via SetBashWhitelist from the user's settings; when empty a
+	// conservative built-in default is used.
+	bashWhitelist []string
 }
 
 // Ensure ReAct implements domain.ReAct interface
@@ -64,6 +69,13 @@ func NewReAct(llmClient domain.LLM, toolManager domain.ToolManager, sharedState 
 // result before it is stored in conversation state. Pass nil to disable.
 func (r *ReAct) SetToolResultTransform(fn func(toolUseID, toolName, content string) string) {
 	r.toolResultTransform = fn
+}
+
+// SetBashWhitelist sets the list of command prefixes that do not require user
+// approval. Pass the user's configured whitelist (settings.Bash.WhitelistedCommands);
+// when empty a conservative built-in default is used.
+func (r *ReAct) SetBashWhitelist(whitelist []string) {
+	r.bashWhitelist = whitelist
 }
 
 // GetLastMessage returns the last message in the conversation without exposing state
@@ -211,8 +223,15 @@ func (r *ReAct) Resume(ctx context.Context) (message.Message, error) {
 	return msg, nil
 }
 
+// Close reclaims the thinking-channel drainer goroutine started by Run. It is
+// safe to call multiple times and safe to call when Run was never invoked
+// (nil channel), so callers can defer it immediately after construction.
 func (r *ReAct) Close() {
+	if r.thinkingChan == nil {
+		return
+	}
 	close(r.thinkingChan)
+	r.thinkingChan = nil
 }
 
 func (r *ReAct) GetStatus() domain.AgentStatus {
@@ -596,59 +615,77 @@ func (r *ReAct) estimateContextWindow() int {
 	}
 }
 
-// bashCommandRequiresApproval checks if a bash command requires user approval
+// bashCommandRequiresApproval checks if a bash command requires user approval.
 func (r *ReAct) bashCommandRequiresApproval(toolCall *message.ToolCallMessage) bool {
-	toolName := string(toolCall.ToolName())
 	args := toolCall.ToolArguments()
 
-	var command string
-
-	// Extract command based on tool type
-	switch toolName {
-	case "bash":
-		if cmd, ok := args["command"].(string); ok {
-			command = cmd
-		}
-	default:
+	// Only the Bash tool carries a shell command.
+	if string(toolCall.ToolName()) != "Bash" {
 		return false
 	}
 
+	command, _ := args["command"].(string)
+	command = strings.TrimSpace(command)
 	if command == "" {
 		return false
 	}
 
-	// Check if command is whitelisted using default whitelist
-	// Note: This uses a hardcoded whitelist that should match the settings defaults
-	// In the future, this could be improved by accessing the actual settings
+	// Commands containing shell metacharacters (chaining, piping, redirection,
+	// backgrounding) can smuggle a non-whitelisted command past a prefix match
+	// (e.g. "git diff; rm -rf ~"). Always require approval for these.
+	if containsShellChaining(command) {
+		return true
+	}
+
 	return r.isCommandNotWhitelisted(command)
 }
 
-// isCommandNotWhitelisted checks if a command is not in the default whitelist
-// This is a simplified version that should match the BashToolManager logic
+// shellChainingChars are metacharacters that combine or redirect commands and
+// therefore defeat simple prefix-based whitelisting.
+var shellChainingChars = []string{";", "&&", "||", "|", "\n", "&", ">", "<", "`", "$("}
+
+// containsShellChaining reports whether a command uses shell constructs that can
+// chain, redirect, or substitute additional commands.
+func containsShellChaining(command string) bool {
+	for _, c := range shellChainingChars {
+		if strings.Contains(command, c) {
+			return true
+		}
+	}
+	return false
+}
+
+// defaultBashWhitelist mirrors config.GetDefaultSettings().Bash.WhitelistedCommands
+// and is used only when no whitelist has been wired via SetBashWhitelist.
+var defaultBashWhitelist = []string{
+	"go build", "go test", "go run", "go mod tidy", "go fmt", "go vet",
+	"git status", "git log", "git diff",
+	"ls", "pwd", "cat", "head", "tail", "grep", "find", "echo", "which",
+	"make", "npm install", "npm run", "npm test",
+}
+
+// isCommandNotWhitelisted checks whether a command is absent from the configured
+// whitelist (settings.Bash.WhitelistedCommands), falling back to a conservative
+// built-in default. A whitelisted prefix must be followed by end-of-string or
+// whitespace so "lsof" does not match the "ls" entry.
 func (r *ReAct) isCommandNotWhitelisted(command string) bool {
-	// Default whitelist (should match settings defaults)
-	defaultWhitelist := []string{
-		"go build", "go test", "go run", "go mod tidy", "go fmt", "go vet",
-		"git status", "git log", "git diff",
-		"ls", "pwd", "cat", "head", "tail", "grep", "find", "echo", "which",
-		"make", "npm install", "npm run", "npm test",
+	whitelist := r.bashWhitelist
+	if len(whitelist) == 0 {
+		whitelist = defaultBashWhitelist
 	}
 
 	command = strings.TrimSpace(command)
 
-	for _, whitelisted := range defaultWhitelist {
-		if strings.HasPrefix(command, whitelisted) {
-			// Make sure it's a complete word match
-			if len(command) == len(whitelisted) {
-				return false
-			}
-			// Check if next character is a space (allowing arguments)
-			if len(command) > len(whitelisted) {
-				nextChar := command[len(whitelisted)]
-				if nextChar == ' ' || nextChar == '\t' {
-					return false
-				}
-			}
+	for _, whitelisted := range whitelist {
+		if !strings.HasPrefix(command, whitelisted) {
+			continue
+		}
+		// Complete match, or the next character must be whitespace.
+		if len(command) == len(whitelisted) {
+			return false
+		}
+		if nextChar := command[len(whitelisted)]; nextChar == ' ' || nextChar == '\t' {
+			return false
 		}
 	}
 

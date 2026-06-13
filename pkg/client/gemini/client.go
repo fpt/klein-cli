@@ -20,6 +20,11 @@ type GeminiCore struct {
 	client    *genai.Client
 	model     string
 	maxTokens int
+
+	// lastUsage is shared by all wrappers built from this core so token usage
+	// reported via the original client stays accurate even when per-invocation
+	// wrappers make the actual API calls.
+	lastUsage message.TokenUsage
 }
 
 // GeminiClient implements ToolCallingLLM and VisionLLM interfaces
@@ -27,8 +32,7 @@ type GeminiClient struct {
 	*GeminiCore
 	toolManager domain.ToolManager
 
-	// Telemetry and caching/session hints
-	lastUsage message.TokenUsage
+	// Caching/session hints
 	sessionID string
 	cacheOpts domain.ModelSideCacheOptions
 }

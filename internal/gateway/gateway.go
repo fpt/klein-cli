@@ -111,6 +111,11 @@ func (gw *Gateway) handleInbound(ctx context.Context, msg InboundMessage) {
 		return
 	}
 
+	// Serialize invocations for this peer: the agent session/state is not safe
+	// for concurrent use, so back-to-back messages must run one at a time.
+	release := session.LockInvoke()
+	defer release()
+
 	// Send typing indicator
 	if a, ok := gw.adapters[msg.ChannelType]; ok {
 		_ = a.SendTyping(ctx, msg.ChannelID)

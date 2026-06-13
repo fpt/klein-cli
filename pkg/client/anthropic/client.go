@@ -23,6 +23,11 @@ type AnthropicCore struct {
 	client    *anthropic.Client
 	model     string
 	maxTokens int
+
+	// lastUsage is shared by all wrappers built from this core so token usage
+	// reported via the original client stays accurate even when per-invocation
+	// wrappers make the actual API calls.
+	lastUsage message.TokenUsage
 }
 
 // NewAnthropicCore creates a new Anthropic core with shared resources
@@ -60,8 +65,7 @@ type AnthropicClient struct {
 	*AnthropicCore
 	toolManager domain.ToolManager
 
-	// Telemetry and caching/session hints
-	lastUsage message.TokenUsage
+	// Caching/session hints
 	sessionID string
 	cacheOpts domain.ModelSideCacheOptions
 }
@@ -308,6 +312,19 @@ func (c *AnthropicClient) chatWithStreaming(ctx context.Context, messageParams a
 	finalThinking := thinkingBuilder.String()
 	finalSignature := signatureBuilder.String()
 
+	// Capture token usage from the accumulated message, including cache stats,
+	// BEFORE any tool-call early return — tool-calling turns are the majority of
+	// agentic runs and their usage must not be dropped.
+	// CacheReadInputTokens: tokens served from cache (savings).
+	// CacheCreationInputTokens: tokens written into cache this call (billed at 1.25x).
+	c.lastUsage = message.TokenUsage{
+		InputTokens:         int(acc.Usage.InputTokens),
+		OutputTokens:        int(acc.Usage.OutputTokens),
+		TotalTokens:         int(acc.Usage.InputTokens + acc.Usage.OutputTokens),
+		CachedTokens:        int(acc.Usage.CacheReadInputTokens),
+		CacheCreationTokens: int(acc.Usage.CacheCreationInputTokens),
+	}
+
 	// If we have tool calls, return a batch when multiple; single otherwise
 	if len(toolCalls) > 0 {
 		if len(toolCalls) == 1 {
@@ -354,17 +371,6 @@ func (c *AnthropicClient) chatWithStreaming(ctx context.Context, messageParams a
 			))
 		}
 		return message.NewToolCallBatch(calls), nil
-	}
-
-	// Capture token usage from the accumulated message, including cache stats.
-	// CacheReadInputTokens: tokens served from cache (savings).
-	// CacheCreationInputTokens: tokens written into cache this call (billed at 1.25x).
-	c.lastUsage = message.TokenUsage{
-		InputTokens:         int(acc.Usage.InputTokens),
-		OutputTokens:        int(acc.Usage.OutputTokens),
-		TotalTokens:         int(acc.Usage.InputTokens + acc.Usage.OutputTokens),
-		CachedTokens:        int(acc.Usage.CacheReadInputTokens),
-		CacheCreationTokens: int(acc.Usage.CacheCreationInputTokens),
 	}
 
 	// Create response message with thinking content if available

@@ -11,12 +11,14 @@ import (
 // SkillMap maps skill name (lowercase) to *Skill.
 type SkillMap map[string]*Skill
 
-// LoadSkills loads all skills with first-comer-wins priority ordering:
+// LoadSkills loads all skills with highest-priority-wins ordering. For a given
+// skill name the source with the largest priority value wins:
 //
-//	CWD/.agents/skills/ (priority 4) -> CWD/.claude/skills/ (priority 3) ->
-//	~/.agents/skills/ (priority 2) -> ~/.claude/skills/ (priority 1) -> embedded (priority 0)
+//	CWD/.agents/skills/ (priority 4) > CWD/.claude/skills/ (priority 3) >
+//	~/.agents/skills/ (priority 2) > ~/.claude/skills/ (priority 1) > embedded (priority 0)
 //
-// Earlier sources override same-named skills from later sources.
+// In other words, project-local skills override personal skills, which override
+// the embedded built-ins.
 func LoadSkills(workingDir string) (SkillMap, error) {
 	result := make(SkillMap)
 

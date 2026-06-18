@@ -13,11 +13,19 @@ import (
 	connectserver "github.com/fpt/klein-cli/internal/connectrpc"
 	"github.com/fpt/klein-cli/internal/infra"
 	"github.com/fpt/klein-cli/internal/mcp"
+	pluginpkg "github.com/fpt/klein-cli/internal/plugin"
 	"github.com/fpt/klein-cli/internal/tool"
 	"github.com/fpt/klein-cli/pkg/agent/domain"
 	client "github.com/fpt/klein-cli/pkg/client"
 	pkgLogger "github.com/fpt/klein-cli/pkg/logger"
+	"github.com/fpt/klein-cli/pkg/message"
 )
+
+// stringSliceFlag implements flag.Value for repeatable --plugin arguments.
+type stringSliceFlag []string
+
+func (s *stringSliceFlag) String() string     { return strings.Join(*s, ", ") }
+func (s *stringSliceFlag) Set(v string) error { *s = append(*s, v); return nil }
 
 // resolveStringFlag returns the non-empty value, preferring short flag over long flag
 func resolveStringFlag(shortVal, longVal string) string {
@@ -75,6 +83,9 @@ func main() {
 	var memoryDir = flag.String("memory-dir", "", "Directory for memory files used by MemorySearch/MemoryGet tools (e.g., ~/.klein/claw/memory/)")
 	var help = flag.Bool("h", false, "Show this help message")
 	var helpLong = flag.Bool("help", false, "Show this help message")
+	var pluginPaths stringSliceFlag
+	flag.Var(&pluginPaths, "plugin", "Path to a Claude Code plugin directory (repeatable). Loads commands/, agents/, skills/, and .mcp.json from that plugin.")
+	var pluginMarketplace = flag.String("plugin-marketplace", "", "Path to a directory containing .claude-plugin/marketplace.json — every plugin listed there is loaded.")
 
 	// Custom usage function
 	flag.Usage = func() {
@@ -161,6 +172,15 @@ func main() {
 		workingDirectory = "."
 	}
 
+	// Load plugins. Plugin MCP servers are merged into settings.MCP.Servers
+	// before MCP initialisation so plugin tools are available alongside
+	// settings-defined servers. Commands/agents/skills are merged into the
+	// agent after construction via RegisterPlugins.
+	loadedPlugins := loadPluginsFromFlags(*pluginMarketplace, pluginPaths, logger)
+	for _, p := range loadedPlugins {
+		settings.MCP.Servers = append(settings.MCP.Servers, p.MCPServers...)
+	}
+
 	// Initialize MCP integration if any servers are enabled
 	var mcpIntegration *mcp.Integration
 	if hasEnabledMCPServers(settings.MCP.Servers) {
@@ -202,6 +222,13 @@ func main() {
 	}
 
 	a := app.NewAgentWithOptions(llmClient, workingDirectory, mcpToolManagers, settings, logger, out, skipSessionRestore, isInteractiveMode, fsRepo)
+
+	// Register loaded plugins with the agent so its skill catalog, command
+	// dispatcher, and agent loader can see them.
+	if len(loadedPlugins) > 0 {
+		a.RegisterPlugins(loadedPlugins)
+		fmt.Printf("Loaded %d plugin(s) — type / to discover commands.\n", len(loadedPlugins))
+	}
 
 	// Apply allowed-tools override if specified
 	if *allowedTools != "" {
@@ -257,7 +284,27 @@ func main() {
 func executeCommand(ctx context.Context, a *app.Agent, userInput string, skillName string) {
 	fmt.Print("\n")
 
-	response, err := a.Invoke(ctx, userInput, skillName)
+	var response message.Message
+	var err error
+
+	// One-shot input starting with `/` is dispatched as a plugin command if
+	// it resolves; otherwise it falls through to a normal chat turn (which
+	// is the right behaviour for free-form user prompts that happen to start
+	// with /).
+	if strings.HasPrefix(strings.TrimSpace(userInput), "/") {
+		name, cmdArgs := app.SplitSlashCommand(userInput)
+		if cmd, ambiguous := a.ResolveCommand(name); cmd != nil {
+			response, err = a.InvokeCommand(ctx, cmd, cmdArgs, skillName)
+		} else if ambiguous {
+			fmt.Fprintf(os.Stderr, "Command %q is ambiguous; use /<plugin>:%s.\n", name, name)
+			os.Exit(1)
+		} else {
+			response, err = a.Invoke(ctx, userInput, skillName)
+		}
+	} else {
+		response, err = a.Invoke(ctx, userInput, skillName)
+	}
+
 	if err != nil {
 		fmt.Printf("Command execution failed: %v\n", err)
 		os.Exit(1)
@@ -362,6 +409,38 @@ func printTokenUsage(llm domain.LLM) {
 	}
 	fmt.Fprintf(os.Stderr, "[usage] input=%d output=%d total=%d cached=%d cache_creation=%d\n",
 		usage.InputTokens, usage.OutputTokens, usage.TotalTokens, usage.CachedTokens, usage.CacheCreationTokens)
+}
+
+// loadPluginsFromFlags loads plugins specified via --plugin-marketplace and
+// --plugin flags. Errors are logged but never fatal — a broken plugin must
+// not prevent klein from starting. Returns the successfully loaded plugins
+// in the order: marketplace first, then individual --plugin arguments.
+func loadPluginsFromFlags(marketplace string, pluginDirs []string, logger *pkgLogger.Logger) []*pluginpkg.Plugin {
+	var out []*pluginpkg.Plugin
+
+	if marketplace != "" {
+		mp, err := pluginpkg.LoadMarketplace(marketplace)
+		if err != nil {
+			logger.Warn("Failed to load plugin marketplace", "path", marketplace, "error", err)
+		} else {
+			fmt.Printf("Loaded marketplace %q with %d plugin(s) from %s\n", mp.Name, len(mp.Plugins), marketplace)
+			for _, p := range mp.Plugins {
+				out = append(out, p)
+			}
+		}
+	}
+
+	for _, dir := range pluginDirs {
+		p, err := pluginpkg.LoadPlugin(dir, "")
+		if err != nil {
+			logger.Warn("Failed to load plugin", "path", dir, "error", err)
+			continue
+		}
+		out = append(out, p)
+		fmt.Printf("Loaded plugin %q from %s\n", p.Name, dir)
+	}
+
+	return out
 }
 
 // hasEnabledMCPServers checks if there are any enabled MCP servers

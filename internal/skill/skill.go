@@ -29,14 +29,59 @@ type Skill struct {
 }
 
 // frontmatter maps YAML frontmatter fields using kebab-case.
+//
+// AllowedTools is decoded into `any` because Claude Code's SKILL.md format
+// accepts both a YAML sequence (`["Read", "Write"]` or block form) and a
+// comma-separated string. parseAllowedTools normalises both shapes.
 type frontmatter struct {
 	Name                   string `yaml:"name"`
 	Description            string `yaml:"description"`
-	AllowedTools           string `yaml:"allowed-tools"`
+	AllowedTools           any    `yaml:"allowed-tools"`
 	ArgumentHint           string `yaml:"argument-hint"`
 	DisableModelInvocation bool   `yaml:"disable-model-invocation"`
 	UserInvocable          *bool  `yaml:"user-invocable"`
 	Model                  string `yaml:"model"`
+}
+
+// parseAllowedTools normalises the `allowed-tools` frontmatter field. The
+// accepted shapes are:
+//   - nil/missing → no restriction (returns nil)
+//   - YAML sequence → []any of strings
+//   - comma-separated string → "Read, Write, Bash"
+//   - bare string → treated as a single tool name
+func parseAllowedTools(v any) []string {
+	switch t := v.(type) {
+	case nil:
+		return nil
+	case string:
+		var out []string
+		for _, part := range strings.Split(t, ",") {
+			if p := strings.TrimSpace(part); p != "" {
+				out = append(out, p)
+			}
+		}
+		return out
+	case []any:
+		out := make([]string, 0, len(t))
+		for _, item := range t {
+			if s, ok := item.(string); ok {
+				if s = strings.TrimSpace(s); s != "" {
+					out = append(out, s)
+				}
+			}
+		}
+		return out
+	case []string:
+		out := make([]string, 0, len(t))
+		for _, s := range t {
+			if s = strings.TrimSpace(s); s != "" {
+				out = append(out, s)
+			}
+		}
+		return out
+	default:
+		return nil
+	}
 }
 
 // ParseSkillMD parses a SKILL.md file content into a Skill.
@@ -96,16 +141,7 @@ func ParseSkillMD(data []byte, sourcePath string, priority int) (*Skill, error) 
 				s.UserInvocable = *fm.UserInvocable
 			}
 
-			// Parse allowed-tools as comma-separated list
-			if fm.AllowedTools != "" {
-				parts := strings.Split(fm.AllowedTools, ",")
-				for _, p := range parts {
-					p = strings.TrimSpace(p)
-					if p != "" {
-						s.AllowedTools = append(s.AllowedTools, p)
-					}
-				}
-			}
+			s.AllowedTools = parseAllowedTools(fm.AllowedTools)
 		}
 	} else {
 		// No frontmatter

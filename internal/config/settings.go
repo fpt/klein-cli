@@ -360,7 +360,7 @@ func ValidateMCPServerConfig(config domain.MCPServerConfig) error {
 		if config.Command == "" {
 			return fmt.Errorf("command is required for stdio servers")
 		}
-	case domain.MCPServerTypeSSE:
+	case domain.MCPServerTypeSSE, domain.MCPServerTypeHTTP:
 		if config.URL == "" {
 			return fmt.Errorf("URL is required for HTTP/SSE servers")
 		}

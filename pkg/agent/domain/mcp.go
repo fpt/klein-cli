@@ -40,11 +40,18 @@ type MCPServerConfig struct {
 	Enabled bool   `json:"enabled"`
 
 	// Connection configuration
-	Type    MCPServerType `json:"type"`              // stdio, http, sse, oauth
+	Type    MCPServerType `json:"type"`              // stdio, http, sse
 	Command string        `json:"command,omitempty"` // For stdio servers
 	Args    []string      `json:"args,omitempty"`    // Command arguments
 	Env     []string      `json:"env,omitempty"`     // Environment variables
 	URL     string        `json:"url,omitempty"`     // For HTTP/SSE servers
+
+	// Authentication for HTTP/SSE servers. The token is sent as
+	// "Authorization: Bearer <token>"; additional headers in Headers are
+	// added verbatim. OAuth flow is not implemented — the user pastes a
+	// token obtained via `npx @modelcontextprotocol/inspector` or similar.
+	AuthorizationToken string            `json:"authorization_token,omitempty"`
+	Headers            map[string]string `json:"headers,omitempty"`
 
 	// Tool filtering
 	AllowedTools []string `json:"allowed_tools,omitempty"` // If specified, only these tools will be loaded
@@ -56,6 +63,7 @@ type MCPServerType string
 const (
 	MCPServerTypeStdio MCPServerType = "stdio"
 	MCPServerTypeSSE   MCPServerType = "sse"
+	MCPServerTypeHTTP  MCPServerType = "http"
 )
 
 // MCPToolManager manages tools from multiple MCP servers

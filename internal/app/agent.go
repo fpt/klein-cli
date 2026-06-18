@@ -18,6 +18,7 @@ import (
 	"github.com/fpt/klein-cli/internal/config"
 	"github.com/fpt/klein-cli/internal/infra"
 	"github.com/fpt/klein-cli/internal/permission"
+	pluginpkg "github.com/fpt/klein-cli/internal/plugin"
 	"github.com/fpt/klein-cli/internal/repository"
 	"github.com/fpt/klein-cli/internal/skill"
 	"github.com/fpt/klein-cli/internal/tool"
@@ -43,6 +44,7 @@ type Agent struct {
 	planMode               *tool.PlanModeState             // shared with planToolManager and guard
 	planToolManager        *tool.PlanToolManager
 	spawnAgentManager      *tool.SpawnAgentToolManager
+	taskAgentManager       *tool.TaskAgentToolManager // Provides the Task tool that delegates to loaded agent definitions
 	fsRepo                 repository.FilesystemRepository  // Shared filesystem repository instance
 	workingDir             string
 	sharedState            domain.State
@@ -59,6 +61,17 @@ type Agent struct {
 	externalEventHandler   events.EventHandler // optional: forward events to external consumers (e.g., Connect server)
 	recentlyReadFiles      []string            // up to 5 most recently read unique file paths
 	memoryDir              string              // $HOME/.klein/projects/<hash>/memory/ (interactive mode only)
+
+	// Plugin registry. Commands and agents are stored under their scoped
+	// "<plugin>:<name>" identifier; bare-name entries are also populated when
+	// unambiguous. ambiguousCommands/ambiguousAgents track names that appear
+	// in more than one plugin and therefore require explicit scoping at
+	// dispatch time.
+	plugins            []*pluginpkg.Plugin
+	pluginCommands     map[string]*pluginpkg.Command
+	pluginAgents       map[string]*pluginpkg.Agent
+	ambiguousCommands  map[string]bool
+	ambiguousAgents    map[string]bool
 }
 
 // WorkingDir returns the agent's working directory.
@@ -205,6 +218,119 @@ func (a *Agent) SpawnSubAgent(ctx context.Context, task string, skillName string
 	return resultText, nil
 }
 
+// RunPluginAgent dispatches to a plugin-loaded agent definition. The agent's
+// markdown body is injected as the sub-agent's system prompt and its `tools`
+// frontmatter restricts the allowed-tools (empty = inherit all). Mirrors the
+// behaviour of Claude Code's built-in Task tool.
+//
+// `agentName` may be the bare agent name (only resolvable when unambiguous)
+// or the scoped `<plugin>:<name>` form. Returns the sub-agent's final answer.
+func (a *Agent) RunPluginAgent(ctx context.Context, agentName, task string) (string, error) {
+	ag, ambiguous := a.ResolveAgent(agentName)
+	if ambiguous {
+		return "", fmt.Errorf("agent name %q is ambiguous — scope it as <plugin>:<name>", agentName)
+	}
+	if ag == nil {
+		return "", fmt.Errorf("agent %q not found", agentName)
+	}
+
+	// Always exclude spawn_agent and Task to prevent unbounded recursion.
+	effectiveAllowed := ag.Tools
+	subToolManager := buildSubAgentToolManager(a.allToolManagers, effectiveAllowed)
+
+	writer := a.OutWriter()
+	label := agentName
+	if ag.PluginName != "" {
+		label = ag.PluginName + ":" + ag.Name
+	}
+	fmt.Fprintf(writer, "  [agent:%s] Starting: %s\n", label, truncate(task, 80))
+
+	subState := state.NewMessageState()
+	if ag.Body != "" {
+		subState.AddMessage(message.NewSystemMessage(ag.Body))
+	}
+
+	llmWithTools, err := client.NewClientWithToolManager(a.llmClient, subToolManager)
+	if err != nil {
+		return "", fmt.Errorf("agent %s: failed to create LLM client: %w", label, err)
+	}
+
+	situation := NewIterationAdvisor(a.allToolManagers)
+	reactClient, eventEmitter := react.NewReAct(llmWithTools, subToolManager, subState, situation, DefaultAgentMaxIterations)
+	defer reactClient.Close()
+	if a.settings != nil {
+		reactClient.SetBashWhitelist(a.settings.Bash.WhitelistedCommands)
+	}
+	// Background agents auto-approve every tool call. The user opted in by
+	// enabling this plugin agent, and the agent's frontmatter `tools` list
+	// is the surface area; we trust that declaration. Foreground agents
+	// continue to honour the normal approval workflow.
+	if ag.Background {
+		reactClient.SetSkipApproval(true)
+	}
+
+	eventEmitter.AddHandler(func(event events.AgentEvent) {
+		switch event.Type {
+		case events.EventTypeToolCallStart:
+			if data, ok := event.Data.(events.ToolCallStartData); ok {
+				fmt.Fprintf(writer, "  [agent:%s] %s %v\n", label, data.ToolName, data.Arguments)
+			}
+		case events.EventTypeToolResult:
+			if data, ok := event.Data.(events.ToolResultData); ok && data.IsError {
+				fmt.Fprintf(writer, "  [agent:%s] ERROR %s\n", label, data.Content)
+			}
+		case events.EventTypeThinkingChunk:
+			if data, ok := event.Data.(events.ThinkingChunkData); ok {
+				fmt.Fprintf(writer, "\x1b[90m%s", data.Content)
+			}
+		case events.EventTypeResponse:
+			fmt.Fprint(writer, "\x1b[0m")
+		}
+		if a.externalEventHandler != nil {
+			a.externalEventHandler(event)
+		}
+	})
+
+	result, err := reactClient.Run(ctx, task)
+	if err != nil {
+		fmt.Fprintf(writer, "  [agent:%s] Failed: %v\n", label, err)
+		return "", err
+	}
+	fmt.Fprintf(writer, "  [agent:%s] Done\n", label)
+	return result.Content(), nil
+}
+
+// buildSubAgentToolManager constructs a filtered tool manager for sub-agents:
+// always strips spawn_agent and Task to prevent recursion; respects the
+// optional allowedTools whitelist.
+func buildSubAgentToolManager(all *tool.CompositeToolManager, allowedTools []string) domain.ToolManager {
+	excluded := map[string]bool{"spawn_agent": true, "Task": true}
+	if len(allowedTools) > 0 {
+		filtered := make([]string, 0, len(allowedTools))
+		for _, name := range allowedTools {
+			if !excluded[name] {
+				filtered = append(filtered, name)
+			}
+		}
+		return skill.NewFilteredToolManager(all, filtered)
+	}
+	allTools := all.GetTools()
+	names := make([]string, 0, len(allTools))
+	for name := range allTools {
+		if !excluded[string(name)] {
+			names = append(names, string(name))
+		}
+	}
+	return skill.NewFilteredToolManager(all, names)
+}
+
+func truncate(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	return s[:n] + "…"
+}
+
 // NewAgent creates a new Agent with MCP tools and settings.
 func NewAgent(llmClient domain.LLM, workingDir string, mcpToolManagers map[string]domain.ToolManager, settings *config.Settings, logger *pkgLogger.Logger, out io.Writer) *Agent {
 	fsRepo := infra.NewOSFilesystemRepository()
@@ -267,13 +393,14 @@ func NewAgentWithOptions(llmClient domain.LLM, workingDir string, mcpToolManager
 	planToolManager := tool.NewPlanToolManager(planModeState)
 
 	spawnAgentManager := tool.NewSpawnAgentToolManager()
+	taskAgentManager := tool.NewTaskAgentToolManager()
 
 	// Load persistent permission rules (user + project + local).
 	// Missing files are silently ignored; never fatal.
 	permRules := permission.LoadForProject(workingDir)
 
 	// Combine ALL tool managers into one composite
-	managers := []domain.ToolManager{todoToolManager, taskToolManager, filesystemManager, bashToolManager, searchToolManager, webToolManager, pdfToolManager, skillToolManager, askQuestionManager, planToolManager, spawnAgentManager}
+	managers := []domain.ToolManager{todoToolManager, taskToolManager, filesystemManager, bashToolManager, searchToolManager, webToolManager, pdfToolManager, skillToolManager, askQuestionManager, planToolManager, spawnAgentManager, taskAgentManager}
 	for _, mcpManager := range mcpToolManagers {
 		managers = append(managers, mcpManager)
 	}
@@ -324,6 +451,7 @@ func NewAgentWithOptions(llmClient domain.LLM, workingDir string, mcpToolManager
 		planMode:           planModeState,
 		planToolManager:    planToolManager,
 		spawnAgentManager:  spawnAgentManager,
+		taskAgentManager:   taskAgentManager,
 		fsRepo:             fsRepo,
 		workingDir:         workingDir,
 		sharedState:        sharedState,
@@ -341,6 +469,11 @@ func NewAgentWithOptions(llmClient domain.LLM, workingDir string, mcpToolManager
 	// Wire spawn_agent callback (two-phase init: callback references the agent).
 	spawnAgentManager.SetCallback(func(ctx context.Context, task string, skillName string, allowedTools []string, maxIterations int) (string, error) {
 		return a.SpawnSubAgent(ctx, task, skillName, allowedTools, maxIterations)
+	})
+
+	// Wire Task callback for plugin-defined subagents.
+	taskAgentManager.SetCallback(func(ctx context.Context, subagentType, prompt string) (string, error) {
+		return a.RunPluginAgent(ctx, subagentType, prompt)
 	})
 
 	return a

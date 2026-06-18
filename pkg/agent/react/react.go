@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/fpt/klein-cli/pkg/agent/domain"
@@ -12,6 +13,21 @@ import (
 	"github.com/fpt/klein-cli/pkg/message"
 	"github.com/pkg/errors"
 )
+
+// allSubAgentDispatch reports whether every call in the batch is a sub-agent
+// dispatcher (Task or spawn_agent). Such tools are safe to parallelize
+// because each one spawns its own isolated ReAct/state/tool-manager. Other
+// tool combinations stay sequential to avoid races on shared state
+// (TodoWrite, Write to the same path, sequential Bash commands, etc.).
+func allSubAgentDispatch(calls []*message.ToolCallMessage) bool {
+	for _, c := range calls {
+		name := string(c.ToolName())
+		if name != "Task" && name != "spawn_agent" {
+			return false
+		}
+	}
+	return true
+}
 
 var ErrWaitingForApproval = errors.New("waiting for user approval for tool call")
 
@@ -44,7 +60,18 @@ type ReAct struct {
 	// Set via SetBashWhitelist from the user's settings; when empty a
 	// conservative built-in default is used.
 	bashWhitelist []string
+
+	// skipApproval auto-approves tool calls that would otherwise pause for
+	// the parent's approval workflow. Set this for background subagents
+	// (declared `background: true`) where the caller has decided that the
+	// agent's declared tool list constitutes consent. Never set this on the
+	// top-level interactive agent.
+	skipApproval bool
 }
+
+// SetSkipApproval toggles auto-approval of every tool call. Intended for
+// background subagents — see ReAct.skipApproval.
+func (r *ReAct) SetSkipApproval(b bool) { r.skipApproval = b }
 
 // Ensure ReAct implements domain.ReAct interface
 var _ domain.ReAct = (*ReAct)(nil)
@@ -326,7 +353,7 @@ func (r *ReAct) runInternal(ctx context.Context) (message.Message, error) {
 		r.annotateAndLogUsage(resp)
 
 		// Check tool call if it requires user's approval (file writing operations and bash commands)
-		if toolCall, ok := resp.(*message.ToolCallMessage); ok {
+		if toolCall, ok := resp.(*message.ToolCallMessage); ok && !r.skipApproval {
 			toolName := string(toolCall.ToolName())
 
 			// Check for file operations that require approval
@@ -412,32 +439,77 @@ func (r *ReAct) processResponse(ctx context.Context, currentIter int, resp messa
 		// Continue to next iteration to process the tool result
 
 	case *message.ToolCallBatchMessage:
-		// Execute multiple tools within a single model turn to reduce loops
+		// Execute multiple tools within a single model turn to reduce loops.
+		//
+		// Sub-agent dispatchers (Task / spawn_agent) are inherently isolated
+		// — each spawns its own ReAct loop, state, and tool manager — so
+		// when the entire batch consists of such calls we run them in
+		// parallel goroutines. This is what lets a docs-for-ai/search-docs-
+		// style command fan out to N repo-searcher subagents and finish in
+		// max(t_i) wall clock rather than sum(t_i). Mixed batches stay
+		// sequential to avoid races on TodoWrite/Bash/Write/etc.
 		batch := resp
 		calls := batch.Calls()
-		for _, call := range calls {
-			// Check for cancellation before each tool in the batch
-			select {
-			case <-ctx.Done():
-				reactLogger.InfoWithIntention(pkgLogger.IntentionCancel, "Operation cancelled by user during batch tool execution. History preserved.")
-				return done, ctx.Err()
-			default:
-			}
 
-			// Add each tool call message to state for transcript consistency
+		// Pre-add tool-call messages so transcript ordering matches the
+		// model's emit order (results are appended in the same order after
+		// execution).
+		for _, call := range calls {
 			r.state.AddMessage(call)
-			// Emit tool call start event for batch call
-			r.eventEmitter.EmitEvent(events.EventTypeToolCallStart, events.ToolCallStartData{
-				ToolName:  string(call.ToolName()),
-				Arguments: r.summarizeToolArgs(call.ToolArguments()),
-				CallID:    "", // Could add call ID if needed
-			})
-			msg, err := r.handleToolCall(ctx, call)
-			if err != nil {
-				return done, fmt.Errorf("failed to handle tool call (batch): %w", err)
+		}
+
+		if len(calls) > 1 && allSubAgentDispatch(calls) {
+			results := make([]message.Message, len(calls))
+			errs := make([]error, len(calls))
+			var wg sync.WaitGroup
+			for i, call := range calls {
+				select {
+				case <-ctx.Done():
+					reactLogger.InfoWithIntention(pkgLogger.IntentionCancel, "Operation cancelled by user during batch tool execution. History preserved.")
+					return done, ctx.Err()
+				default:
+				}
+				// Emit start events synchronously from the main goroutine
+				// so handlers don't race on the event emitter.
+				r.eventEmitter.EmitEvent(events.EventTypeToolCallStart, events.ToolCallStartData{
+					ToolName:  string(call.ToolName()),
+					Arguments: r.summarizeToolArgs(call.ToolArguments()),
+				})
+				wg.Add(1)
+				go func(idx int, c *message.ToolCallMessage) {
+					defer wg.Done()
+					msg, err := r.handleToolCall(ctx, c)
+					results[idx] = msg
+					errs[idx] = err
+				}(i, call)
 			}
-			r.printTruncatedToolResult(msg)
-			r.state.AddMessage(msg)
+			wg.Wait()
+			for i, msg := range results {
+				if errs[i] != nil {
+					return done, fmt.Errorf("failed to handle tool call (batch, parallel): %w", errs[i])
+				}
+				r.printTruncatedToolResult(msg)
+				r.state.AddMessage(msg)
+			}
+		} else {
+			for _, call := range calls {
+				select {
+				case <-ctx.Done():
+					reactLogger.InfoWithIntention(pkgLogger.IntentionCancel, "Operation cancelled by user during batch tool execution. History preserved.")
+					return done, ctx.Err()
+				default:
+				}
+				r.eventEmitter.EmitEvent(events.EventTypeToolCallStart, events.ToolCallStartData{
+					ToolName:  string(call.ToolName()),
+					Arguments: r.summarizeToolArgs(call.ToolArguments()),
+				})
+				msg, err := r.handleToolCall(ctx, call)
+				if err != nil {
+					return done, fmt.Errorf("failed to handle tool call (batch): %w", err)
+				}
+				r.printTruncatedToolResult(msg)
+				r.state.AddMessage(msg)
+			}
 		}
 		// After executing the batch, continue the loop to let the model consume results
 	default:

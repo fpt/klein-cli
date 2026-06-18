@@ -123,8 +123,52 @@ func handleSlashCommand(input string, a *Agent) bool {
 	for _, cmd := range commands {
 		fmt.Printf("  /%s - %s\n", cmd.Name, cmd.Description)
 	}
+	if pluginCmds := a.ListPluginCommands(); len(pluginCmds) > 0 {
+		fmt.Println("💡 Plugin commands:")
+		for _, name := range pluginCmds {
+			fmt.Printf("  /%s\n", name)
+		}
+	}
 	fmt.Println("\n💡 Tip: Type just '/' to see an interactive command selector!")
 	return false
+}
+
+// handlePluginCommand dispatches a plugin-defined slash command (loaded via
+// --plugin / --plugin-marketplace). Returns true when the input was consumed
+// — either successfully invoked or rejected (e.g. ambiguous). Returns false
+// when no plugin command matches, so the caller can fall through to the
+// built-in dispatcher.
+func handlePluginCommand(ctx context.Context, a *Agent, skillName, input string) bool {
+	name, args := SplitSlashCommand(input)
+	if name == "" {
+		return false
+	}
+
+	cmd, ambiguous := a.ResolveCommand(name)
+	if ambiguous {
+		fmt.Fprintf(a.OutWriter(),
+			"⚠️  Command %q matches multiple plugins. Use /<plugin>:%s to scope it.\n",
+			name, name)
+		return true
+	}
+	if cmd == nil {
+		return false
+	}
+
+	fmt.Fprintf(a.OutWriter(), "▶ /%s\n", name)
+	response, err := a.InvokeCommand(ctx, cmd, args, skillName)
+	if err != nil {
+		fmt.Fprintf(a.OutWriter(), "Command failed: %v\n", err)
+		return true
+	}
+	w := a.OutWriter()
+	model := "unknown"
+	if mi, ok := a.GetLLMClient().(domain.ModelIdentifier); ok {
+		model = mi.ModelID()
+	}
+	WriteResponseHeader(w, model, false)
+	fmt.Fprintln(w, response.Content())
+	return true
 }
 
 // showCommandSelector shows an interactive command selector using promptui
@@ -294,6 +338,17 @@ func StartInteractiveMode(ctx context.Context, a *Agent, skillName string) {
 			// active skill, so they are dispatched here rather than via the
 			// argument-less handleSlashCommand handlers.
 			if handleDrivingCommand(ctx, a, skillName, cmd) {
+				pb.Clear()
+				rl.Clean()
+				rl.Refresh()
+				continue
+			}
+			// Plugin commands (loaded via --plugin / --plugin-marketplace)
+			// dispatch before built-ins so they take precedence on bare
+			// names. Built-ins like /help, /clear are still reachable
+			// because they don't collide with the scoped <plugin>:<name>
+			// form and plugins typically don't redefine them.
+			if handlePluginCommand(ctx, a, skillName, cmd) {
 				pb.Clear()
 				rl.Clean()
 				rl.Refresh()

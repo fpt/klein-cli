@@ -69,10 +69,11 @@ func (t *spawnAgentTool) RawName() message.ToolName { return "spawn_agent" }
 func (t *spawnAgentTool) Name() message.ToolName    { return "spawn_agent" }
 
 func (t *spawnAgentTool) Description() message.ToolDescription {
-	return "Spawn a sub-agent with its own fresh conversation context to complete a focused task. " +
-		"The sub-agent runs independently and returns its result as text. " +
-		"Useful for parallelizable or isolated sub-tasks like codebase exploration, " +
-		"file analysis, or targeted research. Sub-agents cannot spawn further agents."
+	return "Spawn a sub-agent using a built-in SKILL (e.g. 'code', 'respond') as its system prompt. " +
+		"Use this when the sub-task is a generic shape that maps to one of klein's built-in skills. " +
+		"For NAMED plugin agents like 'repo-searcher' or 'pr-watcher' loaded from agents/*.md, " +
+		"use the Task tool instead — it accepts an agent name (subagent_type) rather than a skill name. " +
+		"Sub-agents cannot spawn further sub-agents."
 }
 
 func (t *spawnAgentTool) Arguments() []message.ToolArgument {

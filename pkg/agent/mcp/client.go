@@ -7,6 +7,7 @@ import (
 	"github.com/fpt/klein-cli/pkg/agent/domain"
 	pkgLogger "github.com/fpt/klein-cli/pkg/logger"
 	"github.com/mark3labs/mcp-go/client"
+	"github.com/mark3labs/mcp-go/client/transport"
 	mcpapi "github.com/mark3labs/mcp-go/mcp"
 )
 
@@ -38,6 +39,20 @@ func NewMCPClient(config domain.MCPServerConfig) (*MCPClientWrapper, error) {
 		mcpClient, err = client.NewSSEMCPClient(config.URL)
 		if err != nil {
 			return nil, fmt.Errorf("failed to create SSE MCP client: %w", err)
+		}
+
+	case domain.MCPServerTypeHTTP:
+		if config.URL == "" {
+			return nil, fmt.Errorf("URL is required for HTTP MCP server")
+		}
+		headers := buildAuthHeaders(config)
+		var opts []transport.StreamableHTTPCOption
+		if len(headers) > 0 {
+			opts = append(opts, transport.WithHTTPHeaders(headers))
+		}
+		mcpClient, err = client.NewStreamableHttpClient(config.URL, opts...)
+		if err != nil {
+			return nil, fmt.Errorf("failed to create HTTP MCP client: %w", err)
 		}
 
 	default:
@@ -123,4 +138,21 @@ func (w *MCPClientWrapper) GetSessionId() string {
 // GetConfig returns the server configuration
 func (w *MCPClientWrapper) GetConfig() domain.MCPServerConfig {
 	return w.config
+}
+
+// buildAuthHeaders composes the HTTP header map from the server config:
+// AuthorizationToken is sent as a Bearer token; Headers entries are added verbatim.
+// Returns nil when nothing is set.
+func buildAuthHeaders(config domain.MCPServerConfig) map[string]string {
+	if config.AuthorizationToken == "" && len(config.Headers) == 0 {
+		return nil
+	}
+	headers := make(map[string]string, len(config.Headers)+1)
+	for k, v := range config.Headers {
+		headers[k] = v
+	}
+	if config.AuthorizationToken != "" {
+		headers["Authorization"] = "Bearer " + config.AuthorizationToken
+	}
+	return headers
 }

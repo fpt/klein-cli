@@ -5,9 +5,7 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"os/signal"
 	"strings"
-	"syscall"
 
 	"github.com/chzyer/readline"
 	"github.com/fpt/klein-cli/internal/claude"
@@ -292,6 +290,15 @@ func StartInteractiveMode(ctx context.Context, a *Agent, skillName string) {
 		// in VisiblePrompt() does not interfere with detection.
 		if pb.IsSlashCommand() {
 			cmd := pb.SlashInput()
+			// /goal and /loop are multi-turn drivers that need ctx and the
+			// active skill, so they are dispatched here rather than via the
+			// argument-less handleSlashCommand handlers.
+			if handleDrivingCommand(ctx, a, skillName, cmd) {
+				pb.Clear()
+				rl.Clean()
+				rl.Refresh()
+				continue
+			}
 			if handleSlashCommand(cmd, a) {
 				break
 			}
@@ -313,50 +320,11 @@ func StartInteractiveMode(ctx context.Context, a *Agent, skillName string) {
 			continue
 		}
 
-		// Execute via scenario runner with cancellable context
-		// Set up signal handling for Ctrl+C during execution
-		execCtx, cancel := context.WithCancel(ctx)
-		sigChan := make(chan os.Signal, 1)
-		signal.Notify(sigChan, syscall.SIGINT)
-
-		// Handle Ctrl+C during execution in a goroutine
-		go func() {
-			select {
-			case <-sigChan:
-				fmt.Println() // Move to new line after ^C
-				cancel()      // Cancel the execution context
-			case <-execCtx.Done():
-				// Execution finished, clean up
-			}
-		}()
-
-		response, invokeErr := a.Invoke(execCtx, pb.RawPrompt(), skillName)
-
-		// Check for cancellation BEFORE cleaning up
-		wasCanceled := execCtx.Err() == context.Canceled
-
-		// Clean up signal handling
-		signal.Stop(sigChan)
-		close(sigChan)
-		cancel()
-
-		if invokeErr != nil {
-			// Check if the error was due to cancellation
-			if wasCanceled {
-				fmt.Printf("🔄 Ready for next command.\n")
-			} else {
-				fmt.Printf("❌ Error: %v\n", invokeErr)
-			}
-			continue
+		// Execute one agent turn (shared cancellable path).
+		_, canceled, _ := executeTurn(ctx, a, pb.RawPrompt(), skillName)
+		if canceled {
+			fmt.Printf("🔄 Ready for next command.\n")
 		}
-		// Print response via Agent's writer with model header
-		w := a.OutWriter()
-		model := a.GetLLMClient().ModelID()
-		// Skyblue/bright-cyan header without icon
-		WriteResponseHeader(w, model, true)
-		fmt.Fprintln(w, response.Content())
-
-		// No placeholder state to reset
 	}
 }
 
@@ -367,6 +335,8 @@ func createAutoCompleter() *readline.PrefixCompleter {
 	for _, cmd := range commands {
 		pcItems = append(pcItems, readline.PcItem("/"+cmd.Name))
 	}
+	// Multi-turn driving commands handled outside getSlashCommands.
+	pcItems = append(pcItems, readline.PcItem("/goal"), readline.PcItem("/loop"))
 	pcItems = append(pcItems, readline.PcItem("/"))
 	for _, pattern := range []string{
 		"Create a", "Analyze the", "Write unit tests for", "List files in",
@@ -394,6 +364,8 @@ func showInteractiveHelp() {
 	for _, cmd := range commands {
 		fmt.Printf("  /%-15s - %s\n", cmd.Name, cmd.Description)
 	}
+	fmt.Printf("  /%-15s - %s\n", "goal <cond>", "Keep working until a fast evaluator confirms <cond> (Ctrl+C to stop)")
+	fmt.Printf("  /%-15s - %s\n", "loop [iv] <p>", "Repeat prompt <p> every interval [iv] (e.g. /loop 5m check CI)")
 	fmt.Println("\n⌨️  Enhanced Features:")
 	fmt.Println("  Ctrl+C           - Cancel current input")
 	fmt.Println("  Ctrl+R           - Search this session's input history")
@@ -497,10 +469,28 @@ func makePlanApprovalHandler(w io.Writer) tool.PlanApprovalHandler {
 	}
 }
 
+// stdinIsInteractive reports whether stdin is a terminal (character device).
+// When stdin is a pipe or file, interactive prompts (promptui selectors) cannot
+// read user input and would consume/garble the piped input, so callers should
+// skip them.
+func stdinIsInteractive() bool {
+	stat, err := os.Stdin.Stat()
+	if err != nil {
+		return false
+	}
+	return (stat.Mode() & os.ModeCharDevice) != 0
+}
+
 // offerClaudeHistoryImport checks whether a Claude Code session file exists for
 // the agent's working directory. When one is found the user is prompted to import
 // it (y/n). Errors are printed as informational warnings, never fatal.
 func offerClaudeHistoryImport(a *Agent) {
+	// The import prompt is an interactive selector; skip it entirely when stdin
+	// is piped (non-interactive), otherwise it would swallow the piped input.
+	if !stdinIsInteractive() {
+		return
+	}
+
 	jsonlPath, err := claude.FindLatestSession(a.WorkingDir())
 	if err != nil {
 		fmt.Printf("⚠️  Could not check for Claude history: %v\n", err)

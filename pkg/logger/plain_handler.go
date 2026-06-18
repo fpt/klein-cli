@@ -14,12 +14,12 @@ import (
 type plainHandler struct {
 	w       io.Writer
 	attrs   []slog.Attr
-	mu      sync.Mutex
+	mu      *sync.Mutex // shared across handlers derived via WithAttrs/WithGroup
 	leveler slog.Leveler
 }
 
 func newPlainHandler(w io.Writer, leveler slog.Leveler) slog.Handler {
-	return &plainHandler{w: w, leveler: leveler}
+	return &plainHandler{w: w, mu: &sync.Mutex{}, leveler: leveler}
 }
 
 // Enabled implements slog.Handler by checking level

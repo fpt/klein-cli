@@ -42,13 +42,17 @@ func LoadGatewayConfig(path string) (*GatewayConfig, error) {
 		return nil, fmt.Errorf("failed to parse gateway config: %w", err)
 	}
 
-	// Expand $HOME in memory base_dir
+	// Expand environment variables (e.g. a literal "$HOME/.klein/...") in path
+	// fields so they aren't used verbatim and create a stray "$HOME" directory.
+	cfg.WorkingDir = os.ExpandEnv(cfg.WorkingDir)
+	cfg.SessionsDir = os.ExpandEnv(cfg.SessionsDir)
+	cfg.Memory.BaseDir = os.ExpandEnv(cfg.Memory.BaseDir)
+
+	// Fall back to defaults when unset.
 	if cfg.Memory.BaseDir == "" {
 		home, _ := os.UserHomeDir()
 		cfg.Memory.BaseDir = filepath.Join(home, ".klein", "claw", "memory")
 	}
-
-	// Expand $HOME in sessions_dir
 	if cfg.SessionsDir == "" {
 		home, _ := os.UserHomeDir()
 		cfg.SessionsDir = filepath.Join(home, ".klein", "claw", "sessions")

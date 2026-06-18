@@ -164,6 +164,10 @@ func (a *Agent) SpawnSubAgent(ctx context.Context, task string, skillName string
 
 	situation := NewIterationAdvisor(a.allToolManagers)
 	reactClient, eventEmitter := react.NewReAct(llmWithTools, subToolManager, subState, situation, maxIterations)
+	defer reactClient.Close()
+	if a.settings != nil {
+		reactClient.SetBashWhitelist(a.settings.Bash.WhitelistedCommands)
+	}
 
 	// Forward sub-agent events to our output with an indent prefix.
 	eventEmitter.AddHandler(func(event events.AgentEvent) {
@@ -191,7 +195,6 @@ func (a *Agent) SpawnSubAgent(ctx context.Context, task string, skillName string
 	})
 
 	result, err := reactClient.Run(ctx, task)
-	defer reactClient.Close()
 	if err != nil {
 		fmt.Fprintf(writer, "  [sub-agent:%s] Failed: %v\n", skillName, err)
 		return "", err
@@ -384,6 +387,12 @@ func (a *Agent) Invoke(ctx context.Context, userInput string, skillName string, 
 	}
 	reactClient, eventEmitter := react.NewReAct(llmWithTools, toolManager, a.sharedState, situation, maxIterations)
 	a.setupEventHandlers(eventEmitter)
+	// Ensure the thinking-channel drainer goroutine is always reclaimed, even on
+	// error returns below; Close is idempotent and nil-safe.
+	defer reactClient.Close()
+	if a.settings != nil {
+		reactClient.SetBashWhitelist(a.settings.Bash.WhitelistedCommands)
+	}
 
 	// Tool result budgeting: offload large tool results to disk so they don't
 	// permanently consume context window space. Only active in interactive/persistent
@@ -527,7 +536,6 @@ func (a *Agent) Invoke(ctx context.Context, userInput string, skillName string, 
 		}
 		return nil, fmt.Errorf("action execution failed: %w", err)
 	}
-	defer reactClient.Close()
 
 	// Save session state after successful interaction
 	if a.sessionFilePath != "" {
@@ -643,7 +651,8 @@ func (a *Agent) handleApprovalWorkflow(ctx context.Context, reactClient domain.R
 func extractPermissionArg(toolName string, args message.ToolArgumentValues) string {
 	switch toolName {
 	case "Write", "Edit":
-		if path, ok := args["path"].(string); ok {
+		// Filesystem tools register the parameter as "file_path".
+		if path, ok := args["file_path"].(string); ok {
 			return path
 		}
 	case "MultiEdit":
@@ -756,6 +765,10 @@ func (a *Agent) InvokeWithOptions(ctx context.Context, prompt string) (message.M
 	}
 	reactClient, eventEmitter := react.NewReAct(llmWithTools, guard, a.sharedState, situation, maxIterations)
 	a.setupEventHandlers(eventEmitter)
+	defer reactClient.Close()
+	if a.settings != nil {
+		reactClient.SetBashWhitelist(a.settings.Bash.WhitelistedCommands)
+	}
 
 	result, err := reactClient.Run(ctx, prompt)
 

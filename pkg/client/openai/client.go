@@ -33,6 +33,12 @@ type OpenAICore struct {
 	// streamingUnsupported is set to true when the API rejects streaming
 	// (e.g., org not verified). Subsequent calls will avoid streaming.
 	streamingUnsupported bool
+
+	// Cross-call telemetry/state shared by all wrappers built from this core,
+	// so token usage reported via the original client stays accurate even when
+	// per-invocation wrappers make the actual API calls.
+	lastUsage       message.TokenUsage
+	prevInputTokens int // previous call's input tokens for truncation detection
 }
 
 // OpenAIClient implements ToolCallingLLM and VisionLLM interfaces
@@ -40,11 +46,9 @@ type OpenAIClient struct {
 	*OpenAICore
 	toolManager domain.ToolManager
 
-	// Telemetry and caching/session hints
-	lastUsage       message.TokenUsage
-	prevInputTokens int // previous call's input tokens for truncation detection
-	sessionID       string
-	cacheOpts       domain.ModelSideCacheOptions
+	// Caching/session hints
+	sessionID string
+	cacheOpts domain.ModelSideCacheOptions
 }
 
 // NewOpenAIClient creates a new OpenAI client with configurable maxTokens

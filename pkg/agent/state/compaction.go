@@ -330,8 +330,11 @@ func (c *MessageState) performCompaction(ctx context.Context, llm domain.LLM) er
 		summary = createBasicMessageSummary(olderMessages)
 	}
 
-	// Build new state: boundary message + recent messages
-	c.Clear()
+	// Build new state: boundary message + recent messages. Clear only the
+	// in-memory slice — the persisted file must survive until the next
+	// SaveToFile, otherwise a crash between here and that save loses history
+	// (mid-run compaction performs no save of its own).
+	c.clearInMemory()
 
 	// Prepend a compact boundary message (survives CleanupMandatory for future passes)
 	c.AddMessage(message.NewCompactBoundaryMessage(summary))

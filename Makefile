@@ -28,7 +28,10 @@ proto: ## Generate protobuf + Connect-gRPC Go code
 test: ## Run tests
 	go test ./...
 
-lint: ## Run linters
+vet: ## Run go vet static analysis
+	go vet ./...
+
+lint: vet ## Run linters (go vet + golangci-lint)
 	golangci-lint run
 
 fmt: ## Format code

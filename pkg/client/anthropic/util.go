@@ -2,6 +2,7 @@ package anthropic
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 
 	"github.com/anthropics/anthropic-sdk-go"
@@ -151,7 +152,17 @@ func unsanitizeToolNameFromAnthropic(sanitizedName string) string {
 func convertToolsToAnthropic(tools map[message.ToolName]message.Tool) []anthropic.ToolUnionParam {
 	var anthropicTools []anthropic.ToolUnionParam
 
-	for _, tool := range tools {
+	// Iterate in a stable (sorted) order. Ranging a map directly randomizes the
+	// tool order per request, which changes the cached prefix every call and
+	// defeats the cache_control marker placed on the last tool below.
+	names := make([]string, 0, len(tools))
+	for name := range tools {
+		names = append(names, string(name))
+	}
+	sort.Strings(names)
+
+	for _, name := range names {
+		tool := tools[message.ToolName(name)]
 		// Create properties from tool arguments using enhanced schema conversion
 		properties := make(map[string]any)
 		var required []string

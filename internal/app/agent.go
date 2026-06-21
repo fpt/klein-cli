@@ -394,13 +394,14 @@ func NewAgentWithOptions(llmClient domain.LLM, workingDir string, mcpToolManager
 
 	spawnAgentManager := tool.NewSpawnAgentToolManager()
 	taskAgentManager := tool.NewTaskAgentToolManager()
+	researcherManager := tool.NewResearcherToolManager()
 
 	// Load persistent permission rules (user + project + local).
 	// Missing files are silently ignored; never fatal.
 	permRules := permission.LoadForProject(workingDir)
 
 	// Combine ALL tool managers into one composite
-	managers := []domain.ToolManager{todoToolManager, taskToolManager, filesystemManager, bashToolManager, searchToolManager, webToolManager, pdfToolManager, skillToolManager, askQuestionManager, planToolManager, spawnAgentManager, taskAgentManager}
+	managers := []domain.ToolManager{todoToolManager, taskToolManager, filesystemManager, bashToolManager, searchToolManager, webToolManager, pdfToolManager, skillToolManager, askQuestionManager, planToolManager, spawnAgentManager, taskAgentManager, researcherManager}
 	for _, mcpManager := range mcpToolManagers {
 		managers = append(managers, mcpManager)
 	}

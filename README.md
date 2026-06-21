@@ -281,7 +281,7 @@ The gateway includes a persistent memory system at `~/.klein/claw/memory/`:
 
 Memory context is automatically injected into each conversation. The agent can read and update these files using its standard filesystem tools.
 
-### Heartbeat
+### Heartbeat (legacy single job)
 
 Optional periodic prompt execution. Configure in `config.json`:
 ```json
@@ -296,6 +296,45 @@ Optional periodic prompt execution. Configure in `config.json`:
   }
 }
 ```
+
+### Schedules (multi-job + silent mode)
+
+For continuous data collection — e.g. periodic `ResearcherFetch` to build a
+time-series store — use the `schedules` array. Each entry runs on its own
+ticker. Set `"silent": true` to run the prompt without posting the result
+back to a channel (the gateway logs a short preview so the run is auditable).
+
+```json
+{
+  "schedules": [
+    {
+      "name": "researcher-collect",
+      "enabled": true,
+      "interval": "1h",
+      "skill": "market-narratives",
+      "prompt": "Call ResearcherFetch to refresh the RSS sources. Then call ResearcherAnalyze with window_days=7 limit=20. Reply with just the counts.",
+      "silent": true,
+      "run_at_start": true
+    },
+    {
+      "name": "researcher-daily-digest",
+      "enabled": true,
+      "interval": "24h",
+      "skill": "market-narratives",
+      "prompt": "Use ResearcherNarratives limit=5 to fetch the top market narratives. Summarise as a short Markdown digest with one bullet per narrative.",
+      "channel_type": "discord",
+      "channel_id": "YOUR_CHANNEL_ID"
+    }
+  ]
+}
+```
+
+- `interval`: Go duration string. Floor: 5 minutes (anything shorter is rounded up — usually a config typo).
+- `skill`: overrides `default_skill` for this turn only. Use `market-narratives` to access the Researcher tools.
+- `silent: true`: run the prompt but don't post the response back to Discord.
+- `run_at_start: true`: fire once immediately when the gateway starts (useful for bootstrap on restart).
+
+The legacy `heartbeat` block above is kept for backward compatibility — at startup it is folded in as one additional schedule.
 
 ### Configuration Reference
 
@@ -313,9 +352,17 @@ Optional periodic prompt execution. Configure in `config.json`:
 | `discord.mention_only` | `false` | Only respond when @mentioned in guilds |
 | `memory.base_dir` | `~/.klein/claw/memory/` | Memory storage directory |
 | `memory.max_notes` | `30` | Maximum daily notes to retain |
-| `heartbeat.enabled` | `false` | Enable periodic prompts |
+| `heartbeat.enabled` | `false` | Enable periodic prompts (legacy single-job) |
 | `heartbeat.interval` | `24h` | Go duration string |
 | `heartbeat.prompt` | | Prompt text to execute |
+| `schedules[].name` | | Human-readable id for logs |
+| `schedules[].enabled` | `false` | Per-schedule on/off |
+| `schedules[].interval` | | Go duration string; floor 5m |
+| `schedules[].skill` | | Skill override for this schedule (e.g. `market-narratives`) |
+| `schedules[].prompt` | | What the agent will see as a user message |
+| `schedules[].silent` | `false` | Run without posting the response to a channel |
+| `schedules[].run_at_start` | `false` | Fire once immediately on gateway startup |
+| `schedules[].channel_type` / `channel_id` | | Output channel — only used when `silent: false` |
 
 ## Development
 

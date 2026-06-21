@@ -1,0 +1,28 @@
+sources:
+  - name: white-house-briefing-room
+    type: rss
+    intake: government-us
+    role: signal
+    trust_tier: primary
+    url: https://www.whitehouse.gov/briefings-statements/feed/
+
+  - name: uk-hm-treasury
+    type: atom
+    intake: government-uk
+    role: signal
+    trust_tier: primary
+    url: https://www.gov.uk/government/organisations/hm-treasury.atom
+
+  - name: ecb-press
+    type: rss
+    intake: government-eu
+    role: signal
+    trust_tier: primary
+    url: https://www.ecb.europa.eu/rss/press.html
+
+  - name: federal-reserve-press
+    type: rss
+    intake: government-us
+    role: signal
+    trust_tier: primary
+    url: https://www.federalreserve.gov/feeds/press_all.xml

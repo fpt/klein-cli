@@ -19,6 +19,16 @@ type GatewayConfig struct {
 	Discord     DiscordConfig `json:"discord"`
 	Memory         MemoryConfig    `json:"memory"`
 	Heartbeat      HeartbeatConfig `json:"heartbeat"`
+
+	// Schedules is the multi-job scheduler. Each entry runs on its own
+	// ticker and can opt into Silent mode (run the prompt but don't echo
+	// the response to a chat channel). Right for time-series data
+	// collection — e.g. an hourly ResearcherFetch that updates the local
+	// store with no Discord chatter, plus a daily digest that DOES post.
+	//
+	// Heartbeat (above) is kept for backward compatibility — when set, it
+	// is auto-converted into a single schedule.
+	Schedules []ScheduleConfig `json:"schedules,omitempty"`
 }
 
 // DiscordConfig holds Discord bot configuration.

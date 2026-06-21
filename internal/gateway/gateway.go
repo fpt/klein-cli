@@ -21,7 +21,7 @@ type Gateway struct {
 	bus       *MessageBus
 	sessions  *SessionManager
 	memory    *MemoryManager
-	heartbeat *Heartbeat
+	scheduler *Scheduler
 	adapters  map[string]Adapter
 	client    agentv1connect.AgentServiceClient
 	logger    *pkgLogger.Logger
@@ -58,7 +58,14 @@ func NewGateway(cfg *GatewayConfig, logger *pkgLogger.Logger) (*Gateway, error) 
 		gw.adapters["discord"] = discord
 	}
 
-	gw.heartbeat = NewHeartbeat(cfg.Heartbeat, bus, logger)
+	// Build the schedule set: explicit Schedules + the legacy single
+	// Heartbeat (if enabled). This preserves backward compatibility while
+	// letting users add multiple jobs going forward.
+	schedules := append([]ScheduleConfig(nil), cfg.Schedules...)
+	if legacy, ok := HeartbeatToSchedule(cfg.Heartbeat); ok {
+		schedules = append(schedules, legacy)
+	}
+	gw.scheduler = NewScheduler(schedules, bus, logger)
 
 	return gw, nil
 }
@@ -75,8 +82,8 @@ func (gw *Gateway) Run(ctx context.Context) error {
 		}(name, a)
 	}
 
-	// Start heartbeat
-	go gw.heartbeat.Start(ctx)
+	// Start scheduler (covers explicit Schedules + legacy Heartbeat).
+	go gw.scheduler.Start(ctx)
 
 	// Start outbound dispatcher
 	go gw.dispatchOutbound(ctx)
@@ -135,10 +142,18 @@ func (gw *Gateway) handleInbound(ctx context.Context, msg InboundMessage) {
 		enrichedText = memoryPrompt + enrichedText
 	}
 
+	// Resolve the skill: per-message override (used by scheduled jobs to
+	// run under a non-default skill like "market-narratives") falls back to
+	// the session's persistent skill.
+	skill := session.Skill
+	if msg.Skill != "" {
+		skill = msg.Skill
+	}
+
 	// Invoke agent via Connect RPC streaming
 	stream, err := gw.client.Invoke(ctx, connect.NewRequest(&agentv1.InvokeRequest{
 		SessionId:      session.AgentSessionID,
-		Scenario:       session.Skill,
+		Scenario:       skill,
 		UserInput:      enrichedText,
 		EnableThinking: true,
 		Images:         msg.Images,
@@ -175,11 +190,23 @@ func (gw *Gateway) handleInbound(ctx context.Context, msg InboundMessage) {
 	}
 
 	if responseText != "" {
-		gw.bus.Outbound <- OutboundMessage{
-			ChannelType: msg.ChannelType,
-			ChannelID:   msg.ChannelID,
-			Text:        responseText,
-			ReplyToID:   msg.ReplyToID,
+		if msg.Silent {
+			// Scheduled silent runs (e.g. periodic data collection) only
+			// log a short preview so an operator can still verify the run
+			// completed. The full response is discarded — that's the
+			// whole point of silent mode.
+			preview := responseText
+			if len(preview) > 160 {
+				preview = preview[:160] + "…"
+			}
+			gw.logger.Info("Silent run completed", "peer", msg.PeerName, "preview", preview)
+		} else {
+			gw.bus.Outbound <- OutboundMessage{
+				ChannelType: msg.ChannelType,
+				ChannelID:   msg.ChannelID,
+				Text:        responseText,
+				ReplyToID:   msg.ReplyToID,
+			}
 		}
 	}
 }

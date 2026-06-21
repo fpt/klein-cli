@@ -376,6 +376,7 @@ func NewAgentWithOptions(llmClient domain.LLM, workingDir string, mcpToolManager
 	searchToolManager := tool.NewSearchToolManager(tool.SearchConfig{WorkingDir: workingDir})
 	webToolManager := tool.NewWebToolManager()
 	pdfToolManager := tool.NewPDFToolManager(workingDir)
+	marketToolManager := tool.NewMarketToolManager()
 
 	// Load skills (embedded + filesystem) before creating tool managers
 	skills, err := skill.LoadSkills(workingDir)
@@ -401,7 +402,7 @@ func NewAgentWithOptions(llmClient domain.LLM, workingDir string, mcpToolManager
 	permRules := permission.LoadForProject(workingDir)
 
 	// Combine ALL tool managers into one composite
-	managers := []domain.ToolManager{todoToolManager, taskToolManager, filesystemManager, bashToolManager, searchToolManager, webToolManager, pdfToolManager, skillToolManager, askQuestionManager, planToolManager, spawnAgentManager, taskAgentManager, researcherManager}
+	managers := []domain.ToolManager{todoToolManager, taskToolManager, filesystemManager, bashToolManager, searchToolManager, webToolManager, pdfToolManager, marketToolManager, skillToolManager, askQuestionManager, planToolManager, spawnAgentManager, taskAgentManager, researcherManager}
 	for _, mcpManager := range mcpToolManagers {
 		managers = append(managers, mcpManager)
 	}

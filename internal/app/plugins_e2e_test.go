@@ -17,8 +17,8 @@ import (
 type stubLLM struct{}
 
 func (stubLLM) Chat(_ any, _ any, _ bool, _ chan<- string) (any, error) { return nil, nil }
-func (stubLLM) ModelID() string                                          { return "stub" }
-func (stubLLM) MaxTokens() int                                           { return 0 }
+func (stubLLM) ModelID() string                                         { return "stub" }
+func (stubLLM) MaxTokens() int                                          { return 0 }
 
 // TestPluginsWireUpEndToEnd loads m6o-plugin-marketplace, constructs a real
 // Agent (no LLM call), and verifies command/agent registration round-trips
@@ -54,8 +54,8 @@ func TestPluginsWireUpEndToEnd(t *testing.T) {
 	a.RegisterPlugins(plugins)
 
 	cases := []struct {
-		scoped  string
-		bareOK  bool // whether the bare name resolves uniquely
+		scoped string
+		bareOK bool // whether the bare name resolves uniquely
 	}{
 		{"github-watcher:watch", true},
 		{"github-watcher:check", true},

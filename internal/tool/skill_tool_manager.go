@@ -116,10 +116,10 @@ type skillTool struct {
 	handler     func(ctx context.Context, args message.ToolArgumentValues) (message.ToolResult, error)
 }
 
-func (t *skillTool) RawName() message.ToolName        { return t.name }
-func (t *skillTool) Name() message.ToolName            { return t.name }
+func (t *skillTool) RawName() message.ToolName            { return t.name }
+func (t *skillTool) Name() message.ToolName               { return t.name }
 func (t *skillTool) Description() message.ToolDescription { return t.description }
-func (t *skillTool) Arguments() []message.ToolArgument { return t.arguments }
+func (t *skillTool) Arguments() []message.ToolArgument    { return t.arguments }
 func (t *skillTool) Handler() func(ctx context.Context, args message.ToolArgumentValues) (message.ToolResult, error) {
 	return t.handler
 }

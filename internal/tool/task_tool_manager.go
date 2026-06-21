@@ -434,8 +434,8 @@ type taskTool struct {
 	handler     func(ctx context.Context, args message.ToolArgumentValues) (message.ToolResult, error)
 }
 
-func (t *taskTool) RawName() message.ToolName    { return t.name }
-func (t *taskTool) Name() message.ToolName        { return t.name }
+func (t *taskTool) RawName() message.ToolName            { return t.name }
+func (t *taskTool) Name() message.ToolName               { return t.name }
 func (t *taskTool) Description() message.ToolDescription { return t.description }
 func (t *taskTool) Arguments() []message.ToolArgument    { return t.arguments }
 func (t *taskTool) Handler() func(ctx context.Context, args message.ToolArgumentValues) (message.ToolResult, error) {

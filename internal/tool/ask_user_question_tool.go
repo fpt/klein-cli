@@ -72,8 +72,8 @@ type genericTool struct {
 	handler     func(ctx context.Context, args message.ToolArgumentValues) (message.ToolResult, error)
 }
 
-func (t *genericTool) RawName() message.ToolName    { return t.name }
-func (t *genericTool) Name() message.ToolName        { return t.name }
+func (t *genericTool) RawName() message.ToolName            { return t.name }
+func (t *genericTool) Name() message.ToolName               { return t.name }
 func (t *genericTool) Description() message.ToolDescription { return t.description }
 func (t *genericTool) Arguments() []message.ToolArgument    { return t.arguments }
 func (t *genericTool) Handler() func(ctx context.Context, args message.ToolArgumentValues) (message.ToolResult, error) {

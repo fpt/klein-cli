@@ -187,4 +187,3 @@ func UseThinkTokenModel(model string) bool {
 	}
 	return false
 }
-

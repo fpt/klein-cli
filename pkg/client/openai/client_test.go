@@ -13,8 +13,8 @@ func TestGetOpenAIModel(t *testing.T) {
 		{"gpt-5.4-mini", "gpt-5.4-mini"},
 		{"gpt-5.4-nano", "gpt-5.4-nano"},
 		{"gpt-5.4-nano-2026-03-17", "gpt-5.4-nano-2026-03-17"}, // dated variant
-		{"unknown-model", "gpt-5.4-mini"},                       // default fallback
-		{"gpt-5-mini", "gpt-5.4-mini"},                          // old model → default
+		{"unknown-model", "gpt-5.4-mini"},                      // default fallback
+		{"gpt-5-mini", "gpt-5.4-mini"},                         // old model → default
 	}
 
 	for _, tc := range testCases {
@@ -39,7 +39,7 @@ func TestGetModelCapabilities(t *testing.T) {
 		{"gpt-5.4-mini", true, true, true, true, true, 32768},
 		{"gpt-5.4-nano", true, true, true, true, true, 16384},
 		{"gpt-5.4-nano-2026-03-17", true, true, true, true, true, 16384}, // dated variant
-		{"unknown-model", true, true, true, true, true, 32768},            // default → gpt-5.4 profile
+		{"unknown-model", true, true, true, true, true, 32768},           // default → gpt-5.4 profile
 	}
 
 	for _, tc := range testCases {

@@ -29,10 +29,10 @@ func TestLoadM6oMarketplace(t *testing.T) {
 
 	// Spot-check well-known plugins.
 	tests := []struct {
-		name          string
-		wantCommands  int
-		wantAgents    int
-		wantMCPCount  int
+		name         string
+		wantCommands int
+		wantAgents   int
+		wantMCPCount int
 	}{
 		{"github-watcher", 3, 1, 0},
 		{"docs-for-ai", 2, 1, 0},

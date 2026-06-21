@@ -47,8 +47,8 @@ func NewPromptBuilder(fsRepo repository.FilesystemRepository, workingDir string)
 		workingDir: workingDir,
 		fsRepo:     fsRepo,
 		// Default: paste handling disabled unless explicitly enabled
-		usePaste:   false,
-		cursorPos:  0,
+		usePaste:  false,
+		cursorPos: 0,
 	}
 }
 
@@ -70,7 +70,7 @@ func (p *PromptBuilder) Input(r rune) {
 // InputAtCursor inserts a rune at the current cursor position.
 func (p *PromptBuilder) InputAtCursor(r rune) {
 	now := time.Now()
-	
+
 	// Ensure cursor position is valid
 	if p.cursorPos < 0 {
 		p.cursorPos = 0
@@ -78,17 +78,14 @@ func (p *PromptBuilder) InputAtCursor(r rune) {
 	if p.cursorPos > len(p.buf) {
 		p.cursorPos = len(p.buf)
 	}
-	
+
 	// Insert rune at cursor position
 	p.buf = append(p.buf[:p.cursorPos], append([]rune{r}, p.buf[p.cursorPos:]...)...)
 	p.times = append(p.times[:p.cursorPos], append([]time.Time{now}, p.times[p.cursorPos:]...)...)
-	
+
 	// Move cursor forward
 	p.cursorPos++
 }
-
-
-
 
 // SyncFromReadline updates the PromptBuilder's buffer and cursor from readline's state.
 // This is the authoritative way to keep PromptBuilder in sync with readline.
@@ -96,7 +93,7 @@ func (p *PromptBuilder) SyncFromReadline(line []rune, pos int) {
 	// Update buffer from readline's line
 	p.buf = make([]rune, len(line))
 	copy(p.buf, line)
-	
+
 	// Update times array to match buffer length
 	now := time.Now()
 	if len(p.times) != len(line) {
@@ -105,7 +102,7 @@ func (p *PromptBuilder) SyncFromReadline(line []rune, pos int) {
 			p.times[i] = now
 		}
 	}
-	
+
 	// Update cursor position
 	if pos < 0 {
 		pos = 0
@@ -357,7 +354,6 @@ func (p *PromptBuilder) Backspace() {
 	}
 	p.cursorPos--
 }
-
 
 // isAtEndOfAtmarkPattern checks if the cursor is at the end of an @filename pattern
 func (p *PromptBuilder) isAtEndOfAtmarkPattern() bool {

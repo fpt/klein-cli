@@ -269,10 +269,10 @@ type mockTool struct {
 	name message.ToolName
 }
 
-func (t *mockTool) RawName() message.ToolName                    { return t.name }
-func (t *mockTool) Name() message.ToolName                       { return t.name }
-func (t *mockTool) Description() message.ToolDescription         { return "mock" }
-func (t *mockTool) Arguments() []message.ToolArgument            { return nil }
+func (t *mockTool) RawName() message.ToolName            { return t.name }
+func (t *mockTool) Name() message.ToolName               { return t.name }
+func (t *mockTool) Description() message.ToolDescription { return "mock" }
+func (t *mockTool) Arguments() []message.ToolArgument    { return nil }
 func (t *mockTool) Handler() func(context.Context, message.ToolArgumentValues) (message.ToolResult, error) {
 	return nil
 }

@@ -82,4 +82,3 @@ func (c *CompositeToolManager) CallTool(ctx context.Context, name message.ToolNa
 func (c *CompositeToolManager) RegisterTool(name message.ToolName, description message.ToolDescription, args []message.ToolArgument, handler func(ctx context.Context, args message.ToolArgumentValues) (message.ToolResult, error)) {
 	panic("RegisterTool not supported on CompositeToolManager - register on underlying managers instead")
 }
-

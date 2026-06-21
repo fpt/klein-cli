@@ -21,7 +21,7 @@ type Skill struct {
 	AllowedTools           []string // from "allowed-tools" (empty = all tools)
 	ArgumentHint           string
 	DisableModelInvocation bool
-	UserInvocable          bool   // default true
+	UserInvocable          bool // default true
 	Model                  string
 	Content                string // markdown body after frontmatter
 	SourcePath             string // filesystem path or "embedded:<name>"

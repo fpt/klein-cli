@@ -85,8 +85,8 @@ func TestCheckBuiltinDeny_Blocked(t *testing.T) {
 
 func TestCheckBuiltinDeny_AllowedCommands(t *testing.T) {
 	allowed := []string{
-		"rm -rf ./build",     // subdirectory, not root
-		"rm -f file.txt",     // non-recursive
+		"rm -rf ./build", // subdirectory, not root
+		"rm -f file.txt", // non-recursive
 		"go build ./...",
 		"git push origin main",
 	}

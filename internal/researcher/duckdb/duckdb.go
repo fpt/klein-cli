@@ -87,13 +87,13 @@ func Query(ctx context.Context, dataDir, sql string) (string, error) {
 //
 // View shapes:
 //
-//   events     — events.jsonl, one row per event. Columns inherited from
-//                the JSONL schema (id, source, intake, role, trust_tier,
-//                weight, title, url, summary, published_at::TIMESTAMP,
-//                fetched_at::TIMESTAMP).
-//   narratives — narratives.json, one row per narrative cluster. Includes
-//                themes/entities arrays and source_mix/trust_mix/intake_mix
-//                structs (DuckDB infers MAP(VARCHAR, INTEGER)).
+//	events     — events.jsonl, one row per event. Columns inherited from
+//	             the JSONL schema (id, source, intake, role, trust_tier,
+//	             weight, title, url, summary, published_at::TIMESTAMP,
+//	             fetched_at::TIMESTAMP).
+//	narratives — narratives.json, one row per narrative cluster. Includes
+//	             themes/entities arrays and source_mix/trust_mix/intake_mix
+//	             structs (DuckDB infers MAP(VARCHAR, INTEGER)).
 //
 // If a file doesn't exist yet, the corresponding view is created as an empty
 // stub so the user's query gets a clean "no events stored" rather than a

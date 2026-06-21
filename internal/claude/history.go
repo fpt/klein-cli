@@ -81,12 +81,12 @@ func FindLatestSession(workingDir string) (string, error) {
 
 // jsonlRecord is the minimal shape we need to parse from each JSONL line.
 type jsonlRecord struct {
-	Type       string `json:"type"`
-	IsSidechain bool  `json:"isSidechain"`
-	IsMeta     bool   `json:"isMeta"`
-	Message    struct {
-		Role    string            `json:"role"`
-		Content json.RawMessage   `json:"content"`
+	Type        string `json:"type"`
+	IsSidechain bool   `json:"isSidechain"`
+	IsMeta      bool   `json:"isMeta"`
+	Message     struct {
+		Role    string          `json:"role"`
+		Content json.RawMessage `json:"content"`
 	} `json:"message"`
 }
 

@@ -67,7 +67,7 @@ func TestGetModelCapabilities(t *testing.T) {
 }
 
 func TestNewOpenAIClient_NoAPIKey(t *testing.T) {
-	_, err := NewOpenAIClient("gpt-5.4-mini", 0)
+	_, err := NewOpenAIClient("gpt-5.4-mini", 0, "")
 	if err == nil {
 		t.Skip("OPENAI_API_KEY is set in environment, skipping test")
 	}

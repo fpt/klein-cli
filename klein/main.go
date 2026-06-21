@@ -66,6 +66,7 @@ func main() {
 	var backendLong = flag.String("backend", "", "LLM backend (ollama, anthropic, openai, or gemini)")
 	var model = flag.String("m", "", "Model name to use")
 	var modelLong = flag.String("model", "", "Model name to use")
+	var effort = flag.String("effort", "", "Reasoning effort for reasoning-capable models (none|minimal|low|medium|high|xhigh; primarily OpenAI)")
 	var workdir = flag.String("workdir", "", "Working directory")
 	var settingsPath = flag.String("settings", "", "Path to settings file")
 	var skillFlag = flag.String("s", "code", "Skill to use (default: code)")
@@ -144,6 +145,11 @@ func main() {
 		}
 	} else if resolvedModel != "" {
 		settings.LLM.Model = resolvedModel
+	}
+
+	// Apply --effort override last so it wins over backend defaults.
+	if *effort != "" {
+		settings.LLM.Effort = strings.ToLower(*effort)
 	}
 
 	// Validate settings

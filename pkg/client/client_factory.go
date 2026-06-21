@@ -17,7 +17,7 @@ func NewLLMClient(settings config.LLMSettings) (domain.LLM, error) {
 	case "anthropic", "claude":
 		return anthropic.NewAnthropicClientWithTokens(settings.Model, settings.MaxTokens)
 	case "openai":
-		return openai.NewOpenAIClient(settings.Model, settings.MaxTokens)
+		return openai.NewOpenAIClient(settings.Model, settings.MaxTokens, settings.Effort)
 	case "gemini":
 		return gemini.NewGeminiClientWithTokens(settings.Model, settings.MaxTokens)
 	default:

@@ -30,6 +30,9 @@ type OpenAICore struct {
 	client    *openai.Client
 	model     string
 	maxTokens int
+	// reasoningEffort controls the reasoning depth for reasoning-capable models
+	// (GPT-5 family). Defaults to defaultReasoningEffort when unset.
+	reasoningEffort shared.ReasoningEffort
 	// streamingUnsupported is set to true when the API rejects streaming
 	// (e.g., org not verified). Subsequent calls will avoid streaming.
 	streamingUnsupported bool
@@ -51,9 +54,10 @@ type OpenAIClient struct {
 	cacheOpts domain.ModelSideCacheOptions
 }
 
-// NewOpenAIClient creates a new OpenAI client with configurable maxTokens
-// maxTokens = 0 means default
-func NewOpenAIClient(model string, maxTokens int) (*OpenAIClient, error) {
+// NewOpenAIClient creates a new OpenAI client with configurable maxTokens and
+// reasoning effort. maxTokens = 0 means default; effort = "" means
+// defaultReasoningEffort. effort is one of: none, minimal, low, medium, high, xhigh.
+func NewOpenAIClient(model string, maxTokens int, effort string) (*OpenAIClient, error) {
 	apiKey := os.Getenv("OPENAI_API_KEY")
 	if apiKey == "" {
 		return nil, fmt.Errorf("OPENAI_API_KEY environment variable not set")
@@ -81,12 +85,34 @@ func NewOpenAIClient(model string, maxTokens int) (*OpenAIClient, error) {
 		client:               &client,
 		model:                openaiModel,
 		maxTokens:            maxTokens,
+		reasoningEffort:      parseReasoningEffort(effort),
 		streamingUnsupported: false,
 	}
 
 	return &OpenAIClient{
 		OpenAICore: core,
 	}, nil
+}
+
+// parseReasoningEffort maps a settings effort string to the SDK enum, falling
+// back to defaultReasoningEffort for empty or unrecognized values.
+func parseReasoningEffort(effort string) shared.ReasoningEffort {
+	switch effort {
+	case "none":
+		return shared.ReasoningEffortNone
+	case "minimal":
+		return shared.ReasoningEffortMinimal
+	case "low":
+		return shared.ReasoningEffortLow
+	case "medium":
+		return shared.ReasoningEffortMedium
+	case "high":
+		return shared.ReasoningEffortHigh
+	case "xhigh":
+		return shared.ReasoningEffortXhigh
+	default:
+		return defaultReasoningEffort
+	}
 }
 
 // NewOpenAIClientFromCore creates a new client instance from existing core (for factory pattern)
@@ -164,7 +190,7 @@ func (c *OpenAIClient) Chat(ctx context.Context, messages []message.Message, ena
 	if caps.SupportsThinking {
 		// Enable reasoning for GPT-5 models to see thinking process
 		params.Reasoning = shared.ReasoningParam{
-			Effort: defaultReasoningEffort,
+			Effort: c.reasoningEffort,
 		}
 
 	}
@@ -277,7 +303,7 @@ func (c *OpenAIClient) chatWithStreaming(ctx context.Context, messages []message
 	if caps.SupportsThinking && showThinking {
 		// Enable reasoning for GPT-5 models to see thinking process
 		params.Reasoning = shared.ReasoningParam{
-			Effort: defaultReasoningEffort,
+			Effort: c.reasoningEffort,
 		}
 
 	}
@@ -593,7 +619,7 @@ func (c *OpenAIClient) ChatWithToolChoice(ctx context.Context, messages []messag
 	if caps.SupportsThinking {
 		// Enable reasoning for GPT-5 models to see thinking process
 		params.Reasoning = shared.ReasoningParam{
-			Effort: defaultReasoningEffort,
+			Effort: c.reasoningEffort,
 		}
 
 	}

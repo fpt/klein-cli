@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 
 	"github.com/fpt/klein-cli/internal/infra"
 	"github.com/fpt/klein-cli/internal/repository"
@@ -33,6 +34,23 @@ type LLMSettings struct {
 	BaseURL   string `json:"base_url,omitempty"`   // for ollama or openai (Azure)
 	Thinking  bool   `json:"thinking,omitempty"`   // enable thinking mode
 	MaxTokens int    `json:"max_tokens,omitempty"` // maximum tokens for model responses (0 = use model default)
+	// Effort sets the reasoning effort for reasoning-capable models (primarily
+	// OpenAI GPT-5). Empty = backend default. The full vocabulary is in
+	// ValidEfforts, but actual support is model-dependent — e.g. gpt-5.4 accepts
+	// none/low/medium/high/xhigh but not minimal. Ignored by models without
+	// reasoning effort.
+	Effort string `json:"effort,omitempty"`
+}
+
+// ValidEfforts lists every reasoning-effort value accepted by the OpenAI API
+// (empty = backend default). Per the OpenAI reasoning guide these are
+// model-dependent; a given model may accept only a subset.
+var ValidEfforts = []string{"none", "minimal", "low", "medium", "high", "xhigh"}
+
+// IsValidEffort reports whether e is empty (backend default) or a recognized
+// reasoning-effort value.
+func IsValidEffort(e string) bool {
+	return e == "" || slices.Contains(ValidEfforts, e)
 }
 
 // MCPSettings contains MCP server configuration
@@ -237,6 +255,7 @@ func GetDefaultLLMSettingsForBackend(backend string) LLMSettings {
 			BaseURL:   "",
 			Thinking:  true,
 			MaxTokens: 0,
+			Effort:    "low", // preserves prior hardcoded default for GPT-5 reasoning
 		}
 	case "gemini":
 		return LLMSettings{
@@ -287,6 +306,10 @@ func ValidateSettings(settings *Settings) error {
 
 	if settings.LLM.Model == "" {
 		return fmt.Errorf("LLM model is required")
+	}
+
+	if !IsValidEffort(settings.LLM.Effort) {
+		return fmt.Errorf("invalid effort %q (must be empty or one of %v; actual support is model-dependent, e.g. gpt-5.4 accepts none/low/medium/high/xhigh but not minimal)", settings.LLM.Effort, ValidEfforts)
 	}
 
 	if settings.LLM.Backend == "anthropic" {

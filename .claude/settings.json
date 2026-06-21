@@ -1,0 +1,16 @@
+{
+  "hooks": {
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"$(git rev-parse --show-toplevel)/.claude/hooks/go-format-lint.sh\"",
+            "timeout": 180,
+            "statusMessage": "Formatting & linting changed Go files..."
+          }
+        ]
+      }
+    ]
+  }
+}

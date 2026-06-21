@@ -15,7 +15,7 @@ import (
 // every hour and silently stores events, plus a separate daily digest that
 // posts to Discord.
 type ScheduleConfig struct {
-	Name        string `json:"name"`         // Human-readable id for logs (e.g. "researcher-fetch")
+	Name        string `json:"name"` // Human-readable id for logs (e.g. "researcher-fetch")
 	Enabled     bool   `json:"enabled"`
 	Interval    string `json:"interval"`     // Go duration string, e.g. "6h", "30m"
 	Prompt      string `json:"prompt"`       // The user-message the scheduled agent will see

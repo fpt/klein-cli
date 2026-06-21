@@ -158,4 +158,3 @@ func schemaPropsToToolArgs(schema map[string]any) ([]message.ToolArgument, error
 	}
 	return args, nil
 }
-

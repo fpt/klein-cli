@@ -47,7 +47,6 @@ func TestLoadBuiltinSkills_HasCodeSkill(t *testing.T) {
 	}
 }
 
-
 func TestLoadSkillsFromDir(t *testing.T) {
 	// Create temp directory with a skill
 	tmpDir := t.TempDir()

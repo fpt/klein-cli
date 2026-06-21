@@ -246,18 +246,18 @@ func StartInteractiveMode(ctx context.Context, a *Agent, skillName string) {
 	rlCfg.SetListener(func(line []rune, pos int, key rune) (newLine []rune, newPos int, ok bool) {
 		// Always sync our PromptBuilder state with readline's current state
 		pb.SyncFromReadline(line, pos)
-		
+
 		// Ctrl+C: allow readline to handle as interrupt
 		if key == 3 { // Ctrl+C
 			return nil, 0, false
 		}
-		
+
 		// Ctrl+K: special case - clear our buffer completely if at start
 		if key == 11 && pos == 0 { // Ctrl+K at start
 			pb.Clear()
 			return []rune{}, 0, true
 		}
-		
+
 		// Let readline handle all other keys (backspace, delete, arrows, typing, etc.)
 		// We don't interfere, just stay in sync
 		return nil, 0, false
@@ -321,7 +321,7 @@ func StartInteractiveMode(ctx context.Context, a *Agent, skillName string) {
 		} else if err == io.EOF {
 			break
 		}
-		
+
 		// Sync PromptBuilder with the final submitted line
 		pb.SyncFromReadline([]rune(line), len([]rune(line)))
 

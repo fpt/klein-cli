@@ -81,10 +81,10 @@ type SubAgentStartData struct {
 
 // SubAgentEndData contains information about a sub-agent completing
 type SubAgentEndData struct {
-	Task   string `json:"task"`
-	Skill  string `json:"skill"`
-	Result string `json:"result"`
-	IsError bool  `json:"is_error,omitempty"`
+	Task    string `json:"task"`
+	Skill   string `json:"skill"`
+	Result  string `json:"result"`
+	IsError bool   `json:"is_error,omitempty"`
 }
 
 // EventHandler is a function that processes agent events

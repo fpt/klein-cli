@@ -373,11 +373,11 @@ func collapseSpaces(s string) string {
 // extractDate looks for common Japanese and Western date patterns in free
 // text near anchor links. Order matters: more specific patterns first.
 var dateREs = []*regexp.Regexp{
-	regexp.MustCompile(`(\d{4})年\s*(\d{1,2})月\s*(\d{1,2})日`),    // 2026年6月21日
-	regexp.MustCompile(`(\d{4})/(\d{1,2})/(\d{1,2})`),              // 2026/06/21
-	regexp.MustCompile(`(\d{4})-(\d{1,2})-(\d{1,2})`),              // 2026-06-21
-	regexp.MustCompile(`(\d{4})\.(\d{1,2})\.(\d{1,2})`),            // 2026.06.21
-	regexp.MustCompile(`(\d{1,2})/(\d{1,2})/(\d{4})`),              // 6/21/2026 (US-ish)
+	regexp.MustCompile(`(\d{4})年\s*(\d{1,2})月\s*(\d{1,2})日`), // 2026年6月21日
+	regexp.MustCompile(`(\d{4})/(\d{1,2})/(\d{1,2})`),        // 2026/06/21
+	regexp.MustCompile(`(\d{4})-(\d{1,2})-(\d{1,2})`),        // 2026-06-21
+	regexp.MustCompile(`(\d{4})\.(\d{1,2})\.(\d{1,2})`),      // 2026.06.21
+	regexp.MustCompile(`(\d{1,2})/(\d{1,2})/(\d{4})`),        // 6/21/2026 (US-ish)
 }
 
 func extractDate(text string) time.Time {

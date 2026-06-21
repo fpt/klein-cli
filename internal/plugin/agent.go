@@ -19,11 +19,11 @@ type agentFrontmatter struct {
 	Description string `yaml:"description"`
 	// tools accepts a YAML sequence or comma-separated string. Empty means
 	// the agent inherits all parent tools.
-	Tools          any    `yaml:"tools"`
-	DisallowedTools any   `yaml:"disallowedTools"`
-	Model          string `yaml:"model"`
-	Background     bool   `yaml:"background"`
-	Color          string `yaml:"color"`
+	Tools           any    `yaml:"tools"`
+	DisallowedTools any    `yaml:"disallowedTools"`
+	Model           string `yaml:"model"`
+	Background      bool   `yaml:"background"`
+	Color           string `yaml:"color"`
 	// Fields accepted but not enforced today:
 	PermissionMode string `yaml:"permissionMode"`
 	MaxTurns       int    `yaml:"maxTurns"`

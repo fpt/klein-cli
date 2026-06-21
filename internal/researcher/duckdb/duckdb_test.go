@@ -29,7 +29,7 @@ func TestBuildPrelude_FilesPresent(t *testing.T) {
 		"CREATE OR REPLACE VIEW events",
 		"CREATE OR REPLACE VIEW narratives",
 		"events.jsonl",
-		"format='nd'",   // newline-delimited for events
+		"format='nd'",    // newline-delimited for events
 		"format='array'", // top-level array for narratives
 	} {
 		if !strings.Contains(got, want) {

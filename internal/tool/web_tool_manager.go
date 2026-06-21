@@ -143,9 +143,9 @@ func (m *WebToolManager) fetchAndParse(ctx context.Context, urlStr string) (*goq
 }
 
 const (
-	MaxImageBytes   = 20 * 1024 * 1024 // 20MB download limit
-	MaxImageDim     = 512              // resize to fit within 512x512
-	MaxJPEGQuality  = 80
+	MaxImageBytes  = 20 * 1024 * 1024 // 20MB download limit
+	MaxImageDim    = 512              // resize to fit within 512x512
+	MaxJPEGQuality = 80
 )
 
 // fetchImage downloads an image URL, resizes it to fit within MaxImageDim, and

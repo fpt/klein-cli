@@ -36,42 +36,42 @@ const DefaultAgentMaxIterations = 10
 
 // Agent handles skill-based tool management and sequential action execution.
 type Agent struct {
-	llmClient              domain.LLM
-	allToolManagers        *tool.CompositeToolManager      // ALL tool managers combined
-	todoToolManager        *tool.TodoToolManager
-	taskToolManager        *tool.TaskToolManager
-	askQuestionManager     *tool.AskUserQuestionToolManager
-	planMode               *tool.PlanModeState             // shared with planToolManager and guard
-	planToolManager        *tool.PlanToolManager
-	spawnAgentManager      *tool.SpawnAgentToolManager
-	taskAgentManager       *tool.TaskAgentToolManager // Provides the Task tool that delegates to loaded agent definitions
-	fsRepo                 repository.FilesystemRepository  // Shared filesystem repository instance
-	workingDir             string
-	sharedState            domain.State
-	skills                 skill.SkillMap
-	sessionFilePath        string
-	settings               *config.Settings
-	logger                 *pkgLogger.Logger
-	out                    io.Writer
-	router                 *SkillsRouter
-	thinkingStarted        bool
-	sessionRules           *permission.RuleSet // in-memory allow/deny rules created during this session
-	permRules              *permission.RuleSet // persistent allow/deny rules from JSON files
-	allowedToolsOverride   []string            // CLI override for skill's allowed-tools
-	externalEventHandler   events.EventHandler // optional: forward events to external consumers (e.g., Connect server)
-	recentlyReadFiles      []string            // up to 5 most recently read unique file paths
-	memoryDir              string              // $HOME/.klein/projects/<hash>/memory/ (interactive mode only)
+	llmClient            domain.LLM
+	allToolManagers      *tool.CompositeToolManager // ALL tool managers combined
+	todoToolManager      *tool.TodoToolManager
+	taskToolManager      *tool.TaskToolManager
+	askQuestionManager   *tool.AskUserQuestionToolManager
+	planMode             *tool.PlanModeState // shared with planToolManager and guard
+	planToolManager      *tool.PlanToolManager
+	spawnAgentManager    *tool.SpawnAgentToolManager
+	taskAgentManager     *tool.TaskAgentToolManager      // Provides the Task tool that delegates to loaded agent definitions
+	fsRepo               repository.FilesystemRepository // Shared filesystem repository instance
+	workingDir           string
+	sharedState          domain.State
+	skills               skill.SkillMap
+	sessionFilePath      string
+	settings             *config.Settings
+	logger               *pkgLogger.Logger
+	out                  io.Writer
+	router               *SkillsRouter
+	thinkingStarted      bool
+	sessionRules         *permission.RuleSet // in-memory allow/deny rules created during this session
+	permRules            *permission.RuleSet // persistent allow/deny rules from JSON files
+	allowedToolsOverride []string            // CLI override for skill's allowed-tools
+	externalEventHandler events.EventHandler // optional: forward events to external consumers (e.g., Connect server)
+	recentlyReadFiles    []string            // up to 5 most recently read unique file paths
+	memoryDir            string              // $HOME/.klein/projects/<hash>/memory/ (interactive mode only)
 
 	// Plugin registry. Commands and agents are stored under their scoped
 	// "<plugin>:<name>" identifier; bare-name entries are also populated when
 	// unambiguous. ambiguousCommands/ambiguousAgents track names that appear
 	// in more than one plugin and therefore require explicit scoping at
 	// dispatch time.
-	plugins            []*pluginpkg.Plugin
-	pluginCommands     map[string]*pluginpkg.Command
-	pluginAgents       map[string]*pluginpkg.Agent
-	ambiguousCommands  map[string]bool
-	ambiguousAgents    map[string]bool
+	plugins           []*pluginpkg.Plugin
+	pluginCommands    map[string]*pluginpkg.Command
+	pluginAgents      map[string]*pluginpkg.Agent
+	ambiguousCommands map[string]bool
+	ambiguousAgents   map[string]bool
 }
 
 // WorkingDir returns the agent's working directory.

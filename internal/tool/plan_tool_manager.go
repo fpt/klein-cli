@@ -12,8 +12,8 @@ type PlanModeState int
 
 const (
 	PlanModeOff      PlanModeState = iota // default: no plan mode
-	PlanModeActive                         // exploring; writes blocked
-	PlanModeApproved                       // user approved; execution allowed
+	PlanModeActive                        // exploring; writes blocked
+	PlanModeApproved                      // user approved; execution allowed
 )
 
 // PlanApprovalHandler is called when ExitPlanMode is invoked.

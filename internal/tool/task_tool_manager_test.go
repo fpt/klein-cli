@@ -194,7 +194,7 @@ func TestTaskUpdate_AddBlockedBy(t *testing.T) {
 	idB := extractID(t, outB)
 
 	callTask(t, m, "TaskUpdate", message.ToolArgumentValues{
-		"id":            idB,
+		"id":             idB,
 		"add_blocked_by": []interface{}{idA},
 	})
 

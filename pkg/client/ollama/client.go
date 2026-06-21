@@ -11,7 +11,6 @@ import (
 	"github.com/pkg/errors"
 )
 
-
 // OllamaCore contains shared Ollama client resources and core functionality
 // This allows efficient resource sharing between different Ollama client types
 type OllamaCore struct {
@@ -68,8 +67,8 @@ func (c *OllamaCore) Client() *api.Client {
 // If the model's registered context is large (>16384), we cap at 16384 to avoid
 // excessive VRAM allocation while still being large enough for agent tasks.
 func (c *OllamaCore) numCtx() int {
-	const defaultNumCtx = 8192  // safe default — much better than Ollama's 4096
-	const maxNumCtx = 16384     // cap to avoid VRAM/slowdown on huge-context models
+	const defaultNumCtx = 8192 // safe default — much better than Ollama's 4096
+	const maxNumCtx = 16384    // cap to avoid VRAM/slowdown on huge-context models
 	if c.contextSize <= 0 {
 		return defaultNumCtx
 	}

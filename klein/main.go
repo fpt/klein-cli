@@ -6,6 +6,7 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/fpt/klein-cli/internal/app"
@@ -81,7 +82,7 @@ func main() {
 	var serve = flag.Bool("serve", false, "Start Connect-gRPC server mode for gateway integration")
 	var serveAddr = flag.String("serve-addr", ":50051", "Connect server listen address")
 	var sessionsDir = flag.String("sessions-dir", "", "Directory for per-session persistence files (default: ~/.klein/claw/sessions/)")
-	var memoryDir = flag.String("memory-dir", "", "Directory for memory files used by MemorySearch/MemoryGet tools (e.g., ~/.klein/claw/memory/)")
+	var memoryDir = flag.String("memory-dir", "", "Directory for memory files used by MemorySearch/MemoryGet/MemoryWrite tools (serve mode; defaults to ~/.klein/claw/memory/)")
 	var help = flag.Bool("h", false, "Show this help message")
 	var helpLong = flag.Bool("help", false, "Show this help message")
 	var pluginPaths stringSliceFlag
@@ -215,9 +216,18 @@ func main() {
 
 	// Handle Connect-gRPC server mode
 	if *serve {
-		// Register memory tools (serve mode only)
-		if *memoryDir != "" {
-			mcpToolManagers["memory"] = tool.NewMemoryToolManager(*memoryDir)
+		// Register memory tools (serve mode only). Default to the gateway's
+		// memory directory so MemorySearch/MemoryGet/MemoryWrite work out of the
+		// box for klein-claw; override with --memory-dir.
+		memDir := *memoryDir
+		if memDir == "" {
+			if home, err := os.UserHomeDir(); err == nil {
+				memDir = filepath.Join(home, ".klein", "claw", "memory")
+			}
+		}
+		if memDir != "" {
+			mcpToolManagers["memory"] = tool.NewMemoryToolManager(memDir)
+			logger.Info("Memory tools enabled", "dir", memDir)
 		}
 		logger.Info("Starting Connect-gRPC server", "addr", *serveAddr)
 		if err := connectserver.StartServer(ctx, *serveAddr, settings, mcpToolManagers, logger, *sessionsDir); err != nil {

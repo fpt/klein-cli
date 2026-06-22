@@ -43,6 +43,16 @@ func (m *MemoryToolManager) register() {
 			{Name: "path", Description: "Relative path within the memory directory (e.g., 'MEMORY.md', 'daily/2024-01-15.md')", Required: true, Type: "string"},
 		},
 		m.handleMemoryGet)
+
+	m.RegisterTool("MemoryWrite",
+		"Persist information to a memory file so it survives across conversations. Use 'MEMORY.md' for durable long-term facts, or 'daily/YYYY-MM-DD.md' for a dated note. "+
+			"mode='append' (default) adds to the end; mode='overwrite' replaces the whole file (read first with MemoryGet, then write back the edited content to update/dedupe). Creates the file and directories as needed.",
+		[]message.ToolArgument{
+			{Name: "path", Description: "Relative path within the memory directory (e.g., 'MEMORY.md', 'daily/2024-01-15.md')", Required: true, Type: "string"},
+			{Name: "content", Description: "Text to write. For append mode, a single entry/line is typical (a trailing newline is added).", Required: true, Type: "string"},
+			{Name: "mode", Description: "'append' (default) or 'overwrite'", Required: false, Type: "string"},
+		},
+		m.handleMemoryWrite)
 }
 
 func (m *MemoryToolManager) handleMemorySearch(ctx context.Context, args message.ToolArgumentValues) (message.ToolResult, error) {
@@ -138,6 +148,57 @@ func (m *MemoryToolManager) handleMemoryGet(ctx context.Context, args message.To
 	}
 
 	return message.NewToolResultText(string(data)), nil
+}
+
+func (m *MemoryToolManager) handleMemoryWrite(ctx context.Context, args message.ToolArgumentValues) (message.ToolResult, error) {
+	relPath, ok := args["path"].(string)
+	if !ok || relPath == "" {
+		return message.NewToolResultError("path parameter is required"), nil
+	}
+	content, ok := args["content"].(string)
+	if !ok {
+		return message.NewToolResultError("content parameter is required"), nil
+	}
+
+	mode := "append"
+	if v, ok := args["mode"].(string); ok && v != "" {
+		mode = strings.ToLower(strings.TrimSpace(v))
+	}
+	if mode != "append" && mode != "overwrite" {
+		return message.NewToolResultError("mode must be 'append' or 'overwrite'"), nil
+	}
+
+	// Prevent directory traversal (same rule as MemoryGet).
+	cleaned := filepath.Clean(relPath)
+	if strings.HasPrefix(cleaned, "..") || filepath.IsAbs(cleaned) {
+		return message.NewToolResultError("path must be relative within the memory directory"), nil
+	}
+	fullPath := filepath.Join(m.baseDir, cleaned)
+
+	if err := os.MkdirAll(filepath.Dir(fullPath), 0o755); err != nil {
+		return message.NewToolResultError(fmt.Sprintf("failed to create memory directory: %v", err)), nil
+	}
+
+	if mode == "overwrite" {
+		if err := os.WriteFile(fullPath, []byte(content), 0o644); err != nil {
+			return message.NewToolResultError(fmt.Sprintf("failed to write memory file: %v", err)), nil
+		}
+		return message.NewToolResultText(fmt.Sprintf("Wrote %d bytes to %s (overwrite).", len(content), cleaned)), nil
+	}
+
+	// append: ensure the entry ends with a newline so entries stay separated.
+	if !strings.HasSuffix(content, "\n") {
+		content += "\n"
+	}
+	f, err := os.OpenFile(fullPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+	if err != nil {
+		return message.NewToolResultError(fmt.Sprintf("failed to open memory file: %v", err)), nil
+	}
+	defer f.Close()
+	if _, err := f.WriteString(content); err != nil {
+		return message.NewToolResultError(fmt.Sprintf("failed to append to memory file: %v", err)), nil
+	}
+	return message.NewToolResultText(fmt.Sprintf("Appended %d bytes to %s.", len(content), cleaned)), nil
 }
 
 // ToolManager interface implementation

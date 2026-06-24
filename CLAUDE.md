@@ -282,8 +282,6 @@ go run ./cmd/gateway --config ~/.klein/claw/config.json
   "agent_addr": "http://localhost:50051",
   "working_dir": "/path/to/project",
   "default_skill": "claw",
-  "default_model": "claude-sonnet-4-5-20250929",
-  "max_iterations": 15,
   "discord": {
     "token": "BOT_TOKEN",
     "allowed_guild_ids": ["123"],

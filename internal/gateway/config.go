@@ -12,8 +12,6 @@ type GatewayConfig struct {
 	AgentAddr      string          `json:"agent_addr"`      // Connect server address, e.g., "http://localhost:50051"
 	WorkingDir     string          `json:"working_dir"`     // Agent working directory
 	DefaultSkill   string          `json:"default_skill"`   // Default skill (default: "claw")
-	DefaultModel   string          `json:"default_model"`   // LLM model
-	MaxIterations  int             `json:"max_iterations"`  // ReAct loop cap
 	SessionTimeout string          `json:"session_timeout"` // Inactivity timeout for sessions (Go duration, default: "30m")
 	SessionsDir    string          `json:"sessions_dir"`    // Directory for per-session persistence files (default: ~/.klein/claw/sessions/)
 	Discord        DiscordConfig   `json:"discord"`
@@ -77,8 +75,6 @@ func DefaultGatewayConfig() *GatewayConfig {
 	return &GatewayConfig{
 		AgentAddr:      "http://localhost:50051",
 		DefaultSkill:   "claw",
-		DefaultModel:   "claude-sonnet-4-5-20250929",
-		MaxIterations:  15,
 		SessionTimeout: "30m",
 		SessionsDir:    filepath.Join(home, ".klein", "claw", "sessions"),
 		Memory: MemoryConfig{

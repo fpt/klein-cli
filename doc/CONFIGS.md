@@ -298,9 +298,11 @@ The gateway (`klein-claw`) reads its config from `$HOME/.klein/claw/config.json`
 | `agent_addr` | string | `"http://localhost:50051"` | klein Connect-gRPC server address |
 | `working_dir` | string | — | Working directory passed to the agent |
 | `default_skill` | string | `"claw"` | Skill used for incoming messages |
-| `default_model` | string | `"claude-sonnet-4-6"` | LLM model |
-| `max_iterations` | int | `15` | ReAct loop cap per message |
 | `session_timeout` | string | `"30m"` | Inactivity timeout (Go duration, e.g. `"1h"`) |
+
+> The LLM **model** and **max_iterations** are owned by the agent (the `klein --serve`
+> process) via its `settings.json` — the gateway does not set them. Configure them
+> in the agent's settings (`llm.model`, `agent.max_iterations`).
 | `sessions_dir` | string | `~/.klein/claw/sessions/` | Per-session persistence directory |
 
 ### `discord` block
@@ -338,8 +340,6 @@ The gateway (`klein-claw`) reads its config from `$HOME/.klein/claw/config.json`
   "agent_addr": "http://localhost:50051",
   "working_dir": "/Users/you/projects/myapp",
   "default_skill": "claw",
-  "default_model": "claude-sonnet-4-6",
-  "max_iterations": 15,
   "session_timeout": "30m",
   "discord": {
     "token": "BOT_TOKEN_HERE",

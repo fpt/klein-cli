@@ -99,12 +99,13 @@ func (sm *SessionManager) GetOrCreateSession(ctx context.Context, key SessionKey
 		}
 	}
 
-	// Create new agent session via Connect RPC
+	// Create new agent session via Connect RPC. The gateway only sets the
+	// working directory; the model and max_iterations are owned by the agent
+	// (serve process) via its settings.json, so they are left unset here and
+	// the server keeps its own configured values.
 	req := connect.NewRequest(&agentv1.StartSessionRequest{
 		Settings: &agentv1.Settings{
-			Model:         sm.config.DefaultModel,
-			WorkingDir:    sm.config.WorkingDir,
-			MaxIterations: int32(sm.config.MaxIterations),
+			WorkingDir: sm.config.WorkingDir,
 		},
 		Interactive: true,
 	})

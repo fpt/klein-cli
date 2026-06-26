@@ -105,8 +105,10 @@ Project content.
 	}
 	if s, ok := skills["my-skill"]; !ok {
 		t.Error("expected project 'my-skill' skill")
-	} else if s.Priority != 3 {
-		t.Errorf("expected project skill priority 3, got %d", s.Priority)
+	} else if s.Priority != 4 {
+		// project .claude/skills/ is priority 4 (after ~/.klein/skills was
+		// inserted at priority 3).
+		t.Errorf("expected project skill priority 4, got %d", s.Priority)
 	}
 }
 

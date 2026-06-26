@@ -86,7 +86,7 @@ func TestFileSystemToolManager_SecurityFeatures(t *testing.T) {
 			t.Error("Expected access denied error for forbidden directory")
 		}
 		// Can be blocked at either path resolution or directory allowlist level
-		if !strings.Contains(result.Error, "outside working directory") && !strings.Contains(result.Error, "not within allowed directories") {
+		if !strings.Contains(result.Error, "allowed director") && !strings.Contains(result.Error, "not within allowed directories") {
 			t.Errorf("Expected directory access error, got: %s", result.Error)
 		}
 	})

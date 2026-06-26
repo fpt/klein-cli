@@ -364,6 +364,11 @@ func NewAgentWithOptions(llmClient domain.LLM, workingDir string, mcpToolManager
 	if memoryDir != "" {
 		fsConfig.AllowedDirectories = append(fsConfig.AllowedDirectories, memoryDir)
 	}
+	// Allow writing to ~/.klein/skills so the create-skill skill can persist new
+	// skills there (the skill loader scans this directory).
+	if home, err := os.UserHomeDir(); err == nil {
+		fsConfig.AllowedDirectories = append(fsConfig.AllowedDirectories, filepath.Join(home, ".klein", "skills"))
+	}
 	filesystemManager := tool.NewFileSystemToolManager(fsRepo, fsConfig, workingDir)
 
 	bashConfig := tool.BashConfig{

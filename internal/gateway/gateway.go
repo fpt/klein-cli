@@ -106,6 +106,22 @@ func (gw *Gateway) handleInbound(ctx context.Context, msg InboundMessage) {
 		return
 	}
 
+	// "/<skill> args" runs that skill for this one message (a one-shot slash
+	// command); the session's persistent skill is left unchanged. When there is
+	// no leading slash command, cmdSkill is "" and userText == msg.Text.
+	cmdSkill, userText := parseSlashCommand(msg.Text)
+
+	// Embedded /list: reply with the available skills; do not invoke the agent.
+	if strings.EqualFold(cmdSkill, "list") {
+		gw.bus.Outbound <- OutboundMessage{
+			ChannelType: msg.ChannelType,
+			ChannelID:   msg.ChannelID,
+			Text:        gw.skillListText(ctx),
+			ReplyToID:   msg.ReplyToID,
+		}
+		return
+	}
+
 	key := SessionKey{
 		ChannelType: msg.ChannelType,
 		ChannelID:   msg.ChannelID,
@@ -129,7 +145,7 @@ func (gw *Gateway) handleInbound(ctx context.Context, msg InboundMessage) {
 	}
 
 	// Inject session log file path if available
-	enrichedText := msg.Text
+	enrichedText := userText
 	if gw.config.SessionsDir != "" {
 		sessionFile := gw.sessionFilePath(key)
 		if _, err := os.Stat(sessionFile); err == nil {
@@ -148,6 +164,9 @@ func (gw *Gateway) handleInbound(ctx context.Context, msg InboundMessage) {
 	skill := session.Skill
 	if msg.Skill != "" {
 		skill = msg.Skill
+	}
+	if cmdSkill != "" {
+		skill = cmdSkill
 	}
 
 	// Invoke agent via Connect RPC streaming
@@ -180,7 +199,14 @@ func (gw *Gateway) handleInbound(ctx context.Context, msg InboundMessage) {
 				}
 			}
 		case *agentv1.InvokeEvent_Error:
-			responseText = fmt.Sprintf("Error: %s", e.Error)
+			// A slash command for a non-existent skill fails before any model
+			// call ("skill not found"); fall back to the skill list instead of a
+			// raw error (no AI response was generated).
+			if cmdSkill != "" && strings.Contains(strings.ToLower(e.Error), "not found") {
+				responseText = fmt.Sprintf("Unknown command `/%s`.\n\n%s", cmdSkill, gw.skillListText(ctx))
+			} else {
+				responseText = fmt.Sprintf("Error: %s", e.Error)
+			}
 		}
 	}
 	if err := stream.Err(); err != nil {
@@ -253,9 +279,11 @@ func (gw *Gateway) handleCommand(ctx context.Context, msg InboundMessage) {
 	case "help":
 		response = "**Available commands:**\n" +
 			"`!clear` — Clear conversation\n" +
-			"`!skill <name>` — Switch skill (code, respond, claw)\n" +
+			"`!skill <name>` — Switch the session's default skill\n" +
 			"`!memory` — Show stored memory\n" +
-			"`!help` — Show this help"
+			"`!help` — Show this help\n" +
+			"`/list` — List available skills\n" +
+			"`/<skill> [args]` — Run a skill once for this message (e.g. `/research-stock 7203`)"
 	default:
 		response = fmt.Sprintf("Unknown command: !%s. Use !help for available commands.", cmd)
 	}
@@ -290,6 +318,50 @@ func (gw *Gateway) sendError(orig InboundMessage, text string) {
 		Text:        text,
 		ReplyToID:   orig.ReplyToID,
 	}
+}
+
+// skillListText asks the agent for its loaded skills and formats them as a
+// Discord-friendly list. Used by the embedded /list command and as the
+// fallback when a slash command names a skill that does not exist.
+func (gw *Gateway) skillListText(ctx context.Context) string {
+	resp, err := gw.client.ListScenarios(ctx, connect.NewRequest(&agentv1.ListScenariosRequest{}))
+	if err != nil {
+		gw.logger.Warn("ListScenarios failed", "error", err)
+		return "Sorry, I couldn't list the available skills right now."
+	}
+	var b strings.Builder
+	b.WriteString("**Available skills** (run with `/<name>`):\n")
+	for _, s := range resp.Msg.Scenarios {
+		if s.Description != "" {
+			fmt.Fprintf(&b, "- `/%s` — %s\n", s.Name, s.Description)
+		} else {
+			fmt.Fprintf(&b, "- `/%s`\n", s.Name)
+		}
+	}
+	b.WriteString("- `/list` — show this list")
+	return b.String()
+}
+
+// slashCommandRe matches a leading "/<name>" where name starts with a letter
+// and contains letters, digits, hyphens, or underscores. The (?s) flag lets the
+// trailing arguments span newlines (multi-line messages).
+var slashCommandRe = regexp.MustCompile(`(?s)^/([a-zA-Z][a-zA-Z0-9_-]*)\s*(.*)$`)
+
+// parseSlashCommand splits "/<skill> args" into (skill, args). When the text is
+// not a slash command it returns ("", text) unchanged. When args are empty a
+// short placeholder is returned so the agent still receives a non-empty user
+// turn (the skill's own prompt drives behavior).
+func parseSlashCommand(text string) (skill, userText string) {
+	m := slashCommandRe.FindStringSubmatch(strings.TrimSpace(text))
+	if m == nil {
+		return "", text
+	}
+	name := m[1]
+	args := strings.TrimSpace(m[2])
+	if args == "" {
+		args = fmt.Sprintf("Run the /%s command.", name)
+	}
+	return name, args
 }
 
 var gwNonAlphanumericRe = regexp.MustCompile(`[^a-zA-Z0-9]+`)

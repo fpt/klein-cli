@@ -312,9 +312,18 @@ go run ./cmd/gateway --config ~/.klein/claw/config.json
 
 **Gateway Commands (Discord `!` prefix):**
 - `!clear` — Clear conversation session
-- `!skill <name>` — Switch skill (code, respond, claw)
+- `!skill <name>` — Switch the session's default skill
 - `!memory` — Show stored memory content
 - `!help` — Show available commands
+
+**Gateway Slash Commands (`/` prefix):**
+- `/list` — List available skills (handled by the gateway via the `ListScenarios`
+  RPC; no agent invocation)
+- `/<skill> [args]` — Run a skill **once** for this message (e.g. `/research-stock 7203`);
+  the message is invoked with `Scenario=<skill>` and the session's persistent
+  skill is unchanged. If `<skill>` matches no loaded skill, the agent returns
+  "skill not found" before any model call and the gateway replies with `/list`
+  (no AI response). Parsed in `gateway.go` (`parseSlashCommand`).
 
 **Protobuf + Connect Code Generation:**
 - Proto definition: `internal/proto/agent.proto`

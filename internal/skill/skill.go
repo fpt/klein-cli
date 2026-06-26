@@ -202,6 +202,14 @@ func (s *Skill) RenderContent(arguments string, workingDir string) string {
 	// Replace {{workingDir}}
 	result = strings.ReplaceAll(result, "{{workingDir}}", workingDir)
 
+	// Replace {{home}} with the user's home directory (used e.g. by create-skill
+	// to write into ~/.klein/skills).
+	if strings.Contains(result, "{{home}}") {
+		if home, err := os.UserHomeDir(); err == nil {
+			result = strings.ReplaceAll(result, "{{home}}", home)
+		}
+	}
+
 	// Expand line-based @filename includes
 	result = expandAtFileIncludes(result, workingDir)
 

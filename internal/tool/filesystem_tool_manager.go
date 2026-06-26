@@ -221,21 +221,15 @@ func (m *FileSystemToolManager) abs(path string) (string, error) {
 
 // resolvePath resolves a path relative to the working directory
 func (m *FileSystemToolManager) resolvePath(path string) (string, error) {
-	// If path is already absolute, check if it's within working directory
+	// If path is already absolute, accept it when it falls within ANY allowed
+	// directory (the working dir is always one; others include the memory dir
+	// and ~/.klein/skills). isPathAllowed enforces the same boundary downstream.
 	if filepath.IsAbs(path) {
-		// Get absolute form of working directory using our own method
-		absWorkingDir, err := m.abs(m.workingDir)
-		if err != nil {
-			return "", fmt.Errorf("failed to resolve working directory: %v", err)
+		cleaned := filepath.Clean(path)
+		if err := m.isPathAllowed(cleaned); err == nil {
+			return cleaned, nil
 		}
-
-		// Check if the absolute path is within the working directory
-		if strings.HasPrefix(path, absWorkingDir+string(os.PathSeparator)) || path == absWorkingDir {
-			return path, nil
-		}
-
-		// If absolute path is outside working directory, reject it
-		return "", fmt.Errorf("absolute path %s is outside working directory %s", path, m.workingDir)
+		return "", fmt.Errorf("absolute path %s is outside the allowed directories", path)
 	}
 
 	// Resolve relative path against working directory using our own method

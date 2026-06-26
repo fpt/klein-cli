@@ -14,11 +14,12 @@ type SkillMap map[string]*Skill
 // LoadSkills loads all skills with highest-priority-wins ordering. For a given
 // skill name the source with the largest priority value wins:
 //
-//	CWD/.agents/skills/ (priority 4) > CWD/.claude/skills/ (priority 3) >
-//	~/.agents/skills/ (priority 2) > ~/.claude/skills/ (priority 1) > embedded (priority 0)
+//	CWD/.agents/skills/ (5) > CWD/.claude/skills/ (4) > ~/.klein/skills/ (3) >
+//	~/.agents/skills/ (2) > ~/.claude/skills/ (1) > embedded (0)
 //
 // In other words, project-local skills override personal skills, which override
-// the embedded built-ins.
+// the embedded built-ins. ~/.klein/skills/ is klein's own personal-skill
+// directory (where the create-skill skill writes new skills).
 func LoadSkills(workingDir string) (SkillMap, error) {
 	result := make(SkillMap)
 
@@ -46,8 +47,9 @@ func LoadSkills(workingDir string) (SkillMap, error) {
 	}{
 		{filepath.Join(home, ".claude", "skills"), 1},
 		{filepath.Join(home, ".agents", "skills"), 2},
-		{filepath.Join(absWorkDir, ".claude", "skills"), 3},
-		{filepath.Join(absWorkDir, ".agents", "skills"), 4},
+		{filepath.Join(home, ".klein", "skills"), 3}, // klein-native personal skills (where create-skill writes)
+		{filepath.Join(absWorkDir, ".claude", "skills"), 4},
+		{filepath.Join(absWorkDir, ".agents", "skills"), 5},
 	}
 
 	for _, d := range dirs {

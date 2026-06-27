@@ -18,10 +18,14 @@ func getOpenAIModel(model string) string {
 	return defaultModel
 }
 
-// isValidOpenAIModel checks if model belongs to the gpt-5.4 family using prefix matching,
-// so dated variants (e.g. "gpt-5.4-mini-2026-03-17") are accepted automatically.
+// isValidOpenAIModel checks if model belongs to the GPT-5 family using prefix
+// matching, so every gpt-5.x release (gpt-5, gpt-5.4, gpt-5.5, gpt-5.6, …),
+// their -mini/-nano variants, and dated variants (e.g.
+// "gpt-5.5-mini-2026-03-17") are accepted automatically without a code change.
+// The whole family shares one capability profile (reasoning models), so this
+// is scoped to gpt-5 rather than all gpt- models.
 func isValidOpenAIModel(model string) bool {
-	return strings.HasPrefix(model, "gpt-5.4")
+	return strings.HasPrefix(model, "gpt-5")
 }
 
 // ModelCapabilities describes the feature set of an OpenAI model.
@@ -60,11 +64,12 @@ var capGPT5Nano = ModelCapabilities{
 	SupportsSystemPrompt: true,
 }
 
-// getModelCapabilities returns the capability profile for a model.
-// Prefix matching handles dated variants automatically.
+// getModelCapabilities returns the capability profile for a model. Any GPT-5
+// "nano" variant (gpt-5.4-nano, gpt-5.5-nano, …) gets the smaller-output
+// profile; everything else uses the standard GPT-5 profile.
 func getModelCapabilities(model string) ModelCapabilities {
 	switch {
-	case strings.HasPrefix(model, "gpt-5.4-nano"):
+	case strings.Contains(model, "nano"):
 		return capGPT5Nano
 	default:
 		return capGPT5

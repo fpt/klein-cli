@@ -13,8 +13,12 @@ func TestGetOpenAIModel(t *testing.T) {
 		{"gpt-5.4-mini", "gpt-5.4-mini"},
 		{"gpt-5.4-nano", "gpt-5.4-nano"},
 		{"gpt-5.4-nano-2026-03-17", "gpt-5.4-nano-2026-03-17"}, // dated variant
-		{"unknown-model", "gpt-5.4-mini"},                      // default fallback
-		{"gpt-5-mini", "gpt-5.4-mini"},                         // old model → default
+		{"gpt-5.5", "gpt-5.5"},                                 // newer 5.x release
+		{"gpt-5.6-sol", "gpt-5.6-sol"},                         // 5.6 "Sol" codename — exact suffixes unknown, whole family passes through
+		{"gpt-5", "gpt-5"},                                     // base gpt-5
+		{"gpt-5-mini", "gpt-5-mini"},                           // gpt-5 family → passes through
+		{"unknown-model", "gpt-5.4-mini"},                      // non-gpt-5 → default fallback
+		{"gpt-4o", "gpt-5.4-mini"},                             // non-gpt-5 → default fallback
 	}
 
 	for _, tc := range testCases {
@@ -39,7 +43,10 @@ func TestGetModelCapabilities(t *testing.T) {
 		{"gpt-5.4-mini", true, true, true, true, true, 32768},
 		{"gpt-5.4-nano", true, true, true, true, true, 16384},
 		{"gpt-5.4-nano-2026-03-17", true, true, true, true, true, 16384}, // dated variant
-		{"unknown-model", true, true, true, true, true, 32768},           // default → gpt-5.4 profile
+		{"gpt-5.5", true, true, true, true, true, 32768},                 // newer 5.x release → standard profile
+		{"gpt-5.6-sol", true, true, true, true, true, 32768},             // 5.6 "Sol" codename → standard profile
+		{"gpt-5-nano", true, true, true, true, true, 16384},              // any *nano* name → smaller-output profile
+		{"unknown-model", true, true, true, true, true, 32768},           // non-gpt-5 → default profile
 	}
 
 	for _, tc := range testCases {

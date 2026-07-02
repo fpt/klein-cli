@@ -149,6 +149,46 @@ func TestDeferredSetCore(t *testing.T) {
 	}
 }
 
+func TestCatalogHintGroupsMCP(t *testing.T) {
+	src := newFakeManager(
+		fakeTool{"Read", "Read a file"}, // core
+		fakeTool{"WebFetch", "Fetch a webpage"},
+		fakeTool{"navigate", "[browser-sandbox] Navigate the browser to a URL"},
+		fakeTool{"screenshot", "[browser-sandbox] Capture a screenshot"},
+		fakeTool{"tree_dir", "[godevmcp] Show a directory tree"},
+	)
+	d := NewDeferredToolManager(src)
+	hint := d.CatalogHint()
+
+	if !strings.Contains(hint, "ToolSearch") {
+		t.Error("hint should mention ToolSearch")
+	}
+	if !strings.Contains(hint, "browser-sandbox") || !strings.Contains(hint, "navigate") {
+		t.Errorf("hint should group browser-sandbox tools: %q", hint)
+	}
+	if !strings.Contains(hint, "godevmcp") {
+		t.Errorf("hint should list godevmcp: %q", hint)
+	}
+	if !strings.Contains(hint, "WebFetch") {
+		t.Errorf("non-MCP deferred tools should still be listed: %q", hint)
+	}
+}
+
+func TestMCPServerOf(t *testing.T) {
+	cases := map[string]string{
+		"[browser-sandbox] do a thing": "browser-sandbox",
+		"[godevmcp] tree":              "godevmcp",
+		"Read a file":                  "",
+		"[unterminated desc":           "",
+	}
+	for desc, want := range cases {
+		got, ok := mcpServerOf(desc)
+		if got != want || (want != "") != ok {
+			t.Errorf("mcpServerOf(%q) = (%q,%v), want %q", desc, got, ok, want)
+		}
+	}
+}
+
 func TestDeferredDelegatesCall(t *testing.T) {
 	d := newTestDeferred()
 	// Core tool call delegates to source.

@@ -150,18 +150,64 @@ func (d *DeferredToolManager) DeferredNames() []string {
 	return names
 }
 
-// CatalogHint returns a system-prompt line announcing the deferred tools, or ""
-// when none remain deferred.
+// CatalogHint returns a directive situation message announcing the loadable
+// (deferred) tools, grouped by MCP server so the model can see e.g. that a
+// "browser-sandbox" server is available. Returns "" when nothing is deferred.
 func (d *DeferredToolManager) CatalogHint() string {
-	names := d.DeferredNames()
-	if len(names) == 0 {
+	d.mu.Lock()
+	active := make(map[message.ToolName]bool, len(d.active))
+	for k := range d.active {
+		active[k] = true
+	}
+	d.mu.Unlock()
+
+	var builtins []string
+	mcp := map[string][]string{} // server → tool names
+	for _, info := range d.deferredCatalog() {
+		if active[info.name] {
+			continue
+		}
+		if server, ok := mcpServerOf(info.desc); ok {
+			mcp[server] = append(mcp[server], string(info.name))
+		} else {
+			builtins = append(builtins, string(info.name))
+		}
+	}
+	if len(builtins) == 0 && len(mcp) == 0 {
 		return ""
 	}
-	return "# Additional tools (load on demand)\n\n" +
-		"These tools are available but not loaded. Call `ToolSearch` with a keyword " +
-		"query (or `select:Name1,Name2`) to load the ones you need; they become " +
-		"callable on the next step.\n\n" +
-		strings.Join(names, ", ")
+
+	var b strings.Builder
+	b.WriteString("# More tools are available — load them with ToolSearch\n\n")
+	b.WriteString("You are NOT limited to the tools currently loaded. Before telling the user a " +
+		"capability, tool, or MCP server is unavailable, call `ToolSearch` first (a keyword query, " +
+		"or `select:Name1,Name2`) to load matching tools — they become callable on the next step.\n\n")
+	if len(builtins) > 0 {
+		fmt.Fprintf(&b, "Loadable tools: %s\n", strings.Join(builtins, ", "))
+	}
+	servers := make([]string, 0, len(mcp))
+	for s := range mcp {
+		servers = append(servers, s)
+	}
+	sort.Strings(servers)
+	for _, s := range servers {
+		sort.Strings(mcp[s])
+		fmt.Fprintf(&b, "MCP server `%s` (load via ToolSearch): %s\n", s, strings.Join(mcp[s], ", "))
+	}
+	return strings.TrimRight(b.String(), "\n")
+}
+
+// mcpServerOf extracts the MCP server name from a tool description of the form
+// "[server] ...". Returns ("", false) for non-MCP tools.
+func mcpServerOf(desc string) (string, bool) {
+	desc = strings.TrimSpace(desc)
+	if !strings.HasPrefix(desc, "[") {
+		return "", false
+	}
+	if end := strings.IndexByte(desc, ']'); end > 1 {
+		return desc[1:end], true
+	}
+	return "", false
 }
 
 func (d *DeferredToolManager) handleSearch(args message.ToolArgumentValues) message.ToolResult {
@@ -264,10 +310,12 @@ type deferredSearchTool struct{ mgr *DeferredToolManager }
 func (t *deferredSearchTool) RawName() message.ToolName { return ToolSearchName }
 func (t *deferredSearchTool) Name() message.ToolName    { return ToolSearchName }
 func (t *deferredSearchTool) Description() message.ToolDescription {
-	return "Find and load tools that are available but not currently loaded. " +
-		"Pass a keyword query (e.g. 'web fetch', 'stock price', 'pdf', 'schedule') or " +
-		"'select:Name1,Name2' to load specific tools by name. Loaded tools become callable " +
-		"on the next step. Check the '# Additional tools' list for what can be loaded."
+	return "Find and load tools that are available but not currently loaded — including MCP " +
+		"server tools (e.g. a 'browser-sandbox' or 'godevmcp' server). Pass a keyword query " +
+		"(e.g. 'web fetch', 'stock price', 'browser', the MCP server name) or 'select:Name1,Name2' " +
+		"to load specific tools. Loaded tools become callable on the next step. ALWAYS try this " +
+		"before telling the user a tool or capability is unavailable — the loadable tools are " +
+		"listed in the '# More tools are available' message."
 }
 func (t *deferredSearchTool) Arguments() []message.ToolArgument {
 	return []message.ToolArgument{

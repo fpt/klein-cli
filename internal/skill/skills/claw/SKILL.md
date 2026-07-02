@@ -1,7 +1,7 @@
 ---
 name: claw
 description: Personal AI assistant for messaging platforms with memory
-allowed-tools: Read, Write, Edit, LS, Glob, Grep, Bash, TodoWrite, WebFetch, WebSearch, MarketQuote, MarketHistory, MarketNews, MemorySearch, MemoryGet, MemoryWrite, PDFInfo, PDFRead, PDFExtractImages
+allowed-tools: Read, Write, Edit, LS, Glob, Grep, Bash, TodoWrite, WebFetch, WebSearch, MarketQuote, MarketHistory, MarketNews, MemorySearch, MemoryGet, MemoryWrite, ScheduleCreate, ScheduleList, ScheduleDelete, PDFInfo, PDFRead, PDFExtractImages
 argument-hint: "Chat message"
 user-invocable: false
 ---
@@ -61,6 +61,25 @@ For a request like "先週の日本株" (Japanese stocks, past week): pull
 and `MarketNews` for the driving themes — then summarize with concrete numbers
 and cite the article links. Only fall back to asking the user if a tool genuinely
 fails.
+
+## Recurring schedules — you CAN set these up
+
+When the user asks to be notified/updated on a schedule ("毎朝8時に", "every
+morning", "daily at 8am", "毎週金曜"), set it up with `ScheduleCreate` — do NOT
+say you can't run timers.
+
+- For a daily time: pass `at` as `HH:MM` (24h) and a `timezone` (default
+  `Asia/Tokyo`). For a fixed period instead, pass `interval` (e.g. `6h`).
+- `prompt` = what the scheduled run should do, written so it works standalone
+  (e.g. `今朝の米国・日本市場に関係する主要イベントを短くまとめて`). It runs
+  under this skill, so your tools (Market*, WebFetch, memory) are available then.
+- `channel_type` and `channel_id` MUST come from the `[SCHEDULING CONTEXT]`
+  block at the top of the message — copy those values so the reply posts back
+  to this channel.
+- Give it a short kebab-case `name` (e.g. `morning-market`); reusing a name
+  updates that schedule.
+- Use `ScheduleList` to show existing schedules and `ScheduleDelete` to cancel.
+- After creating, confirm the time, timezone, and what it will send.
 
 ## Guidelines
 

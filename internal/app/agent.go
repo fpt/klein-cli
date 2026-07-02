@@ -503,19 +503,22 @@ func (a *Agent) Invoke(ctx context.Context, userInput string, skillName string, 
 		*a.planMode = tool.PlanModeOff
 	}
 
-	// Get filtered tool manager based on skill's allowed-tools or CLI override.
-	// When a skill omits allowed-tools entirely (and there's no CLI override),
-	// use the ToolSearch/deferred view: only a small core set + ToolSearch are
-	// exposed, and the model loads the rest on demand.
+	// Choose the tool manager. Every skill gets the ToolSearch/deferred view:
+	// the skill's allowed-tools (or a default core when omitted) are exposed
+	// up front, and everything else — including MCP tools, which can't be named
+	// in allowed-tools — stays deferred and loadable on demand via ToolSearch.
+	// The CLI --allowed-tools override remains a HARD restriction (no ToolSearch).
 	var filteredTools domain.ToolManager
 	usingDeferred := false
 	switch {
 	case len(a.allowedToolsOverride) > 0:
 		filteredTools = skill.NewFilteredToolManager(a.allToolManagers, a.allowedToolsOverride)
-	case len(activeSkill.AllowedTools) == 0 && a.deferredTools != nil:
+	case a.deferredTools != nil:
+		a.deferredTools.SetCore(activeSkill.AllowedTools) // empty → default core
 		filteredTools = a.deferredTools
 		usingDeferred = true
 	default:
+		// Fallback for agents built without the constructor (tests).
 		filteredTools = activeSkill.FilterTools(a.allToolManagers)
 	}
 

@@ -119,6 +119,36 @@ func TestDeferredCatalogHintShrinks(t *testing.T) {
 	}
 }
 
+func TestDeferredSetCore(t *testing.T) {
+	d := newTestDeferred()
+	// Simulate a skill whose allowed-tools = {Read, WebFetch}. Those become the
+	// exposed core; everything else (e.g. MarketQuote, an MCP-style tool) stays
+	// deferred but still loadable via ToolSearch.
+	d.SetCore([]string{"Read", "WebFetch"})
+	tools := d.GetTools()
+	for _, want := range []message.ToolName{"Read", "WebFetch", ToolSearchName} {
+		if _, ok := tools[want]; !ok {
+			t.Errorf("%s should be exposed as core", want)
+		}
+	}
+	if _, ok := tools["Bash"]; ok {
+		t.Error("Bash not in allowed-tools core, should be deferred")
+	}
+	if _, ok := tools["MarketQuote"]; ok {
+		t.Error("MarketQuote should be deferred")
+	}
+	// Still loadable on demand.
+	_, _ = d.CallTool(context.Background(), ToolSearchName, message.ToolArgumentValues{"query": "select:MarketQuote"})
+	if _, ok := d.GetTools()["MarketQuote"]; !ok {
+		t.Error("MarketQuote should be loadable via ToolSearch even with a custom core")
+	}
+	// Empty restores the default core.
+	d.SetCore(nil)
+	if _, ok := d.GetTools()["Bash"]; !ok {
+		t.Error("empty SetCore should restore default core (Bash)")
+	}
+}
+
 func TestDeferredDelegatesCall(t *testing.T) {
 	d := newTestDeferred()
 	// Core tool call delegates to source.

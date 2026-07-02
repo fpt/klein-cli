@@ -50,6 +50,24 @@ func NewDeferredToolManager(source domain.ToolManager) *DeferredToolManager {
 	return d
 }
 
+// SetCore sets the initially-exposed ("core") tools — typically a skill's
+// allowed-tools. An empty list restores the default core. Everything not in the
+// core (including MCP tools) stays deferred and reachable via ToolSearch.
+// Call before the ReAct loop; not safe to call concurrently with GetTools.
+func (d *DeferredToolManager) SetCore(names []string) {
+	if len(names) == 0 {
+		d.core = defaultCoreTools
+		return
+	}
+	core := make(map[message.ToolName]bool, len(names))
+	for _, n := range names {
+		if n = strings.TrimSpace(n); n != "" {
+			core[message.ToolName(n)] = true
+		}
+	}
+	d.core = core
+}
+
 // isExposed reports whether a tool is currently visible to the model.
 func (d *DeferredToolManager) isExposed(name message.ToolName) bool {
 	if name == ToolSearchName || d.core[name] {

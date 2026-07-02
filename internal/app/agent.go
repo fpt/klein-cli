@@ -38,6 +38,7 @@ const DefaultAgentMaxIterations = 10
 type Agent struct {
 	llmClient            domain.LLM
 	allToolManagers      *tool.CompositeToolManager // ALL tool managers combined
+	deferredTools        *tool.DeferredToolManager  // tool-search view over allToolManagers (used when a skill omits allowed-tools)
 	todoToolManager      *tool.TodoToolManager
 	taskToolManager      *tool.TaskToolManager
 	askQuestionManager   *tool.AskUserQuestionToolManager
@@ -412,6 +413,7 @@ func NewAgentWithOptions(llmClient domain.LLM, workingDir string, mcpToolManager
 		managers = append(managers, mcpManager)
 	}
 	allToolManagers := tool.NewCompositeToolManager(managers...)
+	deferredTools := tool.NewDeferredToolManager(allToolManagers)
 
 	// Create or restore shared message state with session persistence
 	var sharedState domain.State
@@ -452,6 +454,7 @@ func NewAgentWithOptions(llmClient domain.LLM, workingDir string, mcpToolManager
 	a := &Agent{
 		llmClient:          llmClient,
 		allToolManagers:    allToolManagers,
+		deferredTools:      deferredTools,
 		todoToolManager:    todoToolManager,
 		taskToolManager:    taskToolManager,
 		askQuestionManager: askQuestionManager,
@@ -500,11 +503,19 @@ func (a *Agent) Invoke(ctx context.Context, userInput string, skillName string, 
 		*a.planMode = tool.PlanModeOff
 	}
 
-	// Get filtered tool manager based on skill's allowed-tools or CLI override
+	// Get filtered tool manager based on skill's allowed-tools or CLI override.
+	// When a skill omits allowed-tools entirely (and there's no CLI override),
+	// use the ToolSearch/deferred view: only a small core set + ToolSearch are
+	// exposed, and the model loads the rest on demand.
 	var filteredTools domain.ToolManager
-	if len(a.allowedToolsOverride) > 0 {
+	usingDeferred := false
+	switch {
+	case len(a.allowedToolsOverride) > 0:
 		filteredTools = skill.NewFilteredToolManager(a.allToolManagers, a.allowedToolsOverride)
-	} else {
+	case len(activeSkill.AllowedTools) == 0 && a.deferredTools != nil:
+		filteredTools = a.deferredTools
+		usingDeferred = true
+	default:
 		filteredTools = activeSkill.FilterTools(a.allToolManagers)
 	}
 
@@ -520,6 +531,9 @@ func (a *Agent) Invoke(ctx context.Context, userInput string, skillName string, 
 
 	situation := NewIterationAdvisor(a.allToolManagers).
 		WithRoutingHint(a.router.Route(userInput, skillName, a.sharedState.GetMessages()))
+	if usingDeferred {
+		situation = situation.WithDeferredHint(a.deferredTools.CatalogHint())
+	}
 
 	maxIterations := DefaultAgentMaxIterations
 	if a.settings != nil && a.settings.Agent.MaxIterations > 0 {

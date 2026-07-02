@@ -285,7 +285,7 @@ disable-model-invocation: false
 |-------|------|---------|-------------|
 | `name` | string | directory name | Skill identifier used with `--skill` flag |
 | `description` | string | `""` | Shown in `/help` and skill listings |
-| `allowed-tools` | string | `""` (all) | Comma-separated list of tool names this skill may use; empty = all tools |
+| `allowed-tools` | string | `""` (ToolSearch) | Comma-separated whitelist of tool names. When **omitted**, the skill starts with a small core set (Read/LS/Glob/Grep/Write/Edit/Bash/TodoWrite) plus **`ToolSearch`**, and the model loads any other tool (incl. MCP) on demand — so you don't have to enumerate tools. |
 | `argument-hint` | string | `""` | Usage hint displayed to the user |
 | `user-invocable` | bool | `true` | Set `false` to hide from user listings (e.g. gateway-only skills) |
 | `model` | string | `""` | Override model for this skill; empty = use settings default |

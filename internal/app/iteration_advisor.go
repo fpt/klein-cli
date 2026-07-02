@@ -17,8 +17,9 @@ var iterationAdvisorLogger = pkgLogger.NewComponentLogger("iteration-advisor")
 // runtime state from tool managers (web cache, todo counts, edit failures) so that
 // tool descriptions stay static and Anthropic prompt caching can hit.
 type IterationAdvisor struct {
-	toolState   domain.ToolStateProvider // optional; nil if no state tracking needed
-	routingHint string                   // injected once at iteration 0 by SkillsRouter
+	toolState    domain.ToolStateProvider // optional; nil if no state tracking needed
+	routingHint  string                   // injected once at iteration 0 by SkillsRouter
+	deferredHint string                   // ToolSearch catalog; injected once at iteration 0
 }
 
 // NewIterationAdvisor creates a new IterationAdvisor.
@@ -32,6 +33,13 @@ func NewIterationAdvisor(toolState domain.ToolStateProvider) *IterationAdvisor {
 // injected into the situation message on iteration 0 only.
 func (a *IterationAdvisor) WithRoutingHint(hint string) *IterationAdvisor {
 	a.routingHint = hint
+	return a
+}
+
+// WithDeferredHint attaches the ToolSearch catalog (deferred tool names),
+// injected into the situation message on iteration 0 only.
+func (a *IterationAdvisor) WithDeferredHint(hint string) *IterationAdvisor {
+	a.deferredHint = hint
 	return a
 }
 
@@ -49,6 +57,12 @@ func (a *IterationAdvisor) InjectMessage(state domain.State, curIter, iterLimit 
 	// Inject routing hint on the first iteration only (before any tool calls have been made).
 	if curIter == 0 && a.routingHint != "" {
 		messages = append(messages, a.routingHint)
+	}
+
+	// Announce loadable (deferred) tools on the first iteration so the model
+	// knows what it can pull in via ToolSearch.
+	if curIter == 0 && a.deferredHint != "" {
+		messages = append(messages, a.deferredHint)
 	}
 
 	// Include dynamic tool state (web cache entries, todo counts, edit failures) if available.

@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"sort"
 
 	"github.com/fpt/klein-cli/internal/infra"
 	"github.com/fpt/klein-cli/internal/repository"
@@ -53,9 +54,150 @@ func IsValidEffort(e string) bool {
 	return e == "" || slices.Contains(ValidEfforts, e)
 }
 
-// MCPSettings contains MCP server configuration
+// MCPSettings contains MCP server configuration. On the wire it uses the
+// Claude-Code/Cursor "map of name → server" shape:
+//
+//	"mcp": {
+//	  "browser-sandbox": { "command": "docker", "args": ["run", "..."] },
+//	  "docs":            { "url": "https://example.com/mcp" }
+//	}
+//
+// enabled defaults to true and type is inferred (command → stdio, url → sse).
+// Internally it is kept as a slice for the rest of the code.
 type MCPSettings struct {
-	Servers []domain.MCPServerConfig `json:"servers,omitempty"`
+	Servers []domain.MCPServerConfig `json:"-"`
+}
+
+// mcpServerSpec is the per-server on-disk shape (Claude Code style). enabled is
+// a pointer so an omitted value defaults to true; env is a map like Claude Code.
+type mcpServerSpec struct {
+	Enabled            *bool                `json:"enabled,omitempty"`
+	Type               domain.MCPServerType `json:"type,omitempty"`
+	Command            string               `json:"command,omitempty"`
+	Args               []string             `json:"args,omitempty"`
+	Env                map[string]string    `json:"env,omitempty"`
+	URL                string               `json:"url,omitempty"`
+	AuthorizationToken string               `json:"authorization_token,omitempty"`
+	Headers            map[string]string    `json:"headers,omitempty"`
+	AllowedTools       []string             `json:"allowed_tools,omitempty"`
+}
+
+func (s mcpServerSpec) toConfig(name string) domain.MCPServerConfig {
+	enabled := true
+	if s.Enabled != nil {
+		enabled = *s.Enabled
+	}
+	typ := s.Type
+	if typ == "" {
+		switch {
+		case s.Command != "":
+			typ = domain.MCPServerTypeStdio
+		case s.URL != "":
+			typ = domain.MCPServerTypeSSE
+		}
+	}
+	return domain.MCPServerConfig{
+		Name:               name,
+		Enabled:            enabled,
+		Type:               typ,
+		Command:            s.Command,
+		Args:               s.Args,
+		Env:                envMapToSlice(s.Env),
+		URL:                s.URL,
+		AuthorizationToken: s.AuthorizationToken,
+		Headers:            s.Headers,
+		AllowedTools:       s.AllowedTools,
+	}
+}
+
+func specFromConfig(c domain.MCPServerConfig) mcpServerSpec {
+	s := mcpServerSpec{
+		Type:               c.Type,
+		Command:            c.Command,
+		Args:               c.Args,
+		Env:                envSliceToMap(c.Env),
+		URL:                c.URL,
+		AuthorizationToken: c.AuthorizationToken,
+		Headers:            c.Headers,
+		AllowedTools:       c.AllowedTools,
+	}
+	if !c.Enabled { // omit when true (the default); emit only explicit disable
+		disabled := false
+		s.Enabled = &disabled
+	}
+	return s
+}
+
+// UnmarshalJSON decodes the Claude-Code/Cursor map shape into Servers.
+func (m *MCPSettings) UnmarshalJSON(data []byte) error {
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return err
+	}
+	names := make([]string, 0, len(raw))
+	for name := range raw {
+		names = append(names, name)
+	}
+	sort.Strings(names) // deterministic order
+	for _, name := range names {
+		var spec mcpServerSpec
+		if err := json.Unmarshal(raw[name], &spec); err != nil {
+			return fmt.Errorf("mcp server %q: %w — expected Claude Code map style, e.g. \"mcp\": { %q: { \"command\": \"...\" } }", name, err, name)
+		}
+		m.Servers = append(m.Servers, spec.toConfig(name))
+	}
+	return nil
+}
+
+// MarshalJSON writes the map shape so a re-saved config round-trips.
+func (m MCPSettings) MarshalJSON() ([]byte, error) {
+	out := make(map[string]mcpServerSpec, len(m.Servers))
+	for _, c := range m.Servers {
+		out[c.Name] = specFromConfig(c)
+	}
+	return json.Marshal(out)
+}
+
+// envMapToSlice converts a {"KEY":"VAL"} map into sorted "KEY=VAL" entries.
+func envMapToSlice(env map[string]string) []string {
+	if len(env) == 0 {
+		return nil
+	}
+	keys := make([]string, 0, len(env))
+	for k := range env {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	out := make([]string, 0, len(env))
+	for _, k := range keys {
+		out = append(out, k+"="+env[k])
+	}
+	return out
+}
+
+// envSliceToMap converts "KEY=VAL" entries back into a map.
+func envSliceToMap(env []string) map[string]string {
+	if len(env) == 0 {
+		return nil
+	}
+	out := make(map[string]string, len(env))
+	for _, e := range env {
+		if i := indexByte(e, '='); i >= 0 {
+			out[e[:i]] = e[i+1:]
+		} else {
+			out[e] = ""
+		}
+	}
+	return out
+}
+
+func indexByte(s string, b byte) int {
+	for i := 0; i < len(s); i++ {
+		if s[i] == b {
+			return i
+		}
+	}
+	return -1
 }
 
 // AgentSettings contains agent behavior configuration

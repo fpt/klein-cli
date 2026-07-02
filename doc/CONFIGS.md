@@ -102,22 +102,41 @@ npm install, npm run, npm test
 
 ### `mcp` — MCP server integration
 
-| Field | Type | Description |
-|-------|------|-------------|
-| `servers` | array | List of MCP server configs |
+`mcp` is a **map of server name → config**, matching the Claude Code / Cursor
+format (paste a `mcpServers` block's contents under `mcp`):
 
-**MCP server config object:**
+```json
+"mcp": {
+  "browser-sandbox": { "command": "docker", "args": ["run", "-i", "--rm", "chromedp-container-mcp:latest"] },
+  "docs":            { "url": "https://example.com/mcp" }
+}
+```
+
+**Per-server fields:**
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
-| `name` | string | yes | Identifier; also used as tool name prefix |
-| `enabled` | bool | — | Enable/disable this server |
-| `type` | string | yes | `stdio` or `sse` |
-| `command` | string | stdio | Executable to launch |
+| `command` | string | stdio | Executable to launch (its presence infers `type: stdio`) |
 | `args` | array | — | Command-line arguments |
-| `env` | array | — | Extra environment variables |
-| `url` | string | sse | HTTP/SSE endpoint URL |
+| `env` | object | — | Environment variables `{ "KEY": "VAL" }` |
+| `url` | string | sse | HTTP/SSE endpoint URL (its presence infers `type: sse`) |
+| `type` | string | — | `stdio` or `sse`; inferred from `command`/`url` when omitted |
+| `enabled` | bool | — | Defaults to **true**; set `false` to keep but disable |
 | `allowed_tools` | array | — | Whitelist of tool names from this server |
+
+The server name is the map key (also the tool-name prefix). Add/list/remove
+servers by hand or with the **`klein mcp`** subcommand (Claude-Code-style):
+
+```bash
+klein mcp add browser-sandbox -- docker run -i --rm --init --shm-size 1g chromedp-container-mcp:latest
+klein mcp add docs --url https://example.com/mcp
+klein mcp add x -e API_KEY=secret -- my-mcp-server
+klein mcp list
+klein mcp remove browser-sandbox
+```
+
+`add` edits `~/.klein/settings.json`; everything after `--` is the stdio command
+and its args; `--url` makes an sse server; `-e KEY=VAL` adds env vars.
 
 ### Example settings file
 
@@ -136,15 +155,10 @@ npm install, npm run, npm test
     "whitelisted_commands": ["go build", "go test", "git status", "make"]
   },
   "mcp": {
-    "servers": [
-      {
-        "name": "godevmcp",
-        "enabled": true,
-        "type": "stdio",
-        "command": "godevmcp",
-        "allowed_tools": ["outline_go_package", "read_godoc"]
-      }
-    ]
+    "godevmcp": {
+      "command": "godevmcp",
+      "allowed_tools": ["outline_go_package", "read_godoc"]
+    }
   }
 }
 ```

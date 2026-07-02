@@ -62,6 +62,11 @@ func printUsage() {
 func main() {
 	ctx := context.Background()
 
+	// Subcommands are handled before flag parsing (flag treats them as a prompt).
+	if len(os.Args) > 1 && os.Args[1] == "mcp" {
+		os.Exit(runMCPCommand(os.Args[2:]))
+	}
+
 	// Define command line flags
 	var backend = flag.String("b", "", "LLM backend (ollama, anthropic, openai, or gemini)")
 	var backendLong = flag.String("backend", "", "LLM backend (ollama, anthropic, openai, or gemini)")

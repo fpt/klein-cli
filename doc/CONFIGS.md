@@ -304,6 +304,7 @@ The gateway (`klein-claw`) reads its config from `$HOME/.klein/claw/config.json`
 > process) via its `settings.json` — the gateway does not set them. Configure them
 > in the agent's settings (`llm.model`, `agent.max_iterations`).
 | `sessions_dir` | string | `~/.klein/claw/sessions/` | Per-session persistence directory |
+| `schedules_file` | string | `~/.klein/claw/schedules.json` | Dynamic schedule store the agent's `ScheduleCreate/List/Delete` tools write and the scheduler watches (live-reloaded). Point the `klein --serve` process's `--schedules-file` at the same path. |
 
 ### `discord` block
 
@@ -322,7 +323,30 @@ The gateway (`klein-claw`) reads its config from `$HOME/.klein/claw/config.json`
 | `base_dir` | string | `~/.klein/claw/memory/` | Memory storage directory |
 | `max_notes` | int | `30` | Maximum recent daily notes to retain |
 
-### `heartbeat` block
+### `schedules` block (and the dynamic store)
+
+`schedules` is an array of recurring jobs. Each fires either on a fixed
+`interval` **or** daily at a wall-clock time (`at` + `timezone`). Agent-created
+schedules (via `ScheduleCreate`) are stored in `schedules_file` and merged with
+these at runtime; the scheduler live-reloads that file, so no restart is needed.
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `name` | string | Unique id (used for logs + reconciliation; reused name = update) |
+| `enabled` | bool | Whether the job runs |
+| `at` | string | Daily time `"HH:MM"` (24h). Provide this **or** `interval`. |
+| `timezone` | string | IANA tz for `at` (e.g. `"Asia/Tokyo"`); empty = server local |
+| `interval` | string | Fixed period (Go duration, e.g. `"6h"`; min 5m) |
+| `prompt` | string | The message the scheduled run acts on |
+| `skill` | string | Skill to invoke under (e.g. `"claw"`) |
+| `silent` | bool | Run but never post the response (data-collection jobs) |
+| `channel_type` / `channel_id` | string | Output channel (required unless silent) |
+| `run_at_start` | bool | Fire once immediately when (re)started |
+
+### `heartbeat` block (legacy)
+
+Kept for backward compatibility; when enabled it is auto-converted into a single
+interval schedule.
 
 | Field | Type | Description |
 |-------|------|-------------|

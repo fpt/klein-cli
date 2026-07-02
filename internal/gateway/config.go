@@ -14,6 +14,7 @@ type GatewayConfig struct {
 	DefaultSkill   string          `json:"default_skill"`   // Default skill (default: "claw")
 	SessionTimeout string          `json:"session_timeout"` // Inactivity timeout for sessions (Go duration, default: "30m")
 	SessionsDir    string          `json:"sessions_dir"`    // Directory for per-session persistence files (default: ~/.klein/claw/sessions/)
+	SchedulesFile  string          `json:"schedules_file"`  // Dynamic schedule store the agent's Schedule* tools write and the scheduler watches (default: ~/.klein/claw/schedules.json)
 	Discord        DiscordConfig   `json:"discord"`
 	Memory         MemoryConfig    `json:"memory"`
 	Heartbeat      HeartbeatConfig `json:"heartbeat"`
@@ -54,6 +55,7 @@ func LoadGatewayConfig(path string) (*GatewayConfig, error) {
 	// fields so they aren't used verbatim and create a stray "$HOME" directory.
 	cfg.WorkingDir = os.ExpandEnv(cfg.WorkingDir)
 	cfg.SessionsDir = os.ExpandEnv(cfg.SessionsDir)
+	cfg.SchedulesFile = os.ExpandEnv(cfg.SchedulesFile)
 	cfg.Memory.BaseDir = os.ExpandEnv(cfg.Memory.BaseDir)
 
 	// Fall back to defaults when unset.
@@ -64,6 +66,10 @@ func LoadGatewayConfig(path string) (*GatewayConfig, error) {
 	if cfg.SessionsDir == "" {
 		home, _ := os.UserHomeDir()
 		cfg.SessionsDir = filepath.Join(home, ".klein", "claw", "sessions")
+	}
+	if cfg.SchedulesFile == "" {
+		home, _ := os.UserHomeDir()
+		cfg.SchedulesFile = filepath.Join(home, ".klein", "claw", "schedules.json")
 	}
 
 	return cfg, nil
@@ -77,6 +83,7 @@ func DefaultGatewayConfig() *GatewayConfig {
 		DefaultSkill:   "claw",
 		SessionTimeout: "30m",
 		SessionsDir:    filepath.Join(home, ".klein", "claw", "sessions"),
+		SchedulesFile:  filepath.Join(home, ".klein", "claw", "schedules.json"),
 		Memory: MemoryConfig{
 			BaseDir:  filepath.Join(home, ".klein", "claw", "memory"),
 			MaxNotes: 30,

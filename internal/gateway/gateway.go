@@ -66,6 +66,11 @@ func NewGateway(cfg *GatewayConfig, logger *pkgLogger.Logger) (*Gateway, error) 
 		schedules = append(schedules, legacy)
 	}
 	gw.scheduler = NewScheduler(schedules, bus, logger)
+	// Watch the dynamic schedule store the agent's Schedule* tools write to, so
+	// chat-created schedules start/stop without a gateway restart.
+	if cfg.SchedulesFile != "" {
+		gw.scheduler.SetStorePath(cfg.SchedulesFile)
+	}
 
 	return gw, nil
 }
@@ -156,6 +161,13 @@ func (gw *Gateway) handleInbound(ctx context.Context, msg InboundMessage) {
 	// Inject memory context
 	if memoryPrompt := gw.memory.BuildMemoryPrompt(); memoryPrompt != "" {
 		enrichedText = memoryPrompt + enrichedText
+	}
+
+	// Tell the agent which channel this conversation is on so the Schedule*
+	// tools can target scheduled replies back here. Skip for scheduler-originated
+	// runs (they already carry the target channel).
+	if msg.ChannelID != "" && !strings.HasPrefix(msg.PeerID, "scheduler:") {
+		enrichedText = fmt.Sprintf("[SCHEDULING CONTEXT] channel_type=%s channel_id=%s\n", msg.ChannelType, msg.ChannelID) + enrichedText
 	}
 
 	// Resolve the skill: per-message override (used by scheduled jobs to

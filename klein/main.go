@@ -83,6 +83,7 @@ func main() {
 	var serveAddr = flag.String("serve-addr", ":50051", "Connect server listen address")
 	var sessionsDir = flag.String("sessions-dir", "", "Directory for per-session persistence files (default: ~/.klein/claw/sessions/)")
 	var memoryDir = flag.String("memory-dir", "", "Directory for memory files used by MemorySearch/MemoryGet/MemoryWrite tools (serve mode; defaults to ~/.klein/claw/memory/)")
+	var schedulesFile = flag.String("schedules-file", "", "JSON file backing the ScheduleCreate/List/Delete tools (serve mode; defaults to ~/.klein/claw/schedules.json)")
 	var help = flag.Bool("h", false, "Show this help message")
 	var helpLong = flag.Bool("help", false, "Show this help message")
 	var pluginPaths stringSliceFlag
@@ -228,6 +229,19 @@ func main() {
 		if memDir != "" {
 			mcpToolManagers["memory"] = tool.NewMemoryToolManager(memDir)
 			logger.Info("Memory tools enabled", "dir", memDir)
+		}
+		// Register schedule tools, backed by the gateway's dynamic schedule store.
+		// Defaults to ~/.klein/claw/schedules.json — the same file the gateway
+		// scheduler watches — so ScheduleCreate/List/Delete work out of the box.
+		schedFile := *schedulesFile
+		if schedFile == "" {
+			if home, err := os.UserHomeDir(); err == nil {
+				schedFile = filepath.Join(home, ".klein", "claw", "schedules.json")
+			}
+		}
+		if schedFile != "" {
+			mcpToolManagers["schedule"] = tool.NewScheduleToolManager(schedFile)
+			logger.Info("Schedule tools enabled", "file", schedFile)
 		}
 		logger.Info("Starting Connect-gRPC server", "addr", *serveAddr)
 		if err := connectserver.StartServer(ctx, *serveAddr, settings, mcpToolManagers, logger, *sessionsDir); err != nil {

@@ -15,7 +15,7 @@ import (
 // MemoryToolManager provides MemorySearch and MemoryGet tools for the claw memory system.
 type MemoryToolManager struct {
 	tools   map[message.ToolName]message.Tool
-	baseDir string // e.g. ~/.klein/claw/memory
+	baseDir string // e.g. ~/.klein/memory
 }
 
 // NewMemoryToolManager creates a memory tool manager rooted at the given base directory.

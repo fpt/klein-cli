@@ -35,8 +35,9 @@ go run klein/main.go [flags] [prompt]
 | `-l`, `--log` | bool | `false` | Print conversation history and exit |
 | `--serve` | bool | `false` | Start Connect-gRPC server (for gateway) |
 | `--serve-addr` | string | `":50051"` | Listen address for Connect server |
-| `--sessions-dir` | string | `""` | Directory for session persistence (default: `~/.klein/claw/sessions/`) |
-| `--memory-dir` | string | `""` | Directory for `MemorySearch`/`MemoryGet` tools |
+| `--sessions-dir` | string | `""` | Directory for session persistence (default: `<base_dir>/sessions/`) |
+| `--memory-dir` | string | `""` | Directory for `MemorySearch`/`MemoryGet` tools (default: `<base_dir>/memory/`) |
+| `--schedules-file` | string | `""` | Schedule store for the `Schedule*` tools (default: `<base_dir>/schedules.json`) |
 
 ---
 
@@ -55,9 +56,22 @@ Settings are loaded from the first file found in order:
   "llm": { ... },
   "mcp": { ... },
   "agent": { ... },
-  "bash": { ... }
+  "bash": { ... },
+  "base_dir": "~/.klein",
+  "claw": { ... }
 }
 ```
+
+### `base_dir` — shared state root
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `base_dir` | string | `~/.klein` | Root for shared per-user state — `sessions/`, `memory/`, `schedules.json`. Env-expanded. Used by both the CLI (serve mode) and `klein claw`. Point `--settings` at a file with a different `base_dir` to run a fully isolated gateway instance (see [§5](#5-gateway-configuration-klein-claw)). |
+
+### `claw` — gateway configuration
+
+The `claw` object configures the `klein claw` gateway; see
+[§5](#5-gateway-configuration-klein-claw).
 
 ### `llm` — LLM backend settings
 
@@ -301,24 +315,55 @@ disable-model-invocation: false
 
 ---
 
-## 5. Gateway Configuration
+## 5. Gateway Configuration (`klein claw`)
 
-The gateway (`klein-claw`) reads its config from `$HOME/.klein/claw/config.json` by default; override with `--config`.
+The gateway is the `klein claw` subcommand (the former standalone `klein-claw`
+binary is gone). Its configuration is the **`claw` section of `settings.json`**;
+run it with `klein claw` (add `--settings <path>` to select a different file).
 
-### Top-level fields
+By default `klein claw` starts an **embedded, in-process agent server** on an
+ephemeral loopback port — no separate `klein --serve` needed. Set `agent_addr`
+(or pass `--agent-addr`) to dial a remote agent instead.
+
+### Shared paths — `base_dir`
+
+Sessions, memory, and the schedule store are **not** configured in the `claw`
+block. They derive from the top-level **`base_dir`** (default `~/.klein`, shared
+with the CLI), so the agent's `Schedule*` tools and the scheduler always agree on
+files, and the `[SESSION LOG]` path the gateway injects matches where the agent
+persists:
+
+| Path | Derived from |
+|------|--------------|
+| Sessions | `<base_dir>/sessions/` |
+| Memory (`MEMORY.md`, `daily/`, `runs/`) | `<base_dir>/memory/` |
+| Schedule store | `<base_dir>/schedules.json` |
+
+**Multiple instances:** give each a settings file with its own `base_dir` and
+Discord token — everything else isolates automatically (the embedded server's
+ephemeral port avoids collisions):
+
+```bash
+klein claw                                    # default instance (~/.klein)
+klein claw --settings ~/work/settings.json    # isolated instance (its own base_dir)
+```
+
+**Migration:** `klein claw migrate` folds a legacy `~/.klein/claw/config.json`
+into the `claw` section of `settings.json` and moves its
+`memory`/`sessions`/`schedules.json` into `base_dir`.
+
+### `claw` block fields
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
-| `agent_addr` | string | `"http://localhost:50051"` | klein Connect-gRPC server address |
+| `agent_addr` | string | `""` (embedded) | Empty = start an embedded in-process agent server; set to dial a remote `klein --serve` |
 | `working_dir` | string | — | Working directory passed to the agent |
 | `default_skill` | string | `"claw"` | Skill used for incoming messages |
 | `session_timeout` | string | `"30m"` | Inactivity timeout (Go duration, e.g. `"1h"`) |
 
-> The LLM **model** and **max_iterations** are owned by the agent (the `klein --serve`
-> process) via its `settings.json` — the gateway does not set them. Configure them
-> in the agent's settings (`llm.model`, `agent.max_iterations`).
-| `sessions_dir` | string | `~/.klein/claw/sessions/` | Per-session persistence directory |
-| `schedules_file` | string | `~/.klein/claw/schedules.json` | Dynamic schedule store the agent's `ScheduleCreate/List/Delete` tools write and the scheduler watches (live-reloaded). Point the `klein --serve` process's `--schedules-file` at the same path. |
+> The LLM **model** and **max_iterations** are owned by the agent via the same
+> `settings.json` (`llm.model`, `agent.max_iterations`) — the `claw` block does
+> not set them.
 
 ### `discord` block
 
@@ -334,8 +379,10 @@ The gateway (`klein-claw`) reads its config from `$HOME/.klein/claw/config.json`
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
-| `base_dir` | string | `~/.klein/claw/memory/` | Memory storage directory |
 | `max_notes` | int | `30` | Maximum recent daily notes to retain |
+
+> The memory directory is **not** set here — it is `<base_dir>/memory/`.
+> Only `max_notes` is read from this block.
 
 ### `schedules` block (and the dynamic store)
 
@@ -343,8 +390,8 @@ The gateway (`klein-claw`) reads its config from `$HOME/.klein/claw/config.json`
 **cron expression** evaluated in a required **timezone** (the legacy
 `at`/`interval` fields are retired — `"08:00 daily"` = `"0 8 * * *"`,
 `"every 6h"` = `"0 */6 * * *"`). Agent-created schedules (via `ScheduleCreate`)
-are stored in `schedules_file` and merged with these at runtime; the scheduler
-live-reloads that file, so no restart is needed.
+are stored in `<base_dir>/schedules.json` and merged with these at runtime; the
+scheduler live-reloads that file, so no restart is needed.
 
 | Field | Type | Description |
 |-------|------|-------------|
@@ -363,7 +410,7 @@ channel) telling the agent it is an automated run with no user present, so it
 executes the task instead of conversing.
 
 Every scheduled run's output (including silent runs) is also appended to a
-daily **run log** at `<memory.base_dir>/runs/YYYY-MM-DD.md`, timestamped with
+daily **run log** at `<base_dir>/memory/runs/YYYY-MM-DD.md`, timestamped with
 the schedule name. Later jobs can read it via `MemoryGet path=runs/<date>.md`
 or `MemorySearch` — e.g. a nightly memory job that distills the day's cron
 outputs (market reports, etc.) into daily notes and MEMORY.md:
@@ -386,39 +433,41 @@ outputs (market reports, etc.) into daily notes and MEMORY.md:
 > (`"interval": "24h"` anchored to gateway start becomes e.g.
 > `"cron": "45 23 * * *"` at a real wall-clock time).
 
-### Example gateway config
+### Example `settings.json` with a `claw` section
 
 ```json
 {
-  "agent_addr": "http://localhost:50051",
-  "working_dir": "/Users/you/projects/myapp",
-  "default_skill": "claw",
-  "session_timeout": "30m",
-  "discord": {
-    "token": "BOT_TOKEN_HERE",
-    "allowed_guild_ids": ["123456789"],
-    "allowed_channel_ids": ["987654321"],
-    "mention_only": true
-  },
-  "memory": {
-    "base_dir": "/Users/you/.klein/claw/memory",
-    "max_notes": 30
-  },
-  "schedules": [
-    {
-      "name": "nightly-memory",
-      "enabled": true,
-      "cron": "45 23 * * *",
-      "timezone": "Asia/Tokyo",
-      "skill": "claw",
-      "silent": true,
-      "channel_type": "discord",
-      "channel_id": "987654321",
-      "prompt": "今日の runs/ ログと MEMORY.md・daily ノートをレビューし、残す価値のある発見を今日の daily ノートに要約して保存して。"
-    }
-  ]
+  "llm": { "backend": "anthropic", "model": "claude-sonnet-4-6" },
+  "agent": { "max_iterations": 30 },
+  "base_dir": "~/.klein",
+  "claw": {
+    "default_skill": "claw",
+    "session_timeout": "30m",
+    "discord": {
+      "token": "BOT_TOKEN_HERE",
+      "allowed_guild_ids": ["123456789"],
+      "allowed_channel_ids": ["987654321"],
+      "mention_only": true
+    },
+    "memory": { "max_notes": 30 },
+    "schedules": [
+      {
+        "name": "nightly-memory",
+        "enabled": true,
+        "cron": "45 23 * * *",
+        "timezone": "Asia/Tokyo",
+        "skill": "claw",
+        "silent": true,
+        "channel_type": "discord",
+        "channel_id": "987654321",
+        "prompt": "今日の runs/ ログと MEMORY.md・daily ノートをレビューし、残す価値のある発見を今日の daily ノートに要約して保存して。"
+      }
+    ]
+  }
 }
 ```
+
+Run it with `klein claw` (embedded agent) — no separate server process needed.
 
 ---
 

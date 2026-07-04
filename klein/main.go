@@ -6,7 +6,6 @@ import (
 	"flag"
 	"fmt"
 	"os"
-	"path/filepath"
 	"strings"
 
 	"github.com/fpt/klein-cli/internal/app"
@@ -66,6 +65,9 @@ func main() {
 	if len(os.Args) > 1 && os.Args[1] == "mcp" {
 		os.Exit(runMCPCommand(os.Args[2:]))
 	}
+	if len(os.Args) > 1 && os.Args[1] == "claw" {
+		os.Exit(runClawCommand(os.Args[2:]))
+	}
 
 	// Define command line flags
 	var backend = flag.String("b", "", "LLM backend (ollama, anthropic, openai, or gemini)")
@@ -86,9 +88,9 @@ func main() {
 	var jsonSchema = flag.String("json-schema", "", "Inline JSON Schema string or path to a schema file; constrains the response to that schema (one-shot, no tools)")
 	var serve = flag.Bool("serve", false, "Start Connect-gRPC server mode for gateway integration")
 	var serveAddr = flag.String("serve-addr", ":50051", "Connect server listen address")
-	var sessionsDir = flag.String("sessions-dir", "", "Directory for per-session persistence files (default: ~/.klein/claw/sessions/)")
-	var memoryDir = flag.String("memory-dir", "", "Directory for memory files used by MemorySearch/MemoryGet/MemoryWrite tools (serve mode; defaults to ~/.klein/claw/memory/)")
-	var schedulesFile = flag.String("schedules-file", "", "JSON file backing the ScheduleCreate/List/Delete tools (serve mode; defaults to ~/.klein/claw/schedules.json)")
+	var sessionsDir = flag.String("sessions-dir", "", "Directory for per-session persistence files (default: <base_dir>/sessions/)")
+	var memoryDir = flag.String("memory-dir", "", "Directory for memory files used by MemorySearch/MemoryGet/MemoryWrite tools (serve mode; defaults to <base_dir>/memory/)")
+	var schedulesFile = flag.String("schedules-file", "", "JSON file backing the ScheduleCreate/List/Delete tools (serve mode; defaults to <base_dir>/schedules.json)")
 	var help = flag.Bool("h", false, "Show this help message")
 	var helpLong = flag.Bool("help", false, "Show this help message")
 	var pluginPaths stringSliceFlag
@@ -222,34 +224,33 @@ func main() {
 
 	// Handle Connect-gRPC server mode
 	if *serve {
-		// Register memory tools (serve mode only). Default to the gateway's
-		// memory directory so MemorySearch/MemoryGet/MemoryWrite work out of the
-		// box for klein-claw; override with --memory-dir.
+		// Register memory tools (serve mode only). Default to the shared base
+		// dir's memory directory so MemorySearch/MemoryGet/MemoryWrite work out
+		// of the box for the gateway; override with --memory-dir.
 		memDir := *memoryDir
 		if memDir == "" {
-			if home, err := os.UserHomeDir(); err == nil {
-				memDir = filepath.Join(home, ".klein", "claw", "memory")
-			}
+			memDir = settings.MemoryDir()
 		}
-		if memDir != "" {
-			mcpToolManagers["memory"] = tool.NewMemoryToolManager(memDir)
-			logger.Info("Memory tools enabled", "dir", memDir)
-		}
-		// Register schedule tools, backed by the gateway's dynamic schedule store.
-		// Defaults to ~/.klein/claw/schedules.json — the same file the gateway
-		// scheduler watches — so ScheduleCreate/List/Delete work out of the box.
+		mcpToolManagers["memory"] = tool.NewMemoryToolManager(memDir)
+		logger.Info("Memory tools enabled", "dir", memDir)
+
+		// Register schedule tools, backed by the dynamic schedule store. Defaults
+		// to <base_dir>/schedules.json — the same file the gateway scheduler
+		// watches — so ScheduleCreate/List/Delete work out of the box.
 		schedFile := *schedulesFile
 		if schedFile == "" {
-			if home, err := os.UserHomeDir(); err == nil {
-				schedFile = filepath.Join(home, ".klein", "claw", "schedules.json")
-			}
+			schedFile = settings.SchedulesFile()
 		}
-		if schedFile != "" {
-			mcpToolManagers["schedule"] = tool.NewScheduleToolManager(schedFile)
-			logger.Info("Schedule tools enabled", "file", schedFile)
+		mcpToolManagers["schedule"] = tool.NewScheduleToolManager(schedFile)
+		logger.Info("Schedule tools enabled", "file", schedFile)
+
+		// Session persistence defaults to <base_dir>/sessions.
+		sessDir := *sessionsDir
+		if sessDir == "" {
+			sessDir = settings.SessionsDir()
 		}
 		logger.Info("Starting Connect-gRPC server", "addr", *serveAddr)
-		if err := connectserver.StartServer(ctx, *serveAddr, settings, mcpToolManagers, logger, *sessionsDir); err != nil {
+		if err := connectserver.StartServer(ctx, *serveAddr, settings, mcpToolManagers, logger, sessDir); err != nil {
 			logger.Error("Server failed", "error", err)
 			os.Exit(1)
 		}

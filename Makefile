@@ -13,10 +13,7 @@ run-gemini: ## Run the application with Gemini backend
 build: ## Build the application
 	go build -o output/klein ./klein
 
-build-gateway: ## Build the gateway binary (klein-claw)
-	go build -o output/klein-claw ./cmd/gateway
-
-build-all: build build-gateway ## Build all binaries
+build-all: build ## Build all binaries (the gateway is now `klein claw`)
 
 install: ## Install the application
 	go install ./klein

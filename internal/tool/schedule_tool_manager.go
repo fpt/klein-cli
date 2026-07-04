@@ -37,7 +37,7 @@ type scheduleEntry struct {
 // file and starts/stops jobs live.
 type ScheduleToolManager struct {
 	tools map[message.ToolName]message.Tool
-	path  string // e.g. ~/.klein/claw/schedules.json
+	path  string // e.g. ~/.klein/schedules.json
 	mu    sync.Mutex
 }
 

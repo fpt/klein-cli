@@ -11,7 +11,7 @@ The MVP is functional with the following components:
 - **Discord adapter** — Bot with allowlists, mention-only mode, typing indicators, 2000-char splitting
 - **Memory system** — MEMORY.md (long-term) + daily notes, injected into prompts
 - **Session routing** — Per-channel/peer sessions mapped to Connect RPC sessions
-- **Heartbeat** — Configurable periodic prompt execution
+- **Scheduler** — Multi-job cron schedules (weekday-aware, timezone-required)
 - **Claw skill** — Messaging-optimized assistant with memory awareness
 
 ### What Works
@@ -82,7 +82,7 @@ The MVP is functional with the following components:
 - The `!memory search <query>` command could expose this to the user
 
 **Daily note automation:**
-- Heartbeat already supports periodic prompts
+- Cron schedules already support periodic prompts (e.g. a nightly `45 23 * * *` job)
 - Add a "daily review" prompt that summarizes the day's interactions into a daily note
 - Auto-prune old daily notes beyond `max_notes` (currently configured but not enforced)
 

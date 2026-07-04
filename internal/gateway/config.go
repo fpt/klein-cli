@@ -9,24 +9,24 @@ import (
 
 // GatewayConfig is the top-level configuration for klein-claw.
 type GatewayConfig struct {
-	AgentAddr      string          `json:"agent_addr"`      // Connect server address, e.g., "http://localhost:50051"
-	WorkingDir     string          `json:"working_dir"`     // Agent working directory
-	DefaultSkill   string          `json:"default_skill"`   // Default skill (default: "claw")
-	SessionTimeout string          `json:"session_timeout"` // Inactivity timeout for sessions (Go duration, default: "30m")
-	SessionsDir    string          `json:"sessions_dir"`    // Directory for per-session persistence files (default: ~/.klein/claw/sessions/)
-	SchedulesFile  string          `json:"schedules_file"`  // Dynamic schedule store the agent's Schedule* tools write and the scheduler watches (default: ~/.klein/claw/schedules.json)
-	Discord        DiscordConfig   `json:"discord"`
-	Memory         MemoryConfig    `json:"memory"`
-	Heartbeat      HeartbeatConfig `json:"heartbeat"`
+	AgentAddr      string        `json:"agent_addr"`      // Connect server address, e.g., "http://localhost:50051"
+	WorkingDir     string        `json:"working_dir"`     // Agent working directory
+	DefaultSkill   string        `json:"default_skill"`   // Default skill (default: "claw")
+	SessionTimeout string        `json:"session_timeout"` // Inactivity timeout for sessions (Go duration, default: "30m")
+	SessionsDir    string        `json:"sessions_dir"`    // Directory for per-session persistence files (default: ~/.klein/claw/sessions/)
+	SchedulesFile  string        `json:"schedules_file"`  // Dynamic schedule store the agent's Schedule* tools write and the scheduler watches (default: ~/.klein/claw/schedules.json)
+	Discord        DiscordConfig `json:"discord"`
+	Memory         MemoryConfig  `json:"memory"`
 
 	// Schedules is the multi-job scheduler. Each entry runs on its own
-	// ticker and can opt into Silent mode (run the prompt but don't echo
-	// the response to a chat channel). Right for time-series data
-	// collection — e.g. an hourly ResearcherFetch that updates the local
-	// store with no Discord chatter, plus a daily digest that DOES post.
+	// goroutine, fires on a cron expression evaluated in its timezone, and can
+	// opt into Silent mode (run the prompt but don't echo the response to a
+	// chat channel). Right for time-series data collection — e.g. an hourly
+	// ResearcherFetch that updates the local store with no Discord chatter,
+	// plus a daily digest that DOES post.
 	//
-	// Heartbeat (above) is kept for backward compatibility — when set, it
-	// is auto-converted into a single schedule.
+	// The legacy single-job "heartbeat" block is retired; a leftover heartbeat
+	// key in config.json is ignored (unknown JSON fields don't error).
 	Schedules []ScheduleConfig `json:"schedules,omitempty"`
 }
 
@@ -87,10 +87,6 @@ func DefaultGatewayConfig() *GatewayConfig {
 		Memory: MemoryConfig{
 			BaseDir:  filepath.Join(home, ".klein", "claw", "memory"),
 			MaxNotes: 30,
-		},
-		Heartbeat: HeartbeatConfig{
-			Enabled:  false,
-			Interval: "24h",
 		},
 	}
 }

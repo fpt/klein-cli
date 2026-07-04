@@ -339,19 +339,19 @@ The gateway (`klein-claw`) reads its config from `$HOME/.klein/claw/config.json`
 
 ### `schedules` block (and the dynamic store)
 
-`schedules` is an array of recurring jobs. Timing is one of `cron` (preferred),
-`at` + `timezone`, or `interval` — precedence in that order. Agent-created
-schedules (via `ScheduleCreate`) are stored in `schedules_file` and merged with
-these at runtime; the scheduler live-reloads that file, so no restart is needed.
+`schedules` is an array of recurring jobs. Timing is a standard 5-field
+**cron expression** evaluated in a required **timezone** (the legacy
+`at`/`interval` fields are retired — `"08:00 daily"` = `"0 8 * * *"`,
+`"every 6h"` = `"0 */6 * * *"`). Agent-created schedules (via `ScheduleCreate`)
+are stored in `schedules_file` and merged with these at runtime; the scheduler
+live-reloads that file, so no restart is needed.
 
 | Field | Type | Description |
 |-------|------|-------------|
 | `name` | string | Unique id (used for logs + reconciliation; reused name = update) |
 | `enabled` | bool | Whether the job runs |
-| `cron` | string | Standard 5-field cron in `timezone`, e.g. `"0 8 * * 1-5"` = weekdays 08:00. Preferred — the only form that can skip weekends. |
-| `at` | string | Daily time `"HH:MM"` (24h) — fires every day incl. weekends |
-| `timezone` | string | IANA tz for `cron`/`at` (e.g. `"Asia/Tokyo"`); empty = server local |
-| `interval` | string | Fixed period (Go duration, e.g. `"6h"`; min 5m) |
+| `cron` | string | **Required.** Standard 5-field cron in `timezone`, e.g. `"0 8 * * 1-5"` = weekdays 08:00, `"0 */6 * * *"` = every 6h |
+| `timezone` | string | **Required.** IANA tz the cron is evaluated in (e.g. `"Asia/Tokyo"`) — required so schedules never silently depend on server-local time |
 | `prompt` | string | The task **executed** at fire time by a headless agent. Write it as the work itself (`今朝の主要イベントをまとめて`), never as a scheduling request (`毎朝8時に…送って` — `ScheduleCreate` rejects such prompts). |
 | `skill` | string | Skill for the run. Use `"report"` (headless deliverable generator) for briefings; conversational skills tend to ask questions no one will answer. |
 | `silent` | bool | Run but never post the response (data-collection jobs) |
@@ -380,19 +380,11 @@ outputs (market reports, etc.) into daily notes and MEMORY.md:
 }
 ```
 
-### `heartbeat` block (legacy)
-
-Kept for backward compatibility; when enabled it is auto-converted into a single
-interval schedule.
-
-| Field | Type | Description |
-|-------|------|-------------|
-| `enabled` | bool | Enable periodic execution |
-| `interval` | string | Go duration (e.g. `"24h"`, `"1h"`) |
-| `prompt` | string | Prompt text to execute on each tick |
-| `skill` | string | Skill to invoke |
-| `channel_type` | string | Adapter type (e.g. `"discord"`) |
-| `channel_id` | string | Target channel for the response |
+> The legacy single-job `heartbeat` block is **retired**. A leftover
+> `heartbeat` key in an old config.json is ignored (unknown JSON fields don't
+> error) — move the job into `schedules` with a cron expression instead
+> (`"interval": "24h"` anchored to gateway start becomes e.g.
+> `"cron": "45 23 * * *"` at a real wall-clock time).
 
 ### Example gateway config
 
@@ -412,14 +404,19 @@ interval schedule.
     "base_dir": "/Users/you/.klein/claw/memory",
     "max_notes": 30
   },
-  "heartbeat": {
-    "enabled": true,
-    "interval": "24h",
-    "prompt": "Review MEMORY.md and write today's daily note.",
-    "skill": "claw",
-    "channel_type": "discord",
-    "channel_id": "987654321"
-  }
+  "schedules": [
+    {
+      "name": "nightly-memory",
+      "enabled": true,
+      "cron": "45 23 * * *",
+      "timezone": "Asia/Tokyo",
+      "skill": "claw",
+      "silent": true,
+      "channel_type": "discord",
+      "channel_id": "987654321",
+      "prompt": "今日の runs/ ログと MEMORY.md・daily ノートをレビューし、残す価値のある発見を今日の daily ノートに要約して保存して。"
+    }
+  ]
 }
 ```
 

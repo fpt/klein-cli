@@ -177,8 +177,8 @@ This is a Go-based skill-driven coding agent that uses SKILL.md-configured skill
   - `bus.go` - `MessageBus` decoupling channel adapters from agent routing
   - `session.go` - Per-peer session routing mapped to Connect RPC sessions
   - `memory.go` - MEMORY.md (long-term) and daily notes for persistent context
-  - `heartbeat.go` - Periodic prompt execution via ticker
-  - `config.go` - Gateway configuration with Discord, memory, heartbeat settings
+  - `schedules.go` - Multi-job cron scheduler (reconciling; watches the dynamic schedules_file)
+  - `config.go` - Gateway configuration with Discord, memory, schedule settings
   - `adapter.go` - `Adapter` interface for channel integrations
   - `discord.go` - Discord adapter using `bwmarrin/discordgo`
 - `internal/gen/agentv1/` - Generated protobuf + Connect stubs (from `internal/proto/agent.proto`)
@@ -265,8 +265,8 @@ go run ./cmd/gateway --config ~/.klein/claw/config.json
 - **MessageBus** — Buffered Go channels (capacity 64) decoupling adapters from agent routing
 - **SessionManager** — Per-channel/peer session isolation; calls Connect RPC `StartSession` to create agent sessions on demand
 - **MemoryManager** — Reads `$HOME/.klein/claw/memory/MEMORY.md` (long-term) and `daily/YYYY-MM-DD.md` (daily notes); injects `[MEMORY CONTEXT]...[END MEMORY CONTEXT]` block into user prompts
-- **Heartbeat** — Configurable ticker (default 24h) pushing synthetic `InboundMessage` to the bus for periodic agent prompts
-- **Gateway orchestrator** — Wires bus, sessions, memory, heartbeat, and adapters; `Run(ctx)` starts everything as goroutines and processes `bus.Inbound` messages
+- **Scheduler** — Multi-job cron scheduler (`schedules.go`): each job fires on a 5-field cron expression in a required timezone, pushes a synthetic `InboundMessage` with a `[SCHEDULED RUN]` preamble, and appends its output to the daily run log (`memory/runs/YYYY-MM-DD.md`). Live-reloads agent-created jobs from `schedules_file`. (The legacy interval `heartbeat` is retired.)
+- **Gateway orchestrator** — Wires bus, sessions, memory, scheduler, and adapters; `Run(ctx)` starts everything as goroutines and processes `bus.Inbound` messages
 
 **Discord Adapter (`internal/gateway/discord.go`):**
 - Uses `github.com/bwmarrin/discordgo` with WebSocket connection
@@ -293,14 +293,17 @@ go run ./cmd/gateway --config ~/.klein/claw/config.json
     "base_dir": "$HOME/.klein/claw/memory/",
     "max_notes": 30
   },
-  "heartbeat": {
+  "schedules": [{
+    "name": "nightly-memory",
     "enabled": true,
-    "interval": "24h",
-    "prompt": "Review MEMORY.md and daily notes. Create today's daily note.",
+    "cron": "45 23 * * *",
+    "timezone": "Asia/Tokyo",
+    "prompt": "今日の runs/ ログと daily ノートをレビューし、発見を今日の daily ノートに要約して保存して。",
     "skill": "claw",
+    "silent": true,
     "channel_type": "discord",
     "channel_id": "456"
-  }
+  }]
 }
 ```
 

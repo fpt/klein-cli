@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/robfig/cron/v3"
 
@@ -22,10 +23,8 @@ import (
 type scheduleEntry struct {
 	Name        string `json:"name"`
 	Enabled     bool   `json:"enabled"`
-	Cron        string `json:"cron,omitempty"`
-	At          string `json:"at,omitempty"`
-	Interval    string `json:"interval,omitempty"`
-	Timezone    string `json:"timezone,omitempty"`
+	Cron        string `json:"cron"`
+	Timezone    string `json:"timezone"`
 	Prompt      string `json:"prompt"`
 	Skill       string `json:"skill"`
 	Silent      bool   `json:"silent"`
@@ -55,18 +54,17 @@ func NewScheduleToolManager(storePath string) *ScheduleToolManager {
 func (m *ScheduleToolManager) register() {
 	m.RegisterTool("ScheduleCreate",
 		"Create or update a recurring scheduled task. Use for requests like 'notify me every weekday morning at 8am'. "+
-			"Timing: provide ONE of 'cron' (best; \"0 8 * * 1-5\" = weekdays 08:00), 'at' (daily HH:MM), or 'interval' (e.g. '6h'). "+
+			"Timing is a standard 5-field cron expression evaluated in 'timezone': \"0 8 * * 1-5\" = weekdays 08:00, "+
+			"\"0 8 * * *\" = every day 08:00, \"0 */6 * * *\" = every 6 hours. "+
 			"At fire time the gateway runs 'prompt' under 'skill' headlessly and posts the response to the given channel — "+
 			"so 'prompt' MUST be the work itself, executable standalone (\"今朝の日本・米国市場の主要イベントをまとめて\"), "+
-			"NEVER the scheduling request (\"毎朝8時に…送ってください\" is wrong: timing belongs in cron/at, not the prompt). "+
+			"NEVER the scheduling request (\"毎朝8時に…送ってください\" is wrong: timing belongs in cron, not the prompt). "+
 			"Use the channel_type/channel_id from the [SCHEDULING CONTEXT] block in the conversation.",
 		[]message.ToolArgument{
 			{Name: "name", Description: "Unique kebab-case id (e.g. 'morning-market'); reusing a name updates that schedule", Required: true, Type: "string"},
 			{Name: "prompt", Description: "The task to EXECUTE at each fire, written as a standalone imperative for that moment (e.g. '今朝のマーケットイベントを簡潔にまとめて'). Must NOT mention the schedule or recurrence itself.", Required: true, Type: "string"},
-			{Name: "cron", Description: "Standard 5-field cron expression, e.g. '0 8 * * 1-5' (weekdays 08:00), '0 16 * * 1-5'. Preferred for weekday-only jobs. Provide cron OR at OR interval.", Required: false, Type: "string"},
-			{Name: "at", Description: "Daily time HH:MM (24h), e.g. '08:00' — fires every day incl. weekends. Use cron for weekday-only.", Required: false, Type: "string"},
-			{Name: "timezone", Description: "IANA timezone for 'cron'/'at' (e.g. 'Asia/Tokyo'). Defaults to Asia/Tokyo.", Required: false, Type: "string"},
-			{Name: "interval", Description: "Fixed period instead of a clock time, e.g. '6h', '30m' (min 5m).", Required: false, Type: "string"},
+			{Name: "cron", Description: "Standard 5-field cron expression (minute hour day-of-month month day-of-week), e.g. '0 8 * * 1-5' (weekdays 08:00), '0 22 * * *' (daily 22:00), '0 */6 * * *' (every 6h).", Required: true, Type: "string"},
+			{Name: "timezone", Description: "IANA timezone the cron expression is evaluated in (e.g. 'Asia/Tokyo'). Defaults to Asia/Tokyo.", Required: false, Type: "string"},
 			{Name: "skill", Description: "Skill the scheduled run executes under. Default 'report' (headless deliverable generator) — prefer it for briefings/summaries; only use a conversational skill if the task truly needs it.", Required: false, Type: "string"},
 			{Name: "channel_type", Description: "Output channel type from [SCHEDULING CONTEXT], e.g. 'discord'", Required: false, Type: "string"},
 			{Name: "channel_id", Description: "Output channel id from [SCHEDULING CONTEXT]", Required: false, Type: "string"},
@@ -94,29 +92,11 @@ func (m *ScheduleToolManager) handleCreate(ctx context.Context, args message.Too
 	}
 
 	cronExpr := strings.TrimSpace(stringArg(args, "cron"))
-	at := strings.TrimSpace(stringArg(args, "at"))
-	interval := strings.TrimSpace(stringArg(args, "interval"))
-	timingCount := 0
-	for _, v := range []string{cronExpr, at, interval} {
-		if v != "" {
-			timingCount++
-		}
+	if cronExpr == "" {
+		return message.NewToolResultError("cron is required — a 5-field expression, e.g. '0 8 * * 1-5' (weekdays 08:00), '0 22 * * *' (daily 22:00), '0 */6 * * *' (every 6h)"), nil
 	}
-	if timingCount == 0 {
-		return message.NewToolResultError("provide one of 'cron' (e.g. '0 8 * * 1-5'), 'at' (HH:MM daily), or 'interval' (e.g. '6h')"), nil
-	}
-	if timingCount > 1 {
-		return message.NewToolResultError("provide only ONE of 'cron', 'at', or 'interval'"), nil
-	}
-	if cronExpr != "" {
-		if _, err := cron.ParseStandard(cronExpr); err != nil {
-			return message.NewToolResultError(fmt.Sprintf("invalid cron expression %q: %v (5 fields: minute hour day-of-month month day-of-week, e.g. '0 8 * * 1-5')", cronExpr, err)), nil
-		}
-	}
-	if at != "" {
-		if err := validateHHMM(at); err != nil {
-			return message.NewToolResultError(err.Error()), nil
-		}
+	if _, err := cron.ParseStandard(cronExpr); err != nil {
+		return message.NewToolResultError(fmt.Sprintf("invalid cron expression %q: %v (5 fields: minute hour day-of-month month day-of-week, e.g. '0 8 * * 1-5')", cronExpr, err)), nil
 	}
 
 	// Guard against meta prompts: a prompt that phrases the schedule itself
@@ -124,12 +104,15 @@ func (m *ScheduleToolManager) handleCreate(ctx context.Context, args message.Too
 	// register a schedule instead of doing the work.
 	if reason := promptLooksMeta(prompt); reason != "" {
 		return message.NewToolResultError(fmt.Sprintf(
-			"prompt looks like a scheduling request (%s). Write the prompt as the task to execute at fire time — e.g. '今朝の日本・米国市場の主要イベントを簡潔にまとめて' — and put the timing in 'cron'/'at' instead.", reason)), nil
+			"prompt looks like a scheduling request (%s). Write the prompt as the task to execute at fire time — e.g. '今朝の日本・米国市場の主要イベントを簡潔にまとめて' — and put the timing in 'cron' instead.", reason)), nil
 	}
 
 	tz := strings.TrimSpace(stringArg(args, "timezone"))
-	if (cronExpr != "" || at != "") && tz == "" {
+	if tz == "" {
 		tz = "Asia/Tokyo"
+	}
+	if _, err := time.LoadLocation(tz); err != nil {
+		return message.NewToolResultError(fmt.Sprintf("invalid timezone %q: %v (use an IANA name like 'Asia/Tokyo')", tz, err)), nil
 	}
 	skill := strings.TrimSpace(stringArg(args, "skill"))
 	if skill == "" {
@@ -144,7 +127,7 @@ func (m *ScheduleToolManager) handleCreate(ctx context.Context, args message.Too
 	}
 
 	entry := scheduleEntry{
-		Name: name, Enabled: true, Cron: cronExpr, At: at, Timezone: tz, Interval: interval,
+		Name: name, Enabled: true, Cron: cronExpr, Timezone: tz,
 		Prompt: prompt, Skill: skill, ChannelType: channelType, ChannelID: channelID,
 	}
 
@@ -170,13 +153,7 @@ func (m *ScheduleToolManager) handleCreate(ctx context.Context, args message.Too
 		return message.NewToolResultError(fmt.Sprintf("failed to save schedules: %v", err)), nil
 	}
 
-	when := "every " + interval
-	if at != "" {
-		when = fmt.Sprintf("daily at %s %s", at, tz)
-	}
-	if cronExpr != "" {
-		when = fmt.Sprintf("cron %q %s", cronExpr, tz)
-	}
+	when := fmt.Sprintf("cron %q %s", cronExpr, tz)
 	verb := "Created"
 	if replaced {
 		verb = "Updated"
@@ -198,13 +175,7 @@ func (m *ScheduleToolManager) handleList(ctx context.Context, args message.ToolA
 	var b strings.Builder
 	b.WriteString("Schedules:\n")
 	for _, e := range entries {
-		when := "every " + e.Interval
-		if e.At != "" {
-			when = fmt.Sprintf("daily %s %s", e.At, e.Timezone)
-		}
-		if e.Cron != "" {
-			when = fmt.Sprintf("cron %q %s", e.Cron, e.Timezone)
-		}
+		when := fmt.Sprintf("cron %q %s", e.Cron, e.Timezone)
 		status := ""
 		if !e.Enabled {
 			status = " (disabled)"
@@ -296,18 +267,6 @@ func promptLooksMeta(prompt string) string {
 		}
 	}
 	return ""
-}
-
-// validateHHMM checks a "HH:MM" 24-hour time string.
-func validateHHMM(s string) error {
-	var hh, mm int
-	if n, err := fmt.Sscanf(s, "%d:%d", &hh, &mm); err != nil || n != 2 {
-		return fmt.Errorf("bad time %q (want HH:MM, 24-hour)", s)
-	}
-	if hh < 0 || hh > 23 || mm < 0 || mm > 59 {
-		return fmt.Errorf("time out of range: %q", s)
-	}
-	return nil
 }
 
 func truncate(s string, n int) string {

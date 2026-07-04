@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"time"
 
 	"connectrpc.com/connect"
 	agentv1 "github.com/fpt/klein-cli/internal/gen/agentv1"
@@ -235,11 +236,21 @@ func (gw *Gateway) handleInbound(ctx context.Context, msg InboundMessage) {
 	}
 
 	if responseText != "" {
+		// Record scheduled-run outputs to the daily run log in the memory
+		// directory (runs/YYYY-MM-DD.md) so later jobs — e.g. a nightly
+		// memory-extraction cron — can read what earlier jobs produced via
+		// MemoryGet/MemorySearch and distill findings into memory. Logged for
+		// silent runs too.
+		if schedName, ok := strings.CutPrefix(msg.PeerID, "scheduler:"); ok {
+			if err := gw.memory.AppendRunLog(time.Now(), schedName, msg.Skill, responseText); err != nil {
+				gw.logger.Warn("Failed to append run log", "schedule", schedName, "error", err)
+			}
+		}
+
 		if msg.Silent {
 			// Scheduled silent runs (e.g. periodic data collection) only
-			// log a short preview so an operator can still verify the run
-			// completed. The full response is discarded — that's the
-			// whole point of silent mode.
+			// post a short preview to the operator log; the full response
+			// lives in the run log above.
 			preview := responseText
 			if len(preview) > 160 {
 				preview = preview[:160] + "…"

@@ -30,7 +30,8 @@ func NewMemoryToolManager(baseDir string) domain.ToolManager {
 
 func (m *MemoryToolManager) register() {
 	m.RegisterTool("MemorySearch",
-		"Search memory files (MEMORY.md and daily notes) for a keyword. Returns matching lines with file paths and line numbers.",
+		"Search memory files for a keyword: MEMORY.md, daily notes (daily/*.md), and scheduled-run "+
+			"output logs (runs/*.md — what each cron job produced). Returns matching lines with file paths and line numbers.",
 		[]message.ToolArgument{
 			{Name: "query", Description: "Keyword or phrase to search for (case-insensitive)", Required: true, Type: "string"},
 			{Name: "max_results", Description: "Maximum number of matching lines to return (default: 20)", Required: false, Type: "number"},
@@ -38,9 +39,11 @@ func (m *MemoryToolManager) register() {
 		m.handleMemorySearch)
 
 	m.RegisterTool("MemoryGet",
-		"Read a specific memory file. Use 'MEMORY.md' for long-term memory, or 'daily/YYYY-MM-DD.md' for a daily note. Returns the file content or empty string if not found.",
+		"Read a specific memory file. 'MEMORY.md' = long-term memory; 'daily/YYYY-MM-DD.md' = a daily note; "+
+			"'runs/YYYY-MM-DD.md' = that day's scheduled-run outputs (each cron job's report, timestamped). "+
+			"Returns the file content or empty string if not found.",
 		[]message.ToolArgument{
-			{Name: "path", Description: "Relative path within the memory directory (e.g., 'MEMORY.md', 'daily/2024-01-15.md')", Required: true, Type: "string"},
+			{Name: "path", Description: "Relative path within the memory directory (e.g., 'MEMORY.md', 'daily/2024-01-15.md', 'runs/2024-01-15.md')", Required: true, Type: "string"},
 		},
 		m.handleMemoryGet)
 
@@ -78,13 +81,16 @@ func (m *MemoryToolManager) handleMemorySearch(ctx context.Context, args message
 		files = append(files, memPath)
 	}
 
-	// daily/*.md
-	dailyDir := filepath.Join(m.baseDir, "daily")
-	entries, err := os.ReadDir(dailyDir)
-	if err == nil {
+	// daily/*.md (journal notes) and runs/*.md (scheduled-run output logs)
+	for _, sub := range []string{"daily", "runs"} {
+		dir := filepath.Join(m.baseDir, sub)
+		entries, err := os.ReadDir(dir)
+		if err != nil {
+			continue
+		}
 		for _, e := range entries {
 			if !e.IsDir() && strings.HasSuffix(e.Name(), ".md") {
-				files = append(files, filepath.Join(dailyDir, e.Name()))
+				files = append(files, filepath.Join(dir, e.Name()))
 			}
 		}
 	}

@@ -8,6 +8,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/robfig/cron/v3"
+
 	pkgLogger "github.com/fpt/klein-cli/pkg/logger"
 )
 
@@ -18,12 +20,14 @@ import (
 type ScheduleConfig struct {
 	Name    string `json:"name"` // Human-readable id (unique; used for logs + reconciliation)
 	Enabled bool   `json:"enabled"`
+	// Cron is a standard 5-field cron expression ("0 8 * * 1-5" = weekdays at
+	// 08:00), evaluated in Timezone. Takes precedence over At and Interval.
+	Cron string `json:"cron,omitempty"`
+	// At is a daily wall-clock time "HH:MM" (sugar for cron "M H * * *").
+	At string `json:"at,omitempty"`
 	// Interval is a Go duration ("6h", "30m") for fixed-period schedules.
 	Interval string `json:"interval,omitempty"`
-	// At is a daily wall-clock time "HH:MM". When set it overrides Interval and
-	// the schedule fires once per day at that time in Timezone.
-	At string `json:"at,omitempty"`
-	// Timezone is an IANA name ("Asia/Tokyo") for At; empty = server local time.
+	// Timezone is an IANA name ("Asia/Tokyo") for Cron/At; empty = server local time.
 	Timezone    string `json:"timezone,omitempty"`
 	Prompt      string `json:"prompt"`       // The user-message the scheduled agent will see
 	Skill       string `json:"skill"`        // Skill to invoke under (e.g. "claw")
@@ -36,7 +40,7 @@ type ScheduleConfig struct {
 // scheduleSig is a change signature: reconciliation restarts a job only when
 // one of these fields changes.
 func scheduleSig(c ScheduleConfig) string {
-	return fmt.Sprintf("%s|%s|%s|%s|%s|%s|%t|%s|%s", c.Interval, c.At, c.Timezone,
+	return fmt.Sprintf("%s|%s|%s|%s|%s|%s|%s|%t|%s|%s", c.Cron, c.Interval, c.At, c.Timezone,
 		c.Prompt, c.Skill, c.ChannelType, c.Silent, c.ChannelID, c.Name)
 }
 
@@ -213,7 +217,15 @@ func (s *Scheduler) runOne(ctx context.Context, cfg ScheduleConfig) {
 }
 
 // nextWait computes the delay until the schedule's next fire from now.
+// Precedence: Cron > At > Interval.
 func nextWait(now time.Time, cfg ScheduleConfig) (time.Duration, error) {
+	if cfg.Cron != "" {
+		next, err := nextCronFire(now, cfg.Cron, cfg.Timezone)
+		if err != nil {
+			return 0, err
+		}
+		return next.Sub(now), nil
+	}
 	if cfg.At != "" {
 		next, err := nextDailyFire(now, cfg.At, cfg.Timezone)
 		if err != nil {
@@ -230,6 +242,29 @@ func nextWait(now time.Time, cfg ScheduleConfig) (time.Duration, error) {
 		interval = 5 * time.Minute
 	}
 	return interval, nil
+}
+
+// nextCronFire returns the next fire time of a standard 5-field cron expression
+// (minute hour dom month dow), evaluated in the named timezone, strictly after
+// now. Empty tz = server local time. Example: "0 8 * * 1-5" = weekdays 08:00.
+func nextCronFire(now time.Time, expr, tzName string) (time.Time, error) {
+	loc := time.Local
+	if tzName != "" {
+		l, err := time.LoadLocation(tzName)
+		if err != nil {
+			return time.Time{}, fmt.Errorf("bad timezone %q: %w", tzName, err)
+		}
+		loc = l
+	}
+	sched, err := cron.ParseStandard(expr)
+	if err != nil {
+		return time.Time{}, fmt.Errorf("bad cron expression %q: %w", expr, err)
+	}
+	next := sched.Next(now.In(loc))
+	if next.IsZero() {
+		return time.Time{}, fmt.Errorf("cron expression %q never fires", expr)
+	}
+	return next, nil
 }
 
 // nextDailyFire returns the next occurrence of the wall-clock time at ("HH:MM")

@@ -163,10 +163,17 @@ func (gw *Gateway) handleInbound(ctx context.Context, msg InboundMessage) {
 		enrichedText = memoryPrompt + enrichedText
 	}
 
-	// Tell the agent which channel this conversation is on so the Schedule*
-	// tools can target scheduled replies back here. Skip for scheduler-originated
-	// runs (they already carry the target channel).
-	if msg.ChannelID != "" && !strings.HasPrefix(msg.PeerID, "scheduler:") {
+	// Context injection differs by origin:
+	//   - Scheduler-originated runs get a [SCHEDULED RUN] preamble telling the
+	//     model this is an automated job (no user present) so it executes the
+	//     task and outputs the deliverable instead of conversing or trying to
+	//     (re)register the schedule.
+	//   - User messages get the [SCHEDULING CONTEXT] channel block so the
+	//     Schedule* tools can target replies back to this channel.
+	if strings.HasPrefix(msg.PeerID, "scheduler:") {
+		name := strings.TrimPrefix(msg.PeerID, "scheduler:")
+		enrichedText = scheduledRunPreamble(name, msg.ChannelType, msg.ChannelID) + enrichedText
+	} else if msg.ChannelID != "" {
 		enrichedText = fmt.Sprintf("[SCHEDULING CONTEXT] channel_type=%s channel_id=%s\n", msg.ChannelType, msg.ChannelID) + enrichedText
 	}
 
@@ -352,6 +359,25 @@ func (gw *Gateway) skillListText(ctx context.Context) string {
 	}
 	b.WriteString("- `/list` — show this list")
 	return b.String()
+}
+
+// scheduledRunPreamble builds the context block prepended to scheduler-originated
+// prompts. Without it the model treats the stored prompt as a live user message —
+// e.g. a prompt phrased "毎朝8時に…送ってください" reads like a request to set UP
+// a schedule, so the model tries to register one and asks a user (who isn't
+// there) for channel info instead of producing the briefing.
+func scheduledRunPreamble(name, channelType, channelID string) string {
+	return fmt.Sprintf(`[SCHEDULED RUN name=%q channel_type=%s channel_id=%s]
+This is an automated, recurring scheduled task firing now — it is NOT a user
+speaking, and no user is present to reply. Execute the task below and output the
+final deliverable directly; your response is posted automatically to the channel
+above. Do not ask questions or wait for a reply. Do not create, modify, or offer
+to register any schedule — this schedule already exists and just fired. If the
+task text reads like a scheduling request ("every morning at 8, send…"), that
+phrasing describes THIS schedule: perform the underlying work now (e.g. produce
+today's briefing).
+
+`, name, channelType, channelID)
 }
 
 // slashCommandRe matches a leading "/<name>" where name starts with a letter

@@ -339,8 +339,8 @@ The gateway (`klein-claw`) reads its config from `$HOME/.klein/claw/config.json`
 
 ### `schedules` block (and the dynamic store)
 
-`schedules` is an array of recurring jobs. Each fires either on a fixed
-`interval` **or** daily at a wall-clock time (`at` + `timezone`). Agent-created
+`schedules` is an array of recurring jobs. Timing is one of `cron` (preferred),
+`at` + `timezone`, or `interval` — precedence in that order. Agent-created
 schedules (via `ScheduleCreate`) are stored in `schedules_file` and merged with
 these at runtime; the scheduler live-reloads that file, so no restart is needed.
 
@@ -348,14 +348,19 @@ these at runtime; the scheduler live-reloads that file, so no restart is needed.
 |-------|------|-------------|
 | `name` | string | Unique id (used for logs + reconciliation; reused name = update) |
 | `enabled` | bool | Whether the job runs |
-| `at` | string | Daily time `"HH:MM"` (24h). Provide this **or** `interval`. |
-| `timezone` | string | IANA tz for `at` (e.g. `"Asia/Tokyo"`); empty = server local |
+| `cron` | string | Standard 5-field cron in `timezone`, e.g. `"0 8 * * 1-5"` = weekdays 08:00. Preferred — the only form that can skip weekends. |
+| `at` | string | Daily time `"HH:MM"` (24h) — fires every day incl. weekends |
+| `timezone` | string | IANA tz for `cron`/`at` (e.g. `"Asia/Tokyo"`); empty = server local |
 | `interval` | string | Fixed period (Go duration, e.g. `"6h"`; min 5m) |
-| `prompt` | string | The message the scheduled run acts on |
-| `skill` | string | Skill to invoke under (e.g. `"claw"`) |
+| `prompt` | string | The task **executed** at fire time by a headless agent. Write it as the work itself (`今朝の主要イベントをまとめて`), never as a scheduling request (`毎朝8時に…送って` — `ScheduleCreate` rejects such prompts). |
+| `skill` | string | Skill for the run. Use `"report"` (headless deliverable generator) for briefings; conversational skills tend to ask questions no one will answer. |
 | `silent` | bool | Run but never post the response (data-collection jobs) |
 | `channel_type` / `channel_id` | string | Output channel (required unless silent) |
 | `run_at_start` | bool | Fire once immediately when (re)started |
+
+At fire time the gateway prepends a `[SCHEDULED RUN]` block (schedule name +
+channel) telling the agent it is an automated run with no user present, so it
+executes the task instead of conversing.
 
 ### `heartbeat` block (legacy)
 

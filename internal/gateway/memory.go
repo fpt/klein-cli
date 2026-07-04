@@ -111,3 +111,29 @@ func (m *MemoryManager) BuildMemoryPrompt() string {
 func (m *MemoryManager) EnsureDirectories() error {
 	return os.MkdirAll(filepath.Join(m.config.BaseDir, "daily"), 0o755)
 }
+
+// RunLogPath returns the path of the run log for the given date.
+// Scheduled-run outputs are appended here (runs/YYYY-MM-DD.md, inside the
+// memory directory) so that later jobs — e.g. a nightly memory-extraction
+// cron — can read what earlier jobs produced via MemoryGet/MemorySearch.
+func (m *MemoryManager) RunLogPath(t time.Time) string {
+	return filepath.Join(m.config.BaseDir, "runs", t.Format("2006-01-02")+".md")
+}
+
+// AppendRunLog appends one scheduled run's output to today's run log. Entries
+// are recorded for silent runs too — capturing output for later distillation
+// is exactly what silent data-collection jobs are for.
+func (m *MemoryManager) AppendRunLog(now time.Time, schedName, skill, response string) error {
+	path := m.RunLogPath(now)
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return err
+	}
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	entry := fmt.Sprintf("## %s %s (skill: %s)\n\n%s\n\n", now.Format("15:04"), schedName, skill, strings.TrimSpace(response))
+	_, err = f.WriteString(entry)
+	return err
+}

@@ -362,6 +362,24 @@ At fire time the gateway prepends a `[SCHEDULED RUN]` block (schedule name +
 channel) telling the agent it is an automated run with no user present, so it
 executes the task instead of conversing.
 
+Every scheduled run's output (including silent runs) is also appended to a
+daily **run log** at `<memory.base_dir>/runs/YYYY-MM-DD.md`, timestamped with
+the schedule name. Later jobs can read it via `MemoryGet path=runs/<date>.md`
+or `MemorySearch` — e.g. a nightly memory job that distills the day's cron
+outputs (market reports, etc.) into daily notes and MEMORY.md:
+
+```json
+{
+  "name": "nightly-memory",
+  "enabled": true,
+  "cron": "0 22 * * *",
+  "timezone": "Asia/Tokyo",
+  "skill": "claw",
+  "prompt": "今日の runs/ ログ（MemoryGet path=runs/今日の日付.md）とMEMORY.md・daily ノートをレビューし、残す価値のある発見（ウォッチ銘柄に関わる市場の動きなど）を今日の daily ノートに要約して保存して。レポートの丸写しはしないこと。",
+  "silent": true
+}
+```
+
 ### `heartbeat` block (legacy)
 
 Kept for backward compatibility; when enabled it is auto-converted into a single

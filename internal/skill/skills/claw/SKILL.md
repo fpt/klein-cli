@@ -78,18 +78,33 @@ When the user asks to be notified/updated on a schedule ("毎朝8時に", "every
 morning", "daily at 8am", "毎週金曜"), set it up with `ScheduleCreate` — do NOT
 say you can't run timers.
 
-- For a daily time: pass `at` as `HH:MM` (24h) and a `timezone` (default
-  `Asia/Tokyo`). For a fixed period instead, pass `interval` (e.g. `6h`).
-- `prompt` = what the scheduled run should do, written so it works standalone
-  (e.g. `今朝の米国・日本市場に関係する主要イベントを短くまとめて`). It runs
-  under this skill, so your tools (Market*, WebFetch, memory) are available then.
+- **Timing**: prefer `cron` — `"0 8 * * 1-5"` = weekdays 08:00 (use this when
+  the user says 平日/weekdays; markets are closed on weekends). `at` (`HH:MM`)
+  fires every day including weekends; `interval` (e.g. `6h`) for fixed periods.
+  Timezone defaults to `Asia/Tokyo`. Note: cron cannot express 祝日 (public
+  holidays) — if the user needs holiday skipping, add "祝日なら休場の旨を一行で"
+  style handling to the task itself.
+- **`prompt` is the TASK, not the schedule.** It is executed verbatim at fire
+  time by a headless agent with no user present, so write it as a standalone
+  imperative for that moment:
+  - GOOD: `今朝の日本・米国市場の主要イベントと注目材料を簡潔にまとめて`
+  - WRONG: `毎朝8時にマーケット情報を送ってください` (recurrence belongs in
+    `cron`/`at`; a prompt like this makes the scheduled agent try to register
+    a schedule instead of producing the briefing — the tool will reject it)
+- **Skill**: leave the default (`report`) for briefings/summaries — it is a
+  headless deliverable generator. Only set `skill` explicitly if the task needs
+  something else.
 - `channel_type` and `channel_id` MUST come from the `[SCHEDULING CONTEXT]`
   block at the top of the message — copy those values so the reply posts back
   to this channel.
 - Give it a short kebab-case `name` (e.g. `morning-market`); reusing a name
-  updates that schedule.
-- Use `ScheduleList` to show existing schedules and `ScheduleDelete` to cancel.
-- After creating, confirm the time, timezone, and what it will send.
+  updates that schedule. Check `ScheduleList` first so you don't create a
+  duplicate job for the same time; `ScheduleDelete` cancels.
+- After creating, confirm the timing, timezone, and what it will deliver.
+
+If YOU receive a message starting with `[SCHEDULED RUN]`, you are the scheduled
+agent: execute the task and output the deliverable — never ask questions or
+touch schedules.
 
 ## Guidelines
 

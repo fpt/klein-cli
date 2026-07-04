@@ -9,6 +9,8 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/robfig/cron/v3"
+
 	"github.com/fpt/klein-cli/pkg/agent/domain"
 	"github.com/fpt/klein-cli/pkg/message"
 )
@@ -20,8 +22,9 @@ import (
 type scheduleEntry struct {
 	Name        string `json:"name"`
 	Enabled     bool   `json:"enabled"`
-	Interval    string `json:"interval,omitempty"`
+	Cron        string `json:"cron,omitempty"`
 	At          string `json:"at,omitempty"`
+	Interval    string `json:"interval,omitempty"`
 	Timezone    string `json:"timezone,omitempty"`
 	Prompt      string `json:"prompt"`
 	Skill       string `json:"skill"`
@@ -51,17 +54,20 @@ func NewScheduleToolManager(storePath string) *ScheduleToolManager {
 
 func (m *ScheduleToolManager) register() {
 	m.RegisterTool("ScheduleCreate",
-		"Create or update a recurring scheduled message. Use for requests like 'notify me every morning at 8am'. "+
-			"Provide either 'at' (daily HH:MM, 24h) with a 'timezone', or 'interval' (e.g. '6h'). The gateway will run "+
-			"'prompt' under 'skill' at that time and post the reply to the given channel. Use the channel_type/channel_id "+
-			"from the [SCHEDULING CONTEXT] block in the conversation.",
+		"Create or update a recurring scheduled task. Use for requests like 'notify me every weekday morning at 8am'. "+
+			"Timing: provide ONE of 'cron' (best; \"0 8 * * 1-5\" = weekdays 08:00), 'at' (daily HH:MM), or 'interval' (e.g. '6h'). "+
+			"At fire time the gateway runs 'prompt' under 'skill' headlessly and posts the response to the given channel — "+
+			"so 'prompt' MUST be the work itself, executable standalone (\"今朝の日本・米国市場の主要イベントをまとめて\"), "+
+			"NEVER the scheduling request (\"毎朝8時に…送ってください\" is wrong: timing belongs in cron/at, not the prompt). "+
+			"Use the channel_type/channel_id from the [SCHEDULING CONTEXT] block in the conversation.",
 		[]message.ToolArgument{
 			{Name: "name", Description: "Unique kebab-case id (e.g. 'morning-market'); reusing a name updates that schedule", Required: true, Type: "string"},
-			{Name: "prompt", Description: "The message the scheduled run will act on (e.g. '今朝のマーケットイベントをまとめて')", Required: true, Type: "string"},
-			{Name: "at", Description: "Daily time HH:MM (24h), e.g. '08:00'. Provide this OR interval.", Required: false, Type: "string"},
-			{Name: "timezone", Description: "IANA timezone for 'at' (e.g. 'Asia/Tokyo'). Defaults to Asia/Tokyo.", Required: false, Type: "string"},
-			{Name: "interval", Description: "Fixed period instead of a daily time, e.g. '6h', '30m' (min 5m).", Required: false, Type: "string"},
-			{Name: "skill", Description: "Skill to run under (default 'claw')", Required: false, Type: "string"},
+			{Name: "prompt", Description: "The task to EXECUTE at each fire, written as a standalone imperative for that moment (e.g. '今朝のマーケットイベントを簡潔にまとめて'). Must NOT mention the schedule or recurrence itself.", Required: true, Type: "string"},
+			{Name: "cron", Description: "Standard 5-field cron expression, e.g. '0 8 * * 1-5' (weekdays 08:00), '0 16 * * 1-5'. Preferred for weekday-only jobs. Provide cron OR at OR interval.", Required: false, Type: "string"},
+			{Name: "at", Description: "Daily time HH:MM (24h), e.g. '08:00' — fires every day incl. weekends. Use cron for weekday-only.", Required: false, Type: "string"},
+			{Name: "timezone", Description: "IANA timezone for 'cron'/'at' (e.g. 'Asia/Tokyo'). Defaults to Asia/Tokyo.", Required: false, Type: "string"},
+			{Name: "interval", Description: "Fixed period instead of a clock time, e.g. '6h', '30m' (min 5m).", Required: false, Type: "string"},
+			{Name: "skill", Description: "Skill the scheduled run executes under. Default 'report' (headless deliverable generator) — prefer it for briefings/summaries; only use a conversational skill if the task truly needs it.", Required: false, Type: "string"},
 			{Name: "channel_type", Description: "Output channel type from [SCHEDULING CONTEXT], e.g. 'discord'", Required: false, Type: "string"},
 			{Name: "channel_id", Description: "Output channel id from [SCHEDULING CONTEXT]", Required: false, Type: "string"},
 		},
@@ -87,13 +93,25 @@ func (m *ScheduleToolManager) handleCreate(ctx context.Context, args message.Too
 		return message.NewToolResultError("name and prompt are required"), nil
 	}
 
+	cronExpr := strings.TrimSpace(stringArg(args, "cron"))
 	at := strings.TrimSpace(stringArg(args, "at"))
 	interval := strings.TrimSpace(stringArg(args, "interval"))
-	if at == "" && interval == "" {
-		return message.NewToolResultError("provide either 'at' (HH:MM daily) or 'interval' (e.g. '6h')"), nil
+	timingCount := 0
+	for _, v := range []string{cronExpr, at, interval} {
+		if v != "" {
+			timingCount++
+		}
 	}
-	if at != "" && interval != "" {
-		return message.NewToolResultError("provide only one of 'at' or 'interval', not both"), nil
+	if timingCount == 0 {
+		return message.NewToolResultError("provide one of 'cron' (e.g. '0 8 * * 1-5'), 'at' (HH:MM daily), or 'interval' (e.g. '6h')"), nil
+	}
+	if timingCount > 1 {
+		return message.NewToolResultError("provide only ONE of 'cron', 'at', or 'interval'"), nil
+	}
+	if cronExpr != "" {
+		if _, err := cron.ParseStandard(cronExpr); err != nil {
+			return message.NewToolResultError(fmt.Sprintf("invalid cron expression %q: %v (5 fields: minute hour day-of-month month day-of-week, e.g. '0 8 * * 1-5')", cronExpr, err)), nil
+		}
 	}
 	if at != "" {
 		if err := validateHHMM(at); err != nil {
@@ -101,13 +119,23 @@ func (m *ScheduleToolManager) handleCreate(ctx context.Context, args message.Too
 		}
 	}
 
+	// Guard against meta prompts: a prompt that phrases the schedule itself
+	// ("毎朝8時に…", "every morning at 8 …") makes the fire-time agent try to
+	// register a schedule instead of doing the work.
+	if reason := promptLooksMeta(prompt); reason != "" {
+		return message.NewToolResultError(fmt.Sprintf(
+			"prompt looks like a scheduling request (%s). Write the prompt as the task to execute at fire time — e.g. '今朝の日本・米国市場の主要イベントを簡潔にまとめて' — and put the timing in 'cron'/'at' instead.", reason)), nil
+	}
+
 	tz := strings.TrimSpace(stringArg(args, "timezone"))
-	if at != "" && tz == "" {
+	if (cronExpr != "" || at != "") && tz == "" {
 		tz = "Asia/Tokyo"
 	}
 	skill := strings.TrimSpace(stringArg(args, "skill"))
 	if skill == "" {
-		skill = "claw"
+		// Default to the headless report skill: scheduled runs must produce a
+		// deliverable, not converse.
+		skill = "report"
 	}
 	channelType := strings.TrimSpace(stringArg(args, "channel_type"))
 	channelID := strings.TrimSpace(stringArg(args, "channel_id"))
@@ -116,7 +144,7 @@ func (m *ScheduleToolManager) handleCreate(ctx context.Context, args message.Too
 	}
 
 	entry := scheduleEntry{
-		Name: name, Enabled: true, At: at, Timezone: tz, Interval: interval,
+		Name: name, Enabled: true, Cron: cronExpr, At: at, Timezone: tz, Interval: interval,
 		Prompt: prompt, Skill: skill, ChannelType: channelType, ChannelID: channelID,
 	}
 
@@ -146,6 +174,9 @@ func (m *ScheduleToolManager) handleCreate(ctx context.Context, args message.Too
 	if at != "" {
 		when = fmt.Sprintf("daily at %s %s", at, tz)
 	}
+	if cronExpr != "" {
+		when = fmt.Sprintf("cron %q %s", cronExpr, tz)
+	}
 	verb := "Created"
 	if replaced {
 		verb = "Updated"
@@ -170,6 +201,9 @@ func (m *ScheduleToolManager) handleList(ctx context.Context, args message.ToolA
 		when := "every " + e.Interval
 		if e.At != "" {
 			when = fmt.Sprintf("daily %s %s", e.At, e.Timezone)
+		}
+		if e.Cron != "" {
+			when = fmt.Sprintf("cron %q %s", e.Cron, e.Timezone)
 		}
 		status := ""
 		if !e.Enabled {
@@ -236,6 +270,32 @@ func (m *ScheduleToolManager) save(entries []scheduleEntry) error {
 		return err
 	}
 	return os.WriteFile(m.path, append(data, '\n'), 0o644)
+}
+
+// metaPromptMarkers are phrases that indicate a schedule prompt describes the
+// schedule itself rather than the task to execute. Kept deliberately narrow —
+// only recurrence phrasing, in Japanese and English — to avoid rejecting
+// legitimate task text.
+var metaPromptMarkers = []string{
+	// Japanese recurrence phrasing
+	"毎朝", "毎晩", "毎日", "毎週", "毎時",
+	// English recurrence phrasing
+	"every morning", "every evening", "every day", "every week", "each morning",
+	"daily at", "schedule a", "set up a schedule", "register a schedule",
+}
+
+// promptLooksMeta returns a short reason when the prompt appears to describe
+// the schedule (recurrence phrasing) instead of the work, or "" when it looks
+// fine. Fire-time agents receiving a meta prompt try to (re)register schedules
+// instead of producing the deliverable.
+func promptLooksMeta(prompt string) string {
+	lower := strings.ToLower(prompt)
+	for _, m := range metaPromptMarkers {
+		if strings.Contains(lower, m) {
+			return fmt.Sprintf("contains %q", m)
+		}
+	}
+	return ""
 }
 
 // validateHHMM checks a "HH:MM" 24-hour time string.

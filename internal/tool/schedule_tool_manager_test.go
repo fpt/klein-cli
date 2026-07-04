@@ -84,7 +84,70 @@ func TestScheduleCreateInterval(t *testing.T) {
 		t.Fatalf("interval create: %s", r.Error)
 	}
 	entries, _ := m.load()
-	if len(entries) != 1 || entries[0].Interval != "6h" || entries[0].Skill != "claw" {
+	// Default skill is the headless "report" skill.
+	if len(entries) != 1 || entries[0].Interval != "6h" || entries[0].Skill != "report" {
 		t.Errorf("interval entry wrong: %+v", entries)
+	}
+}
+
+func TestScheduleCreateCron(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "s.json")
+	m := NewScheduleToolManager(path)
+	ctx := context.Background()
+
+	// Weekday-only cron schedule.
+	r, _ := m.CallTool(ctx, "ScheduleCreate", message.ToolArgumentValues{
+		"name": "weekday-briefing", "prompt": "今朝の日本・米国市場の主要イベントを簡潔にまとめて",
+		"cron": "0 8 * * 1-5", "channel_type": "discord", "channel_id": "1",
+	})
+	if r.Error != "" {
+		t.Fatalf("cron create: %s", r.Error)
+	}
+	entries, _ := m.load()
+	if len(entries) != 1 || entries[0].Cron != "0 8 * * 1-5" || entries[0].Timezone != "Asia/Tokyo" {
+		t.Errorf("cron entry wrong: %+v", entries)
+	}
+
+	// Invalid cron rejected.
+	r, _ = m.CallTool(ctx, "ScheduleCreate", message.ToolArgumentValues{
+		"name": "bad", "prompt": "do work", "cron": "not-a-cron", "channel_id": "1",
+	})
+	if r.Error == "" {
+		t.Error("invalid cron should be rejected")
+	}
+
+	// cron + at together rejected.
+	r, _ = m.CallTool(ctx, "ScheduleCreate", message.ToolArgumentValues{
+		"name": "both", "prompt": "do work", "cron": "0 8 * * *", "at": "08:00", "channel_id": "1",
+	})
+	if r.Error == "" {
+		t.Error("cron+at together should be rejected")
+	}
+}
+
+func TestScheduleCreateRejectsMetaPrompt(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "s.json")
+	m := NewScheduleToolManager(path)
+	ctx := context.Background()
+
+	// Recurrence phrasing in the prompt (the observed failure) is rejected.
+	for _, bad := range []string{
+		"毎朝8時に、その日のマーケットに関係する重要イベントを短くまとめて送ってください。",
+		"Every morning at 8, send me a market briefing.",
+	} {
+		r, _ := m.CallTool(ctx, "ScheduleCreate", message.ToolArgumentValues{
+			"name": "x", "prompt": bad, "cron": "0 8 * * 1-5", "channel_id": "1",
+		})
+		if r.Error == "" {
+			t.Errorf("meta prompt should be rejected: %q", bad)
+		}
+	}
+
+	// A clean actionable prompt passes.
+	r, _ := m.CallTool(ctx, "ScheduleCreate", message.ToolArgumentValues{
+		"name": "ok", "prompt": "今朝の主要マーケットイベントをまとめて", "cron": "0 8 * * 1-5", "channel_id": "1",
+	})
+	if r.Error != "" {
+		t.Errorf("actionable prompt rejected: %s", r.Error)
 	}
 }

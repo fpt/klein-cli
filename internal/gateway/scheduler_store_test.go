@@ -15,7 +15,7 @@ func TestSchedulerReconcilesFromStore(t *testing.T) {
 	store := filepath.Join(t.TempDir(), "schedules.json")
 	// Shape matches internal/tool.scheduleEntry (shared JSON contract).
 	if err := os.WriteFile(store, []byte(`[
-		{"name":"boot","enabled":true,"interval":"1h","prompt":"go",
+		{"name":"boot","enabled":true,"cron":"0 * * * *","timezone":"Asia/Tokyo","prompt":"go",
 		 "skill":"claw","channel_type":"discord","channel_id":"9","run_at_start":true}
 	]`), 0o644); err != nil {
 		t.Fatal(err)

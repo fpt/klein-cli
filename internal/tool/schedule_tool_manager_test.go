@@ -17,7 +17,7 @@ func TestScheduleCreateListDelete(t *testing.T) {
 	// Create a daily 08:00 JST schedule.
 	r, _ := m.CallTool(ctx, "ScheduleCreate", message.ToolArgumentValues{
 		"name": "morning-market", "prompt": "今朝のマーケットイベント",
-		"at": "08:00", "timezone": "Asia/Tokyo",
+		"cron": "0 8 * * *", "timezone": "Asia/Tokyo",
 		"channel_type": "discord", "channel_id": "123",
 	})
 	if r.Error != "" {
@@ -26,17 +26,17 @@ func TestScheduleCreateListDelete(t *testing.T) {
 
 	// List shows it.
 	l, _ := m.CallTool(ctx, "ScheduleList", nil)
-	if !strings.Contains(l.Text, "morning-market") || !strings.Contains(l.Text, "08:00") {
+	if !strings.Contains(l.Text, "morning-market") || !strings.Contains(l.Text, "0 8 * * *") {
 		t.Errorf("list missing entry: %q", l.Text)
 	}
 
 	// Reusing the name updates (not duplicates).
 	_, _ = m.CallTool(ctx, "ScheduleCreate", message.ToolArgumentValues{
-		"name": "morning-market", "prompt": "updated", "at": "09:00",
+		"name": "morning-market", "prompt": "updated", "cron": "0 9 * * *",
 		"timezone": "Asia/Tokyo", "channel_type": "discord", "channel_id": "123",
 	})
 	entries, _ := m.load()
-	if len(entries) != 1 || entries[0].At != "09:00" {
+	if len(entries) != 1 || entries[0].Cron != "0 9 * * *" {
 		t.Errorf("upsert failed: %+v", entries)
 	}
 
@@ -59,11 +59,13 @@ func TestScheduleCreateValidation(t *testing.T) {
 		name string
 		args message.ToolArgumentValues
 	}{
-		{"no timing", message.ToolArgumentValues{"name": "a", "prompt": "p", "channel_id": "1"}},
-		{"both timing", message.ToolArgumentValues{"name": "a", "prompt": "p", "at": "08:00", "interval": "6h", "channel_id": "1"}},
-		{"bad time", message.ToolArgumentValues{"name": "a", "prompt": "p", "at": "25:99", "channel_id": "1"}},
-		{"no channel", message.ToolArgumentValues{"name": "a", "prompt": "p", "at": "08:00"}},
-		{"no name", message.ToolArgumentValues{"prompt": "p", "at": "08:00", "channel_id": "1"}},
+		{"no cron", message.ToolArgumentValues{"name": "a", "prompt": "p", "channel_id": "1"}},
+		{"retired at field", message.ToolArgumentValues{"name": "a", "prompt": "p", "at": "08:00", "channel_id": "1"}},
+		{"retired interval field", message.ToolArgumentValues{"name": "a", "prompt": "p", "interval": "6h", "channel_id": "1"}},
+		{"bad cron", message.ToolArgumentValues{"name": "a", "prompt": "p", "cron": "25 99 * *", "channel_id": "1"}},
+		{"bad timezone", message.ToolArgumentValues{"name": "a", "prompt": "p", "cron": "0 8 * * *", "timezone": "Mars/Phobos", "channel_id": "1"}},
+		{"no channel", message.ToolArgumentValues{"name": "a", "prompt": "p", "cron": "0 8 * * *"}},
+		{"no name", message.ToolArgumentValues{"prompt": "p", "cron": "0 8 * * *", "channel_id": "1"}},
 	}
 	for _, tc := range cases {
 		r, _ := m.CallTool(ctx, "ScheduleCreate", tc.args)
@@ -73,20 +75,21 @@ func TestScheduleCreateValidation(t *testing.T) {
 	}
 }
 
-func TestScheduleCreateInterval(t *testing.T) {
+func TestScheduleCreateEverySixHours(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "s.json")
 	m := NewScheduleToolManager(path)
+	// The old interval "6h" is now expressed as a cron step.
 	r, _ := m.CallTool(context.Background(), "ScheduleCreate", message.ToolArgumentValues{
-		"name": "poll", "prompt": "check CI", "interval": "6h",
-		"channel_type": "discord", "channel_id": "9",
+		"name": "poll", "prompt": "check CI status and summarize failures",
+		"cron": "0 */6 * * *", "channel_type": "discord", "channel_id": "9",
 	})
 	if r.Error != "" {
-		t.Fatalf("interval create: %s", r.Error)
+		t.Fatalf("cron-step create: %s", r.Error)
 	}
 	entries, _ := m.load()
-	// Default skill is the headless "report" skill.
-	if len(entries) != 1 || entries[0].Interval != "6h" || entries[0].Skill != "report" {
-		t.Errorf("interval entry wrong: %+v", entries)
+	// Default skill is the headless "report" skill; timezone defaults to Asia/Tokyo.
+	if len(entries) != 1 || entries[0].Cron != "0 */6 * * *" || entries[0].Skill != "report" || entries[0].Timezone != "Asia/Tokyo" {
+		t.Errorf("entry wrong: %+v", entries)
 	}
 }
 
@@ -114,14 +117,6 @@ func TestScheduleCreateCron(t *testing.T) {
 	})
 	if r.Error == "" {
 		t.Error("invalid cron should be rejected")
-	}
-
-	// cron + at together rejected.
-	r, _ = m.CallTool(ctx, "ScheduleCreate", message.ToolArgumentValues{
-		"name": "both", "prompt": "do work", "cron": "0 8 * * *", "at": "08:00", "channel_id": "1",
-	})
-	if r.Error == "" {
-		t.Error("cron+at together should be rejected")
 	}
 }
 

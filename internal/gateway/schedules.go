@@ -21,16 +21,14 @@ type ScheduleConfig struct {
 	Name    string `json:"name"` // Human-readable id (unique; used for logs + reconciliation)
 	Enabled bool   `json:"enabled"`
 	// Cron is a standard 5-field cron expression ("0 8 * * 1-5" = weekdays at
-	// 08:00), evaluated in Timezone. Takes precedence over At and Interval.
-	Cron string `json:"cron,omitempty"`
-	// At is a daily wall-clock time "HH:MM" (sugar for cron "M H * * *").
-	At string `json:"at,omitempty"`
-	// Interval is a Go duration ("6h", "30m") for fixed-period schedules.
-	Interval string `json:"interval,omitempty"`
-	// Timezone is an IANA name ("Asia/Tokyo") for Cron/At; empty = server local time.
-	Timezone    string `json:"timezone,omitempty"`
+	// 08:00), evaluated in Timezone. Required — the legacy at/interval timing
+	// fields are retired ("08:00 daily" = "0 8 * * *"; "every 6h" = "0 */6 * * *").
+	Cron string `json:"cron"`
+	// Timezone is a required IANA name ("Asia/Tokyo") that Cron is evaluated
+	// in. Required so schedules never silently depend on server-local time.
+	Timezone    string `json:"timezone"`
 	Prompt      string `json:"prompt"`       // The user-message the scheduled agent will see
-	Skill       string `json:"skill"`        // Skill to invoke under (e.g. "claw")
+	Skill       string `json:"skill"`        // Skill to invoke under (e.g. "report")
 	Silent      bool   `json:"silent"`       // If true, run the prompt but never post the response
 	ChannelType string `json:"channel_type"` // Output channel — required unless Silent
 	ChannelID   string `json:"channel_id"`
@@ -40,7 +38,7 @@ type ScheduleConfig struct {
 // scheduleSig is a change signature: reconciliation restarts a job only when
 // one of these fields changes.
 func scheduleSig(c ScheduleConfig) string {
-	return fmt.Sprintf("%s|%s|%s|%s|%s|%s|%s|%t|%s|%s", c.Cron, c.Interval, c.At, c.Timezone,
+	return fmt.Sprintf("%s|%s|%s|%s|%s|%t|%s|%s", c.Cron, c.Timezone,
 		c.Prompt, c.Skill, c.ChannelType, c.Silent, c.ChannelID, c.Name)
 }
 
@@ -137,6 +135,13 @@ func (s *Scheduler) reconcile(parent context.Context, desired []ScheduleConfig) 
 		if !c.Enabled || c.Prompt == "" || c.Name == "" {
 			continue
 		}
+		// Cron + timezone are both required: cron alone would silently depend
+		// on server-local time (the at/interval timing fields are retired).
+		if c.Cron == "" || c.Timezone == "" {
+			s.logger.Warn("Schedule skipped: cron and timezone are required (at/interval are no longer supported — convert to a cron expression)",
+				"schedule", c.Name, "cron", c.Cron, "timezone", c.Timezone)
+			continue
+		}
 		wanted[c.Name] = c // later entries (store) override earlier (static) by name
 	}
 
@@ -171,30 +176,9 @@ func (s *Scheduler) stopAll() {
 	}
 }
 
-// HeartbeatToSchedule converts the legacy single-heartbeat config into a
-// ScheduleConfig so old configs keep working. Disabled heartbeats return false.
-func HeartbeatToSchedule(h HeartbeatConfig) (ScheduleConfig, bool) {
-	if !h.Enabled || h.Prompt == "" {
-		return ScheduleConfig{}, false
-	}
-	return ScheduleConfig{
-		Name:        "heartbeat",
-		Enabled:     true,
-		Interval:    h.Interval,
-		Prompt:      h.Prompt,
-		Skill:       h.Skill,
-		ChannelType: h.ChannelType,
-		ChannelID:   h.ChannelID,
-		Silent:      false,
-	}, true
-}
-
 func (s *Scheduler) runOne(ctx context.Context, cfg ScheduleConfig) {
-	mode := "interval=" + cfg.Interval
-	if cfg.At != "" {
-		mode = fmt.Sprintf("daily-at=%s tz=%s", cfg.At, cfg.Timezone)
-	}
-	s.logger.Info("Schedule started", "schedule", cfg.Name, "mode", mode, "skill", cfg.Skill, "silent", cfg.Silent)
+	s.logger.Info("Schedule started", "schedule", cfg.Name,
+		"cron", cfg.Cron, "timezone", cfg.Timezone, "skill", cfg.Skill, "silent", cfg.Silent)
 
 	if cfg.RunAtStart {
 		s.fire(cfg)
@@ -216,45 +200,25 @@ func (s *Scheduler) runOne(ctx context.Context, cfg ScheduleConfig) {
 	}
 }
 
-// nextWait computes the delay until the schedule's next fire from now.
-// Precedence: Cron > At > Interval.
+// nextWait computes the delay until the schedule's next cron fire from now.
 func nextWait(now time.Time, cfg ScheduleConfig) (time.Duration, error) {
-	if cfg.Cron != "" {
-		next, err := nextCronFire(now, cfg.Cron, cfg.Timezone)
-		if err != nil {
-			return 0, err
-		}
-		return next.Sub(now), nil
-	}
-	if cfg.At != "" {
-		next, err := nextDailyFire(now, cfg.At, cfg.Timezone)
-		if err != nil {
-			return 0, err
-		}
-		return time.Until(next), nil
-	}
-	interval, err := time.ParseDuration(cfg.Interval)
+	next, err := nextCronFire(now, cfg.Cron, cfg.Timezone)
 	if err != nil {
-		return 0, fmt.Errorf("unparseable interval %q: %w", cfg.Interval, err)
+		return 0, err
 	}
-	// Floor at 5 minutes — shorter would hammer the LLM provider.
-	if interval < 5*time.Minute {
-		interval = 5 * time.Minute
-	}
-	return interval, nil
+	return next.Sub(now), nil
 }
 
 // nextCronFire returns the next fire time of a standard 5-field cron expression
 // (minute hour dom month dow), evaluated in the named timezone, strictly after
-// now. Empty tz = server local time. Example: "0 8 * * 1-5" = weekdays 08:00.
+// now. Example: "0 8 * * 1-5" = weekdays 08:00.
 func nextCronFire(now time.Time, expr, tzName string) (time.Time, error) {
-	loc := time.Local
-	if tzName != "" {
-		l, err := time.LoadLocation(tzName)
-		if err != nil {
-			return time.Time{}, fmt.Errorf("bad timezone %q: %w", tzName, err)
-		}
-		loc = l
+	if tzName == "" {
+		return time.Time{}, fmt.Errorf("timezone is required for cron schedules")
+	}
+	loc, err := time.LoadLocation(tzName)
+	if err != nil {
+		return time.Time{}, fmt.Errorf("bad timezone %q: %w", tzName, err)
 	}
 	sched, err := cron.ParseStandard(expr)
 	if err != nil {
@@ -265,32 +229,6 @@ func nextCronFire(now time.Time, expr, tzName string) (time.Time, error) {
 		return time.Time{}, fmt.Errorf("cron expression %q never fires", expr)
 	}
 	return next, nil
-}
-
-// nextDailyFire returns the next occurrence of the wall-clock time at ("HH:MM")
-// in the named timezone, strictly after now. Empty tz = server local time.
-func nextDailyFire(now time.Time, at, tzName string) (time.Time, error) {
-	loc := time.Local
-	if tzName != "" {
-		l, err := time.LoadLocation(tzName)
-		if err != nil {
-			return time.Time{}, fmt.Errorf("bad timezone %q: %w", tzName, err)
-		}
-		loc = l
-	}
-	var hh, mm int
-	if n, err := fmt.Sscanf(at, "%d:%d", &hh, &mm); err != nil || n != 2 {
-		return time.Time{}, fmt.Errorf("bad time %q (want HH:MM)", at)
-	}
-	if hh < 0 || hh > 23 || mm < 0 || mm > 59 {
-		return time.Time{}, fmt.Errorf("time out of range: %q", at)
-	}
-	nowL := now.In(loc)
-	fire := time.Date(nowL.Year(), nowL.Month(), nowL.Day(), hh, mm, 0, 0, loc)
-	if !fire.After(nowL) {
-		fire = fire.AddDate(0, 0, 1)
-	}
-	return fire, nil
 }
 
 func (s *Scheduler) fire(cfg ScheduleConfig) {

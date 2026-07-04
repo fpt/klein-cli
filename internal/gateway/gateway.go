@@ -59,14 +59,7 @@ func NewGateway(cfg *GatewayConfig, logger *pkgLogger.Logger) (*Gateway, error) 
 		gw.adapters["discord"] = discord
 	}
 
-	// Build the schedule set: explicit Schedules + the legacy single
-	// Heartbeat (if enabled). This preserves backward compatibility while
-	// letting users add multiple jobs going forward.
-	schedules := append([]ScheduleConfig(nil), cfg.Schedules...)
-	if legacy, ok := HeartbeatToSchedule(cfg.Heartbeat); ok {
-		schedules = append(schedules, legacy)
-	}
-	gw.scheduler = NewScheduler(schedules, bus, logger)
+	gw.scheduler = NewScheduler(append([]ScheduleConfig(nil), cfg.Schedules...), bus, logger)
 	// Watch the dynamic schedule store the agent's Schedule* tools write to, so
 	// chat-created schedules start/stop without a gateway restart.
 	if cfg.SchedulesFile != "" {
@@ -88,7 +81,7 @@ func (gw *Gateway) Run(ctx context.Context) error {
 		}(name, a)
 	}
 
-	// Start scheduler (covers explicit Schedules + legacy Heartbeat).
+	// Start scheduler (config Schedules + the dynamic store file).
 	go gw.scheduler.Start(ctx)
 
 	// Start outbound dispatcher

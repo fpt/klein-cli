@@ -2,6 +2,7 @@ package gateway
 
 import (
 	"context"
+	"os"
 	"testing"
 	"time"
 
@@ -33,7 +34,8 @@ func TestScheduler_RunAtStart(t *testing.T) {
 		{
 			Name:       "eh-bootstrap",
 			Enabled:    true,
-			Interval:   "1h",
+			Cron:       "0 * * * *",
+			Timezone:   "Asia/Tokyo",
 			Prompt:     "Run ResearcherFetch then ResearcherAnalyze.",
 			Skill:      "market-narratives",
 			Silent:     true,
@@ -66,8 +68,11 @@ func TestScheduler_RunAtStart(t *testing.T) {
 func TestScheduler_DisabledOrEmpty(t *testing.T) {
 	bus := NewMessageBus(8)
 	s := NewScheduler([]ScheduleConfig{
-		{Name: "off", Enabled: false, Interval: "1h", Prompt: "x"},
-		{Name: "empty-prompt", Enabled: true, Interval: "1h", Prompt: ""},
+		{Name: "off", Enabled: false, Cron: "0 8 * * *", Timezone: "Asia/Tokyo", Prompt: "x"},
+		{Name: "empty-prompt", Enabled: true, Cron: "0 8 * * *", Timezone: "Asia/Tokyo", Prompt: ""},
+		// Retired timing shapes: no cron, or cron without timezone → skipped with a warning.
+		{Name: "no-cron", Enabled: true, Prompt: "x"},
+		{Name: "no-tz", Enabled: true, Cron: "0 8 * * *", Prompt: "x"},
 	}, bus, newTestLogger())
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -91,36 +96,24 @@ func TestScheduler_DisabledOrEmpty(t *testing.T) {
 	}
 }
 
-// TestHeartbeatToSchedule_LegacyConversion confirms an old-style heartbeat
-// configuration round-trips into a ScheduleConfig with the right fields and
-// is NOT silent (legacy heartbeats always posted to a channel).
-func TestHeartbeatToSchedule_LegacyConversion(t *testing.T) {
-	got, ok := HeartbeatToSchedule(HeartbeatConfig{
-		Enabled:     true,
-		Interval:    "24h",
-		Prompt:      "Daily digest",
-		Skill:       "claw",
-		ChannelType: "discord",
-		ChannelID:   "12345",
-	})
-	if !ok {
-		t.Fatal("expected legacy heartbeat to convert; got !ok")
+// TestConfigIgnoresRetiredHeartbeat confirms an old config.json containing the
+// retired heartbeat block still parses (unknown JSON fields are ignored) and
+// produces no schedules from it.
+func TestConfigIgnoresRetiredHeartbeat(t *testing.T) {
+	dir := t.TempDir()
+	p := dir + "/config.json"
+	cfgJSON := `{
+		"agent_addr": "http://localhost:50051",
+		"heartbeat": {"enabled": true, "interval": "24h", "prompt": "Daily digest", "channel_id": "1"}
+	}`
+	if err := os.WriteFile(p, []byte(cfgJSON), 0o644); err != nil {
+		t.Fatal(err)
 	}
-	if got.Name != "heartbeat" {
-		t.Errorf("name: %q", got.Name)
+	cfg, err := LoadGatewayConfig(p)
+	if err != nil {
+		t.Fatalf("old config with heartbeat should still parse: %v", err)
 	}
-	if got.Silent {
-		t.Error("legacy heartbeat must NOT be silent (always posted to channel)")
-	}
-	if got.ChannelID != "12345" {
-		t.Errorf("channel id: %q", got.ChannelID)
-	}
-
-	// A disabled or empty-prompt heartbeat should NOT convert.
-	if _, ok := HeartbeatToSchedule(HeartbeatConfig{Enabled: false, Prompt: "x"}); ok {
-		t.Error("disabled heartbeat should not convert")
-	}
-	if _, ok := HeartbeatToSchedule(HeartbeatConfig{Enabled: true, Prompt: ""}); ok {
-		t.Error("empty-prompt heartbeat should not convert")
+	if len(cfg.Schedules) != 0 {
+		t.Errorf("retired heartbeat must not produce schedules: %+v", cfg.Schedules)
 	}
 }

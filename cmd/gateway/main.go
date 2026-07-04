@@ -60,8 +60,8 @@ func main() {
 	if cfg.Discord.Token != "" {
 		fmt.Println("  Discord: enabled")
 	}
-	if cfg.Heartbeat.Enabled {
-		fmt.Printf("  Heartbeat: %s\n", cfg.Heartbeat.Interval)
+	if n := len(cfg.Schedules); n > 0 {
+		fmt.Printf("  Schedules: %d configured\n", n)
 	}
 	fmt.Println()
 

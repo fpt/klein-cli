@@ -11,11 +11,15 @@ import (
 	"strings"
 	"syscall"
 
+	"github.com/fpt/klein-cli/internal/app"
 	"github.com/fpt/klein-cli/internal/config"
 	connectserver "github.com/fpt/klein-cli/internal/connectrpc"
 	"github.com/fpt/klein-cli/internal/gateway"
+	"github.com/fpt/klein-cli/internal/infra"
+	"github.com/fpt/klein-cli/internal/mcp"
 	"github.com/fpt/klein-cli/internal/tool"
 	"github.com/fpt/klein-cli/pkg/agent/domain"
+	client "github.com/fpt/klein-cli/pkg/client"
 	pkgLogger "github.com/fpt/klein-cli/pkg/logger"
 )
 
@@ -36,6 +40,8 @@ func runClawCommand(args []string) int {
 		switch args[0] {
 		case "migrate":
 			return clawMigrate(args[1:])
+		case "repl", "chat":
+			return runClawREPL(args[1:])
 		default:
 			if !strings.HasPrefix(args[0], "-") {
 				fmt.Printf("Unknown claw subcommand %q.\n\n%s\n", args[0], clawUsage)
@@ -86,7 +92,10 @@ func runClawCommand(args []string) int {
 	// schedule tools share the gateway's derived paths so ScheduleCreate writes
 	// the same file the scheduler watches.
 	if cfg.AgentAddr == "" {
-		mcpToolManagers := buildClawToolManagers(ctx, settings, cfg, logger)
+		mcpToolManagers, integration := buildClawToolManagers(ctx, settings, cfg, logger)
+		if integration != nil {
+			defer integration.Close()
+		}
 		bound, err := connectserver.StartServerListener(ctx, *serveAddr, settings, mcpToolManagers, logger, cfg.SessionsDir)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "Failed to start embedded agent server: %v\n", err)
@@ -131,22 +140,28 @@ func runClawCommand(args []string) int {
 
 const clawUsage = `Usage:
   klein claw [--settings <path>] [--agent-addr <addr>] [--serve-addr <addr>]
+  klein claw repl [--settings <path>] [--skill <name>]
   klein claw migrate [--settings <path>]
 
 Runs the messaging gateway. Configuration lives in the "claw" section of
 settings.json; sessions, memory, and the schedule store are derived from the
 shared "base_dir" (default ~/.klein).
 
+  repl     Interactive terminal chat sharing claw's tools (memory, schedules,
+           MCP) and backend, with its own session. Runs alongside the gateway —
+           schedules/memory it changes are picked up via the shared base dir.
   migrate  Fold a legacy ~/.klein/claw/config.json into settings.json and move
            its memory/sessions/schedules into the base dir.`
 
 // buildClawToolManagers assembles the MCP + memory + schedule tool managers the
-// embedded agent server exposes to the claw agent, mirroring `klein --serve`.
-func buildClawToolManagers(ctx context.Context, settings *config.Settings, cfg *gateway.GatewayConfig, logger *pkgLogger.Logger) map[string]domain.ToolManager {
+// claw agent exposes, mirroring `klein --serve`. The returned integration (nil
+// when no MCP servers are configured) must be Closed by the caller.
+func buildClawToolManagers(ctx context.Context, settings *config.Settings, cfg *gateway.GatewayConfig, logger *pkgLogger.Logger) (map[string]domain.ToolManager, *mcp.Integration) {
 	mcpToolManagers := make(map[string]domain.ToolManager)
 
+	var integration *mcp.Integration
 	if hasEnabledMCPServers(settings.MCP.Servers) {
-		if integration := initializeMCP(ctx, settings.MCP, logger); integration != nil {
+		if integration = initializeMCP(ctx, settings.MCP, logger); integration != nil {
 			toolManager := integration.GetToolManager()
 			for _, name := range integration.ListServers() {
 				mcpToolManagers[name] = toolManager
@@ -159,7 +174,73 @@ func buildClawToolManagers(ctx context.Context, settings *config.Settings, cfg *
 	mcpToolManagers["schedule"] = tool.NewScheduleToolManager(cfg.SchedulesFile)
 	logger.Info("Schedule tools enabled", "file", cfg.SchedulesFile)
 
-	return mcpToolManagers
+	return mcpToolManagers, integration
+}
+
+// runClawREPL runs an interactive terminal chat that shares claw's tools and
+// backend (LLM, base dir) but keeps its own session — a local frontend for
+// inspecting/curating memory and schedules. It does not start Discord or the
+// scheduler; schedules it creates land in <base_dir>/schedules.json, which a
+// running `klein claw` gateway live-reloads.
+func runClawREPL(args []string) int {
+	fs := flag.NewFlagSet("claw repl", flag.ContinueOnError)
+	settingsPath := fs.String("settings", "", "Path to settings file (default: .agents/settings.json or ~/.klein/settings.json)")
+	skillFlag := fs.String("skill", "claw", "Skill to use for the session")
+	verbose := fs.Bool("v", false, "Enable verbose (debug) logging")
+	if err := fs.Parse(args); err != nil {
+		return 2
+	}
+
+	ctx := context.Background()
+	out := os.Stdout
+
+	settings, err := config.LoadSettings(*settingsPath)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Failed to load settings: %v\n", err)
+		return 1
+	}
+
+	logLevel := settings.Agent.LogLevel
+	if *verbose {
+		logLevel = "debug"
+	}
+	pkgLogger.SetGlobalLoggerWithConsoleWriter(pkgLogger.LogLevel(logLevel), out)
+	logger := pkgLogger.NewLoggerWithConsoleWriter(pkgLogger.LogLevel(logLevel), out)
+
+	if err := config.ValidateSettings(settings); err != nil {
+		fmt.Fprintf(os.Stderr, "Settings validation failed: %v\n", err)
+		return 1
+	}
+
+	baseDir := settings.ResolvedBaseDir()
+	cfg, err := gateway.ParseClawConfig(settings.Claw, baseDir)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Failed to parse claw config: %v\n", err)
+		return 1
+	}
+
+	workingDir := cfg.WorkingDir
+	if workingDir == "" {
+		workingDir = "."
+	}
+
+	llmClient, err := client.NewLLMClient(settings.LLM)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Failed to create LLM client: %v\n", err)
+		return 1
+	}
+
+	mcpToolManagers, integration := buildClawToolManagers(ctx, settings, cfg, logger)
+	if integration != nil {
+		defer integration.Close()
+	}
+
+	fsRepo := infra.NewOSFilesystemRepository()
+	a := app.NewAgentWithOptions(llmClient, workingDir, mcpToolManagers, settings, logger, out, false, true, fsRepo)
+
+	fmt.Printf("klein claw — interactive (base dir: %s, skill: %s)\n", baseDir, *skillFlag)
+	app.StartInteractiveMode(ctx, a, *skillFlag)
+	return 0
 }
 
 // clawMigrate folds a legacy ~/.klein/claw/config.json into the claw section of

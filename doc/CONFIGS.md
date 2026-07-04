@@ -352,6 +352,23 @@ klein claw --settings ~/work/settings.json    # isolated instance (its own base_
 into the `claw` section of `settings.json` and moves its
 `memory`/`sessions`/`schedules.json` into `base_dir`.
 
+### Interactive CLI — `klein claw repl`
+
+`klein claw repl` opens an interactive terminal chat that shares claw's tools
+(memory, schedules, MCP) and backend (LLM + `base_dir`) but keeps its **own
+session** (message history separate from Discord peers and scheduled runs). It's
+the local frontend for inspecting and curating memory and schedules — e.g. "list
+my schedules", "add a weekday 8am market briefing", "what do you remember about
+me". It does **not** start Discord or the scheduler; because state is file-backed
+under `base_dir`, a schedule it creates lands in `<base_dir>/schedules.json`,
+which a running `klein claw` gateway live-reloads.
+
+```bash
+klein claw repl                                  # default instance
+klein claw repl --settings ~/work/settings.json  # a specific instance's tools/data
+klein claw repl --skill code                      # override the session skill (default: claw)
+```
+
 ### `claw` block fields
 
 | Field | Type | Default | Description |

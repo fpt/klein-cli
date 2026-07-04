@@ -19,6 +19,7 @@ go run klein/main.go --serve -b anthropic    # Start Connect-gRPC server on :500
 # Gateway (klein claw subcommand — reads the "claw" section of settings.json)
 go run klein/main.go claw                     # Start the gateway (embedded agent server)
 go run klein/main.go claw --settings other.json   # Isolated instance (own base_dir + Discord)
+go run klein/main.go claw repl                # Interactive CLI sharing claw's tools/backend (own session)
 go run klein/main.go claw migrate             # Migrate legacy ~/.klein/claw/config.json
 
 # Build commands
@@ -183,7 +184,7 @@ This is a Go-based skill-driven coding agent that uses SKILL.md-configured skill
   - `adapter.go` - `Adapter` interface for channel integrations
   - `discord.go` - Discord adapter using `bwmarrin/discordgo`
 - `internal/gen/agentv1/` - Generated protobuf + Connect stubs (from `internal/proto/agent.proto`)
-- `klein/claw_command.go` - `klein claw` subcommand (embeds the agent server, runs the gateway; `migrate` folds the legacy config)
+- `klein/claw_command.go` - `klein claw` subcommand (embeds the agent server, runs the gateway; `repl` = interactive CLI sharing claw's tools/backend with its own session; `migrate` folds the legacy config)
 - `pkg/agent/` - Agent domain layer:
   - `domain/` - Domain interfaces and types
   - `react/` - ReAct pattern implementation with thinking channel support
@@ -260,6 +261,10 @@ go run ./klein claw
 
 # Isolated second instance (its own base_dir + Discord token)
 go run ./klein claw --settings ~/work/settings.json
+
+# Interactive CLI frontend — shares claw's tools (memory/schedules/MCP) + backend,
+# own session; does not start Discord/scheduler. Run alongside the gateway.
+go run ./klein claw repl
 
 # Remote-agent split: terminal 1 runs the agent, terminal 2 the gateway (agent_addr set)
 go run ./klein --serve -b anthropic

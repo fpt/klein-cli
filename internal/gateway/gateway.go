@@ -16,7 +16,7 @@ import (
 	pkgLogger "github.com/fpt/klein-cli/pkg/logger"
 )
 
-// Gateway is the main orchestrator for klein-claw.
+// Gateway is the main orchestrator for the `klein claw` gateway.
 type Gateway struct {
 	config    *GatewayConfig
 	bus       *MessageBus

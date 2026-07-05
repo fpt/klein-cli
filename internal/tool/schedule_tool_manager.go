@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -37,7 +36,7 @@ type scheduleEntry struct {
 // file and starts/stops jobs live.
 type ScheduleToolManager struct {
 	tools map[message.ToolName]message.Tool
-	path  string // e.g. ~/.klein/claw/schedules.json
+	path  string // e.g. ~/.klein/schedules.json
 	mu    sync.Mutex
 }
 
@@ -233,14 +232,14 @@ func (m *ScheduleToolManager) load() ([]scheduleEntry, error) {
 }
 
 func (m *ScheduleToolManager) save(entries []scheduleEntry) error {
-	if err := os.MkdirAll(filepath.Dir(m.path), 0o755); err != nil {
-		return err
-	}
 	data, err := json.MarshalIndent(entries, "", "  ")
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(m.path, append(data, '\n'), 0o644)
+	// Atomic write: the gateway scheduler (a separate process) polls this file,
+	// so a truncating write could be read mid-flight. temp-file + rename means it
+	// only ever sees the old or the new complete file.
+	return atomicWriteFile(m.path, append(data, '\n'), 0o644)
 }
 
 // metaPromptMarkers are phrases that indicate a schedule prompt describes the

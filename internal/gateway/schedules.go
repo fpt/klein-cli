@@ -74,7 +74,7 @@ func NewScheduler(static []ScheduleConfig, bus *MessageBus, logger *pkgLogger.Lo
 }
 
 // SetStorePath enables the dynamic store file (agent-created schedules). The
-// gateway sets this to ~/.klein/claw/schedules.json.
+// gateway sets this to <base_dir>/schedules.json.
 func (s *Scheduler) SetStorePath(path string) { s.storePath = path }
 
 // Start reconciles the initial schedule set, then polls the store file for

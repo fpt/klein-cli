@@ -24,8 +24,47 @@ type Settings struct {
 	Agent AgentSettings `json:"agent"`
 	Bash  BashSettings  `json:"bash,omitempty"`
 
+	// BaseDir is the root for shared per-user state (sessions, memory, the
+	// schedule store). Empty resolves to ~/.klein. It is env-expanded on load.
+	// Both the CLI and the `klein claw` gateway derive their paths from it, so
+	// pointing --settings at a file with a different base_dir yields a fully
+	// isolated instance.
+	BaseDir string `json:"base_dir,omitempty"`
+
+	// Claw carries the gateway configuration as an opaque block. It is parsed by
+	// internal/gateway (which owns its schema) so this package stays free of the
+	// gateway's heavy dependencies (discordgo, connect, cron).
+	Claw json.RawMessage `json:"claw,omitempty"`
+
 	// Repository for persistence (nil for in-memory only)
 	settingsRepository repository.SettingsRepository `json:"-"`
+}
+
+// ResolvedBaseDir returns the env-expanded base directory, defaulting to
+// ~/.klein when unset.
+func (s *Settings) ResolvedBaseDir() string {
+	base := os.ExpandEnv(s.BaseDir)
+	if base == "" {
+		home, _ := os.UserHomeDir()
+		base = filepath.Join(home, ".klein")
+	}
+	return base
+}
+
+// SessionsDir is <base>/sessions — per-session persistence files.
+func (s *Settings) SessionsDir() string {
+	return filepath.Join(s.ResolvedBaseDir(), "sessions")
+}
+
+// MemoryDir is <base>/memory — MemorySearch/Get/Write plus daily/ and runs/.
+func (s *Settings) MemoryDir() string {
+	return filepath.Join(s.ResolvedBaseDir(), "memory")
+}
+
+// SchedulesFile is <base>/schedules.json — the dynamic schedule store the
+// Schedule* tools write and the gateway scheduler watches.
+func (s *Settings) SchedulesFile() string {
+	return filepath.Join(s.ResolvedBaseDir(), "schedules.json")
 }
 
 // LLMSettings contains LLM client configuration

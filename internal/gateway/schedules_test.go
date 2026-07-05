@@ -2,7 +2,6 @@ package gateway
 
 import (
 	"context"
-	"os"
 	"testing"
 	"time"
 
@@ -96,22 +95,17 @@ func TestScheduler_DisabledOrEmpty(t *testing.T) {
 	}
 }
 
-// TestConfigIgnoresRetiredHeartbeat confirms an old config.json containing the
-// retired heartbeat block still parses (unknown JSON fields are ignored) and
-// produces no schedules from it.
+// TestConfigIgnoresRetiredHeartbeat confirms a claw block containing the retired
+// heartbeat key still parses (unknown JSON fields are ignored) and produces no
+// schedules from it.
 func TestConfigIgnoresRetiredHeartbeat(t *testing.T) {
-	dir := t.TempDir()
-	p := dir + "/config.json"
-	cfgJSON := `{
+	raw := []byte(`{
 		"agent_addr": "http://localhost:50051",
 		"heartbeat": {"enabled": true, "interval": "24h", "prompt": "Daily digest", "channel_id": "1"}
-	}`
-	if err := os.WriteFile(p, []byte(cfgJSON), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	cfg, err := LoadGatewayConfig(p)
+	}`)
+	cfg, err := ParseClawConfig(raw, t.TempDir())
 	if err != nil {
-		t.Fatalf("old config with heartbeat should still parse: %v", err)
+		t.Fatalf("claw block with heartbeat should still parse: %v", err)
 	}
 	if len(cfg.Schedules) != 0 {
 		t.Errorf("retired heartbeat must not produce schedules: %+v", cfg.Schedules)

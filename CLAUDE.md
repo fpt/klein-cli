@@ -13,16 +13,18 @@ go run klein/main.go -b anthropic            # Interactive with Anthropic
 # One-shot mode
 go run klein/main.go "your requirements"     # Run with requirements
 
-# Connect server mode (for gateway integration)
+# Connect server mode (standalone; the gateway can also embed this in-process)
 go run klein/main.go --serve -b anthropic    # Start Connect-gRPC server on :50051
 
-# Gateway (klein-claw)
-go run cmd/gateway/main.go --config ~/.klein/claw/config.json
+# Gateway (klein claw subcommand — reads the "claw" section of settings.json)
+go run klein/main.go claw                     # Start the gateway (embedded agent server)
+go run klein/main.go claw --settings other.json   # Isolated instance (own base_dir + Discord)
+go run klein/main.go claw repl                # Interactive CLI sharing claw's tools/backend (own session)
+go run klein/main.go claw migrate             # Migrate legacy ~/.klein/claw/config.json
 
 # Build commands
-go build -o output/klein ./klein             # Build agent binary
-go build -o output/klein-claw ./cmd/gateway  # Build gateway binary
-make build-all                               # Build both binaries
+go build -o output/klein ./klein             # Build agent binary (includes `klein claw`)
+make build-all                               # Build all binaries
 go build ./...                               # Build all packages
 go mod tidy                                  # Download/update dependencies
 
@@ -171,18 +173,18 @@ This is a Go-based skill-driven coding agent that uses SKILL.md-configured skill
   - External tool server integration and management
 - `internal/connectrpc/` - Connect-gRPC server exposing the agent via HTTP/2:
   - `server.go` - `AgentServiceHandler` with session management and event translation
-  - `start.go` - Server startup with h2c (HTTP/2 cleartext) support
-- `internal/gateway/` - Messaging gateway (klein-claw):
+  - `start.go` - Server startup with h2c (HTTP/2 cleartext); `StartServer` (blocking) + `StartServerListener` (embedded, returns bound address)
+- `internal/gateway/` - Messaging gateway (the `klein claw` subcommand):
   - `gateway.go` - Orchestrator wiring bus, sessions, memory, adapters, Connect client
   - `bus.go` - `MessageBus` decoupling channel adapters from agent routing
   - `session.go` - Per-peer session routing mapped to Connect RPC sessions
   - `memory.go` - MEMORY.md (long-term) and daily notes for persistent context
-  - `schedules.go` - Multi-job cron scheduler (reconciling; watches the dynamic schedules_file)
-  - `config.go` - Gateway configuration with Discord, memory, schedule settings
+  - `schedules.go` - Multi-job cron scheduler (reconciling; watches the dynamic schedule store)
+  - `config.go` - `GatewayConfig` + `ParseClawConfig` (parses settings.json's `claw` block; derives paths from the shared base dir)
   - `adapter.go` - `Adapter` interface for channel integrations
   - `discord.go` - Discord adapter using `bwmarrin/discordgo`
 - `internal/gen/agentv1/` - Generated protobuf + Connect stubs (from `internal/proto/agent.proto`)
-- `cmd/gateway/main.go` - Gateway binary entry point (`klein-claw`)
+- `klein/claw_command.go` - `klein claw` subcommand (embeds the agent server, runs the gateway; `repl` = interactive CLI sharing claw's tools/backend with its own session; `migrate` folds the legacy config)
 - `pkg/agent/` - Agent domain layer:
   - `domain/` - Domain interfaces and types
   - `react/` - ReAct pattern implementation with thinking channel support
@@ -235,23 +237,38 @@ The system uses CLI-specified skills with embedded SKILL.md definitions. No AI-p
 - **Security Isolation**: Skill-specific tool access prevents unauthorized operations
 - **Template-Based Prompts**: Dynamic prompt generation with variable substitution
 
-## Gateway Architecture (klein-claw)
+## Gateway Architecture (`klein claw`)
 
-klein-claw is an OpenClaw-inspired messaging gateway that makes the agent accessible via Discord (and other platforms in the future). It runs as a separate binary communicating with the klein agent via Connect-gRPC.
+The gateway is an OpenClaw-inspired messaging layer that makes the agent
+accessible via Discord (and other platforms in the future). It is the `klein
+claw` subcommand (not a separate binary). By default it **embeds** the
+Connect-gRPC agent server in-process on an ephemeral loopback port; set
+`agent_addr` in the `claw` config to dial a remote `klein --serve` instead.
 
-**Two-Process Architecture:**
+**Default (embedded, single process):**
 ```
-Discord ──► Gateway (klein-claw) ──► Connect-gRPC ──► klein agent (--serve mode)
-                                  ◄── streaming events ◄──
+Discord ──► klein claw ──► [in-process Connect-gRPC] ──► agent
+                       ◄── streaming events ◄──
 ```
+
+**Optional (remote agent, two processes):** set `claw.agent_addr` →
+`klein claw` dials a separately-run `klein --serve`.
 
 **Running the gateway:**
 ```bash
-# Terminal 1: Agent in Connect server mode
-go run ./klein --serve -b anthropic
+# Single command — embeds the agent server, reads the "claw" section of settings.json
+go run ./klein claw
 
-# Terminal 2: Gateway
-go run ./cmd/gateway --config ~/.klein/claw/config.json
+# Isolated second instance (its own base_dir + Discord token)
+go run ./klein claw --settings ~/work/settings.json
+
+# Interactive CLI frontend — shares claw's tools (memory/schedules/MCP) + backend,
+# own session; does not start Discord/scheduler. Run alongside the gateway.
+go run ./klein claw repl
+
+# Remote-agent split: terminal 1 runs the agent, terminal 2 the gateway (agent_addr set)
+go run ./klein --serve -b anthropic
+go run ./klein claw
 ```
 
 **Connect-gRPC Server (`internal/connectrpc/`):**
@@ -264,8 +281,9 @@ go run ./cmd/gateway --config ~/.klein/claw/config.json
 **Gateway Core (`internal/gateway/`):**
 - **MessageBus** — Buffered Go channels (capacity 64) decoupling adapters from agent routing
 - **SessionManager** — Per-channel/peer session isolation; calls Connect RPC `StartSession` to create agent sessions on demand
-- **MemoryManager** — Reads `$HOME/.klein/claw/memory/MEMORY.md` (long-term) and `daily/YYYY-MM-DD.md` (daily notes); injects `[MEMORY CONTEXT]...[END MEMORY CONTEXT]` block into user prompts
-- **Scheduler** — Multi-job cron scheduler (`schedules.go`): each job fires on a 5-field cron expression in a required timezone, pushes a synthetic `InboundMessage` with a `[SCHEDULED RUN]` preamble, and appends its output to the daily run log (`memory/runs/YYYY-MM-DD.md`). Live-reloads agent-created jobs from `schedules_file`. (The legacy interval `heartbeat` is retired.)
+- **MemoryManager** — Reads `<base_dir>/memory/MEMORY.md` (long-term) and `daily/YYYY-MM-DD.md` (daily notes); injects `[MEMORY CONTEXT]...[END MEMORY CONTEXT]` block into user prompts
+- **Scheduler** — Multi-job cron scheduler (`schedules.go`): each job fires on a 5-field cron expression in a required timezone, pushes a synthetic `InboundMessage` with a `[SCHEDULED RUN]` preamble, and appends its output to the daily run log (`<base_dir>/memory/runs/YYYY-MM-DD.md`). Live-reloads agent-created jobs from `<base_dir>/schedules.json`. (The legacy interval `heartbeat` is retired.)
+- **Base dir** — All gateway state (sessions, memory, schedule store) derives from the shared `base_dir` (top-level in settings.json, default `~/.klein`), so the CLI's serve-mode tools and the gateway agree on paths; `ParseClawConfig(settings.Claw, baseDir)` fills the derived path fields.
 - **Gateway orchestrator** — Wires bus, sessions, memory, scheduler, and adapters; `Run(ctx)` starts everything as goroutines and processes `bus.Inbound` messages
 
 **Discord Adapter (`internal/gateway/discord.go`):**
@@ -276,34 +294,38 @@ go run ./cmd/gateway --config ~/.klein/claw/config.json
 - Splits outbound messages at 2000 chars (Discord limit) on newline boundaries
 - Requires `MESSAGE_CONTENT` privileged intent in Discord Developer Portal
 
-**Gateway Configuration (`$HOME/.klein/claw/config.json`):**
+**Gateway Configuration (the `claw` section of `settings.json`):**
+
+Paths are NOT set here — sessions/memory/schedules derive from the top-level
+`base_dir` (default `~/.klein`). `agent_addr` empty = embedded agent server.
+`klein claw migrate` folds a legacy `~/.klein/claw/config.json` into this shape.
+
 ```json
 {
-  "agent_addr": "http://localhost:50051",
-  "working_dir": "/path/to/project",
-  "default_skill": "claw",
-  "discord": {
-    "token": "BOT_TOKEN",
-    "allowed_guild_ids": ["123"],
-    "allowed_channel_ids": ["456"],
-    "allowed_user_ids": ["789"],
-    "mention_only": true
-  },
-  "memory": {
-    "base_dir": "$HOME/.klein/claw/memory/",
-    "max_notes": 30
-  },
-  "schedules": [{
-    "name": "nightly-memory",
-    "enabled": true,
-    "cron": "45 23 * * *",
-    "timezone": "Asia/Tokyo",
-    "prompt": "今日の runs/ ログと daily ノートをレビューし、発見を今日の daily ノートに要約して保存して。",
-    "skill": "claw",
-    "silent": true,
-    "channel_type": "discord",
-    "channel_id": "456"
-  }]
+  "llm": { "backend": "anthropic", "model": "claude-sonnet-4-6" },
+  "base_dir": "~/.klein",
+  "claw": {
+    "default_skill": "claw",
+    "discord": {
+      "token": "BOT_TOKEN",
+      "allowed_guild_ids": ["123"],
+      "allowed_channel_ids": ["456"],
+      "allowed_user_ids": ["789"],
+      "mention_only": true
+    },
+    "memory": { "max_notes": 30 },
+    "schedules": [{
+      "name": "nightly-memory",
+      "enabled": true,
+      "cron": "45 23 * * *",
+      "timezone": "Asia/Tokyo",
+      "prompt": "今日の runs/ ログと daily ノートをレビューし、発見を今日の daily ノートに要約して保存して。",
+      "skill": "claw",
+      "silent": true,
+      "channel_type": "discord",
+      "channel_id": "456"
+    }]
+  }
 }
 ```
 

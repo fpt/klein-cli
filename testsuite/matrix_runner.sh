@@ -102,6 +102,16 @@ is_backend_available() {
                 return 1
             fi
             ;;
+        codex)
+            # codex is a whole-agent backend spawning the codex CLI; auth/model
+            # come from the codex CLI's own login (no env key here).
+            if command -v codex >/dev/null 2>&1; then
+                return 0
+            else
+                log_both "${YELLOW}⚠️  Skipping $backend_name: codex binary not on PATH${NC}"
+                return 1
+            fi
+            ;;
         *)
             log_both "${YELLOW}⚠️  Unknown backend $backend_name, assuming available${NC}"
             return 0

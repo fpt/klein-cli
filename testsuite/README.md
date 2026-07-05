@@ -71,6 +71,29 @@ CLI=output/klein ./testsuite/matrix_runner.sh
 CLI=output/klein ./testsuite/runner.sh
 ```
 
+## Backends
+
+Backend files under `backends/` are klein settings files (`llm` block) passed via
+`--settings`. `matrix_runner.sh` skips a backend when its prerequisite is missing
+(API key, or the codex binary).
+
+### codex backend
+
+`backends/codex.json` runs the **codex app-server backend** (`llm.backend =
+"codex"`). It's a whole-agent backend: codex does the work with its own
+tools, while klein's native tools (memory/schedule) are exposed to it via
+`dynamicTools`. Included so codex can be compared against the chat backends on
+the same testcases.
+
+Prerequisites: the **`codex` binary on `PATH`**, logged in (ChatGPT or API key
+via the codex CLI) — no klein env key is used. It's a good deal slower per turn
+than the API backends. Run just codex with:
+
+```bash
+CLI=output/klein ./testsuite/runner.sh fibonacci codex
+BACKENDS=codex CLI=output/klein ./testsuite/matrix_runner.sh
+```
+
 ## Test Cases
 
 ### fibonacci_test

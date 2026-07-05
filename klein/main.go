@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/fpt/klein-cli/internal/app"
+	"github.com/fpt/klein-cli/internal/codex"
 	"github.com/fpt/klein-cli/internal/config"
 	connectserver "github.com/fpt/klein-cli/internal/connectrpc"
 	"github.com/fpt/klein-cli/internal/infra"
@@ -249,8 +250,21 @@ func main() {
 		if sessDir == "" {
 			sessDir = settings.SessionsDir()
 		}
+
+		// Codex backend: one shared app-server process for all sessions.
+		codexRunner, err := maybeStartCodex(ctx, settings, workingDirectory, logger)
+		if err != nil {
+			logger.Error("Failed to start codex backend", "error", err)
+			os.Exit(1)
+		}
+		var codexBackend app.CodexBackend
+		if codexRunner != nil {
+			codexBackend = codexRunner
+			defer codexRunner.Close()
+		}
+
 		logger.Info("Starting Connect-gRPC server", "addr", *serveAddr)
-		if err := connectserver.StartServer(ctx, *serveAddr, settings, mcpToolManagers, logger, sessDir); err != nil {
+		if err := connectserver.StartServer(ctx, *serveAddr, settings, mcpToolManagers, logger, sessDir, codexBackend); err != nil {
 			logger.Error("Server failed", "error", err)
 			os.Exit(1)
 		}
@@ -258,6 +272,15 @@ func main() {
 	}
 
 	a := app.NewAgentWithOptions(llmClient, workingDirectory, mcpToolManagers, settings, logger, out, skipSessionRestore, isInteractiveMode, fsRepo)
+
+	// Codex backend for interactive/one-shot CLI (plain `klein -b codex`).
+	if codexRunner, err := maybeStartCodex(ctx, settings, workingDirectory, logger); err != nil {
+		logger.Error("Failed to start codex backend", "error", err)
+		os.Exit(1)
+	} else if codexRunner != nil {
+		a.SetCodexBackend(codexRunner)
+		defer codexRunner.Close()
+	}
 
 	// Register loaded plugins with the agent so its skill catalog, command
 	// dispatcher, and agent loader can see them.
@@ -477,6 +500,17 @@ func loadPluginsFromFlags(marketplace string, pluginDirs []string, logger *pkgLo
 	}
 
 	return out
+}
+
+// maybeStartCodex spawns the codex app-server when llm.backend == "codex",
+// returning nil (no error) for every other backend. The returned Runner is
+// shared across sessions and must be Closed by the caller.
+func maybeStartCodex(ctx context.Context, settings *config.Settings, workingDir string, logger *pkgLogger.Logger) (*codex.Runner, error) {
+	if settings.LLM.Backend != "codex" {
+		return nil, nil
+	}
+	logger.Info("Starting codex app-server backend", "model", settings.LLM.Model)
+	return codex.NewRunnerFromSettings(ctx, settings, workingDir)
 }
 
 // hasEnabledMCPServers checks if there are any enabled MCP servers

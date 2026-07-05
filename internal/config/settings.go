@@ -36,6 +36,10 @@ type Settings struct {
 	// gateway's heavy dependencies (discordgo, connect, cron).
 	Claw json.RawMessage `json:"claw,omitempty"`
 
+	// Codex configures the codex app-server backend (used only when
+	// llm.backend == "codex"). Model/effort still come from the llm block.
+	Codex CodexSettings `json:"codex,omitempty"`
+
 	// Repository for persistence (nil for in-memory only)
 	settingsRepository repository.SettingsRepository `json:"-"`
 }
@@ -245,6 +249,15 @@ type AgentSettings struct {
 	LogLevel      string `json:"log_level"`
 }
 
+// CodexSettings configures the codex app-server backend. Model and effort are
+// taken from LLMSettings; these fields cover codex-specific behavior. All are
+// optional with headless-friendly defaults.
+type CodexSettings struct {
+	CodexPath      string `json:"codex_path,omitempty"`      // path to the codex binary ("" → "codex" on PATH)
+	ApprovalPolicy string `json:"approval_policy,omitempty"` // never|on-failure|on-request|untrusted ("" → never)
+	SandboxMode    string `json:"sandbox_mode,omitempty"`    // read-only|workspace-write|danger-full-access ("" → workspace-write)
+}
+
 // BashSettings contains bash tool configuration
 type BashSettings struct {
 	WhitelistedCommands []string `json:"whitelisted_commands,omitempty"` // Commands that don't require approval
@@ -446,6 +459,12 @@ func GetDefaultLLMSettingsForBackend(backend string) LLMSettings {
 			Thinking:  false, // Gemini doesn't support thinking in our implementation
 			MaxTokens: 0,
 		}
+	case "codex":
+		// Model is left empty: codex uses the model configured in its own CLI
+		// config unless overridden via llm.model / -m.
+		return LLMSettings{
+			Backend: "codex",
+		}
 	default:
 		// Default to ollama settings for unknown backends
 		return GetDefaultLLMSettingsForBackend("ollama")
@@ -481,11 +500,13 @@ func applyDefaults(settings *Settings) {
 // ValidateSettings validates the settings configuration
 func ValidateSettings(settings *Settings) error {
 	// Validate LLM settings
-	if settings.LLM.Backend != "ollama" && settings.LLM.Backend != "anthropic" && settings.LLM.Backend != "openai" && settings.LLM.Backend != "gemini" {
-		return fmt.Errorf("unsupported LLM backend: %s (must be 'ollama', 'anthropic', 'openai', or 'gemini')", settings.LLM.Backend)
+	if settings.LLM.Backend != "ollama" && settings.LLM.Backend != "anthropic" && settings.LLM.Backend != "openai" && settings.LLM.Backend != "gemini" && settings.LLM.Backend != "codex" {
+		return fmt.Errorf("unsupported LLM backend: %s (must be 'ollama', 'anthropic', 'openai', 'gemini', or 'codex')", settings.LLM.Backend)
 	}
 
-	if settings.LLM.Model == "" {
+	// codex manages its own model and auth via the codex CLI, so an empty model
+	// is fine and no API key is required here.
+	if settings.LLM.Backend != "codex" && settings.LLM.Model == "" {
 		return fmt.Errorf("LLM model is required")
 	}
 

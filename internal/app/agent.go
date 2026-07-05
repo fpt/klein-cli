@@ -63,6 +63,12 @@ type Agent struct {
 	recentlyReadFiles    []string            // up to 5 most recently read unique file paths
 	memoryDir            string              // $HOME/.klein/projects/<hash>/memory/ (interactive mode only)
 
+	// codexBackend, when set (llm.backend == "codex"), routes Invoke to a codex
+	// app-server thread instead of the ReAct loop. codexThreadID caches this
+	// session's thread id (also persisted alongside the session file).
+	codexBackend  CodexBackend
+	codexThreadID string
+
 	// Plugin registry. Commands and agents are stored under their scoped
 	// "<plugin>:<name>" identifier; bare-name entries are also populated when
 	// unambiguous. ambiguousCommands/ambiguousAgents track names that appear
@@ -86,6 +92,18 @@ func (a *Agent) FilesystemRepository() repository.FilesystemRepository { return 
 func (a *Agent) SetAllowedToolsOverride(tools []string) {
 	a.allowedToolsOverride = tools
 }
+
+// CodexBackend runs a conversation turn via an external codex app-server. When
+// set, Invoke routes to it instead of the ReAct loop (Option C: codex is the
+// agent for this session; klein provides the frontend, memory-context injection,
+// session↔thread mapping, and run-log). threadID is empty for a session's first
+// turn; RunTurn returns the (created) thread id to persist for continuation.
+type CodexBackend interface {
+	RunTurn(ctx context.Context, threadID, prompt, developerInstructions string) (newThreadID, response string, err error)
+}
+
+// SetCodexBackend enables the codex backend for this agent.
+func (a *Agent) SetCodexBackend(b CodexBackend) { a.codexBackend = b }
 
 // SetEventHandler sets an external event handler that receives all agent events.
 // Used by the Connect server to translate events into streaming RPC responses.
@@ -496,6 +514,13 @@ func (a *Agent) Invoke(ctx context.Context, userInput string, skillName string, 
 	activeSkill, exists := a.skills[skillName]
 	if !exists {
 		return nil, fmt.Errorf("skill '%s' not found", skillName)
+	}
+
+	// Codex backend: route the whole turn to a codex thread instead of the
+	// ReAct loop. The skill still resolves (its prompt steers codex), but klein's
+	// tool managers/ReAct are bypassed.
+	if a.codexBackend != nil {
+		return a.invokeCodex(ctx, activeSkill, userInput)
 	}
 
 	// Reset plan mode at the start of each invocation
@@ -1054,6 +1079,77 @@ func (a *Agent) InjectContextFile() {
 }
 
 // setupEventHandlers configures event handlers to convert events back to output format.
+// invokeCodex runs one turn through the codex app-server backend. The skill's
+// rendered prompt is passed as codex developer instructions; the user input is
+// the turn prompt (any memory context is already prepended by the gateway). The
+// session↔thread mapping is persisted next to the session file so a resumed
+// session continues the same codex thread.
+func (a *Agent) invokeCodex(ctx context.Context, activeSkill *skill.Skill, userInput string) (message.Message, error) {
+	threadID := a.loadCodexThreadID()
+	devInstr := activeSkill.RenderContent("", a.workingDir)
+
+	newThreadID, response, err := a.codexBackend.RunTurn(ctx, threadID, userInput, devInstr)
+	if err != nil {
+		if a.externalEventHandler != nil {
+			a.externalEventHandler(events.AgentEvent{Type: events.EventTypeError, Data: events.ErrorData{Error: err}})
+		}
+		return nil, err
+	}
+	if newThreadID != "" && newThreadID != threadID {
+		a.saveCodexThreadID(newThreadID)
+	}
+
+	// Record the exchange in klein's session state for history/preview. Codex
+	// holds the authoritative thread; this keeps klein's session log meaningful.
+	a.sharedState.AddMessage(message.NewChatMessage(message.MessageTypeUser, userInput))
+	assistant := message.NewChatMessage(message.MessageTypeAssistant, response)
+	a.sharedState.AddMessage(assistant)
+	if a.sessionFilePath != "" {
+		if err := a.sharedState.SaveToFile(); err != nil {
+			a.logger.Warn("Failed to persist session after codex turn", "error", err)
+		}
+	}
+
+	if a.externalEventHandler != nil {
+		a.externalEventHandler(events.AgentEvent{Type: events.EventTypeResponse, Data: events.ResponseData{Message: assistant}})
+	}
+	return assistant, nil
+}
+
+// codexThreadPath returns the sidecar file that stores this session's codex
+// thread id, or "" when the session is not file-backed (one-shot/in-memory).
+func (a *Agent) codexThreadPath() string {
+	if a.sessionFilePath == "" {
+		return ""
+	}
+	return a.sessionFilePath + ".codex-thread"
+}
+
+func (a *Agent) loadCodexThreadID() string {
+	if a.codexThreadID != "" {
+		return a.codexThreadID
+	}
+	p := a.codexThreadPath()
+	if p == "" {
+		return ""
+	}
+	data, err := os.ReadFile(p)
+	if err != nil {
+		return ""
+	}
+	a.codexThreadID = strings.TrimSpace(string(data))
+	return a.codexThreadID
+}
+
+func (a *Agent) saveCodexThreadID(id string) {
+	a.codexThreadID = id
+	if p := a.codexThreadPath(); p != "" {
+		if err := os.WriteFile(p, []byte(id), 0o644); err != nil {
+			a.logger.Warn("Failed to persist codex thread id", "error", err)
+		}
+	}
+}
+
 func (a *Agent) setupEventHandlers(emitter events.EventEmitter) {
 	emitter.AddHandler(func(event events.AgentEvent) {
 		writer := a.OutWriter()

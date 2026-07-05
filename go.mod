@@ -15,6 +15,7 @@ require (
 	github.com/openai/openai-go/v3 v3.41.0
 	github.com/pdfcpu/pdfcpu v0.13.0
 	github.com/pkg/errors v0.9.1
+	github.com/pmenglund/codex-sdk-go v0.0.0-20260627190209-d9bf48163524
 	github.com/robfig/cron/v3 v3.0.1
 	github.com/santhosh-tekuri/jsonschema/v6 v6.0.2
 	golang.org/x/net v0.56.0

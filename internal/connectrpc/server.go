@@ -42,7 +42,8 @@ type AgentServer struct {
 	settings        *config.Settings
 	mcpToolManagers map[string]domain.ToolManager
 	logger          *pkgLogger.Logger
-	sessionsDir     string // Directory for per-session persistence files
+	sessionsDir     string           // Directory for per-session persistence files
+	codexRunner     app.CodexBackend // non-nil when llm.backend == "codex"; shared across sessions
 }
 
 type sessionState struct {
@@ -51,7 +52,7 @@ type sessionState struct {
 }
 
 // NewAgentServer creates a Connect AgentService handler.
-func NewAgentServer(settings *config.Settings, mcpToolManagers map[string]domain.ToolManager, logger *pkgLogger.Logger, sessionsDir string) *AgentServer {
+func NewAgentServer(settings *config.Settings, mcpToolManagers map[string]domain.ToolManager, logger *pkgLogger.Logger, sessionsDir string, codexRunner app.CodexBackend) *AgentServer {
 	return &AgentServer{
 		sessions:        make(map[string]*sessionState),
 		keyToSession:    make(map[string]string),
@@ -59,6 +60,7 @@ func NewAgentServer(settings *config.Settings, mcpToolManagers map[string]domain
 		mcpToolManagers: mcpToolManagers,
 		logger:          logger.WithComponent("connect-server"),
 		sessionsDir:     sessionsDir,
+		codexRunner:     codexRunner,
 	}
 }
 
@@ -98,6 +100,11 @@ func (s *AgentServer) StartSession(ctx context.Context, req *connect.Request[age
 	fsRepo := infra.NewOSFilesystemRepository()
 	out := io.Discard
 	agent := app.NewAgentWithOptions(llmClient, workingDir, s.mcpToolManagers, settings, s.logger, out, true, false, fsRepo)
+
+	// Codex backend (shared app-server process) routes turns to a codex thread.
+	if s.codexRunner != nil {
+		agent.SetCodexBackend(s.codexRunner)
+	}
 
 	// Enable file-backed persistence if a persistence key is provided
 	persistenceKey := req.Header().Get("X-Persistence-Key")

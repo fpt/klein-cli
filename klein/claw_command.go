@@ -92,7 +92,23 @@ func runClawCommand(args []string) int {
 		if integration != nil {
 			defer integration.Close()
 		}
-		bound, err := connectserver.StartServerListener(ctx, *serveAddr, settings, mcpToolManagers, logger, cfg.SessionsDir)
+
+		codexWorkingDir := cfg.WorkingDir
+		if codexWorkingDir == "" {
+			codexWorkingDir = "."
+		}
+		codexRunner, err := maybeStartCodex(ctx, settings, codexWorkingDir, logger)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Failed to start codex backend: %v\n", err)
+			return 1
+		}
+		var codexBackend app.CodexBackend
+		if codexRunner != nil {
+			codexBackend = codexRunner
+			defer codexRunner.Close()
+		}
+
+		bound, err := connectserver.StartServerListener(ctx, *serveAddr, settings, mcpToolManagers, logger, cfg.SessionsDir, codexBackend)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "Failed to start embedded agent server: %v\n", err)
 			return 1
@@ -230,6 +246,15 @@ func runClawREPL(args []string) int {
 
 	fsRepo := infra.NewOSFilesystemRepository()
 	a := app.NewAgentWithOptions(llmClient, workingDir, mcpToolManagers, settings, logger, out, false, true, fsRepo)
+
+	// Codex backend for the interactive claw REPL.
+	if codexRunner, err := maybeStartCodex(ctx, settings, workingDir, logger); err != nil {
+		fmt.Fprintf(os.Stderr, "Failed to start codex backend: %v\n", err)
+		return 1
+	} else if codexRunner != nil {
+		a.SetCodexBackend(codexRunner)
+		defer codexRunner.Close()
+	}
 
 	fmt.Printf("klein claw — interactive (base dir: %s, skill: %s)\n", baseDir, *skillFlag)
 	app.StartInteractiveMode(ctx, a, *skillFlag)

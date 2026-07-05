@@ -77,7 +77,7 @@ The `claw` object configures the `klein claw` gateway; see
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
-| `backend` | string | `"ollama"` | Backend: `ollama`, `anthropic`, `openai`, `gemini` |
+| `backend` | string | `"ollama"` | Backend: `ollama`, `anthropic`, `openai`, `gemini`, `codex` |
 | `model` | string | *(backend-specific)* | Model name |
 | `base_url` | string | *(backend-specific)* | API base URL (Ollama and OpenAI/Azure only) |
 | `thinking` | bool | `true` | Enable thinking mode when model supports it |
@@ -91,6 +91,32 @@ The `claw` object configures the `klein claw` gateway; see
 | `anthropic` | `claude-sonnet-4-6` | *(Anthropic API)* |
 | `openai` | `gpt-5.4-mini` | *(OpenAI API)* |
 | `gemini` | `gemini-2.5-flash-lite` | *(Google API)* |
+| `codex` | *(codex-owned)* | *(codex app-server)* |
+
+### `codex` — codex app-server backend
+
+Used only when `llm.backend == "codex"`. Codex is a **whole-agent** backend: it
+runs its own reasoning + tool loop (shell, `apply_patch`, and MCP servers). klein
+routes each conversation turn to a codex thread and takes back the final answer,
+while still providing the frontend (repl/claw), memory-context injection,
+session↔thread mapping, and run-logs. Requires the **`codex` binary on `PATH`**
+(auth/model come from the codex CLI's own config; `llm.model`/`llm.effort` map
+onto the thread when set). klein's configured external MCP servers are passed
+through to codex; klein's native tools (memory/schedule) are **not** available
+inside a codex turn in this phase (that's Phase 2 — an in-process MCP bridge).
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `codex_path` | string | `codex` (PATH) | Path to the codex binary |
+| `approval_policy` | string | `never` | `never` / `on-failure` / `on-request` / `untrusted` (headless auto-approves) |
+| `sandbox_mode` | string | `workspace-write` | `read-only` / `workspace-write` / `danger-full-access` |
+
+```json
+{
+  "llm": { "backend": "codex", "model": "gpt-5.4", "effort": "medium" },
+  "codex": { "sandbox_mode": "workspace-write" }
+}
+```
 
 ### `agent` — Agent behaviour
 

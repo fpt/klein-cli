@@ -26,6 +26,7 @@ Every entry point ultimately builds the same stack. From the bottom up:
 ├──────────────────────────────────────────────────────────────┤
 │ Backend (domain.LLM)      anthropic · openai · gemini · ollama│  chat, tool-calling, thinking
 └──────────────────────────────────────────────────────────────┘
+       (plus codex — a whole-agent backend routed above domain.LLM; see §7)
 ```
 
 The three layers the rest of this doc drills into:
@@ -284,6 +285,27 @@ append is the dominant memory op.
 - **Model/effort ownership.** The model, `max_iterations`, and reasoning
   `effort` come from the agent's `settings.json` — the gateway does **not** set
   them (it only passes a working directory when starting a session).
+
+### Codex — a whole-agent backend (not a `domain.LLM`)
+
+`backend: "codex"` is special. Codex (`internal/codex`, wrapping the
+codex app-server) is not a chat model — it runs its **own** reasoning + tool
+loop. So it is *not* plugged in as a `domain.LLM`; instead `app.Agent.Invoke`
+branches: when a `CodexBackend` is set, the turn is routed to a codex thread
+(`Runner.RunTurn`) and the ReAct loop + `ToolManager` are bypassed entirely. The
+`domain.LLM` slot holds only a stub (so construction and `ModelID()` work; `Chat`
+is never called).
+
+klein keeps every frontend duty around the codex turn: the repl/claw surfaces,
+memory-context injection, run-log append, and **session↔thread mapping** — each
+klein session's codex `thread_id` is persisted in a sidecar next to the session
+file so a resumed session continues the same thread. The active skill's prompt is
+passed to codex as *developer instructions*. One codex app-server process is
+shared across all sessions (turns are serialized). klein's configured **external
+MCP servers** are translated into codex config so codex can reach them; klein's
+**native** tools (memory/schedule) are not yet exposed inside codex turns — that
+is the planned Phase 2 in-process MCP bridge. Requires the `codex` binary on
+`PATH`; auth/model are codex's own.
 
 ---
 

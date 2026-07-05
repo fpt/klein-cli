@@ -18,7 +18,7 @@ func TestStartServerListener(t *testing.T) {
 	logger := pkgLogger.NewLogger(pkgLogger.LogLevelError)
 	settings := config.GetDefaultSettings()
 
-	addr, err := StartServerListener(ctx, "127.0.0.1:0", settings, nil, logger, t.TempDir())
+	addr, err := StartServerListener(ctx, "127.0.0.1:0", settings, nil, logger, t.TempDir(), nil)
 	if err != nil {
 		t.Fatalf("StartServerListener: %v", err)
 	}

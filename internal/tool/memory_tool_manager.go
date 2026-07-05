@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 
 	"github.com/fpt/klein-cli/pkg/agent/domain"
 	"github.com/fpt/klein-cli/pkg/message"
@@ -16,6 +17,13 @@ import (
 type MemoryToolManager struct {
 	tools   map[message.ToolName]message.Tool
 	baseDir string // e.g. ~/.klein/memory
+
+	// writeMu serializes MemoryWrite operations. This manager is a single
+	// instance shared by every concurrent agent session in a gateway (a Discord
+	// peer and a firing cron can call MemoryWrite at the same time), so the
+	// writes need in-process mutual exclusion. Cross-process writers (the REPL)
+	// rely on atomic file replacement instead.
+	writeMu sync.Mutex
 }
 
 // NewMemoryToolManager creates a memory tool manager rooted at the given base directory.
@@ -181,27 +189,33 @@ func (m *MemoryToolManager) handleMemoryWrite(ctx context.Context, args message.
 	}
 	fullPath := filepath.Join(m.baseDir, cleaned)
 
+	// Serialize concurrent writes from other sessions in this process.
+	m.writeMu.Lock()
+	defer m.writeMu.Unlock()
+
 	if err := os.MkdirAll(filepath.Dir(fullPath), 0o755); err != nil {
 		return message.NewToolResultError(fmt.Sprintf("failed to create memory directory: %v", err)), nil
 	}
 
 	if mode == "overwrite" {
-		if err := os.WriteFile(fullPath, []byte(content), 0o644); err != nil {
+		// Atomic replace so a concurrent reader never sees a truncated file.
+		if err := atomicWriteFile(fullPath, []byte(content), 0o644); err != nil {
 			return message.NewToolResultError(fmt.Sprintf("failed to write memory file: %v", err)), nil
 		}
 		return message.NewToolResultText(fmt.Sprintf("Wrote %d bytes to %s (overwrite).", len(content), cleaned)), nil
 	}
 
-	// append: ensure the entry ends with a newline so entries stay separated.
+	// append: read-modify-write atomically so appends don't interleave and a
+	// reader never catches a partial file. (O_APPEND alone is atomic per write
+	// but does not compose with the overwrite path's rename.)
 	if !strings.HasSuffix(content, "\n") {
 		content += "\n"
 	}
-	f, err := os.OpenFile(fullPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
-	if err != nil {
-		return message.NewToolResultError(fmt.Sprintf("failed to open memory file: %v", err)), nil
+	existing, err := os.ReadFile(fullPath)
+	if err != nil && !os.IsNotExist(err) {
+		return message.NewToolResultError(fmt.Sprintf("failed to read memory file: %v", err)), nil
 	}
-	defer f.Close()
-	if _, err := f.WriteString(content); err != nil {
+	if err := atomicWriteFile(fullPath, append(existing, content...), 0o644); err != nil {
 		return message.NewToolResultError(fmt.Sprintf("failed to append to memory file: %v", err)), nil
 	}
 	return message.NewToolResultText(fmt.Sprintf("Appended %d bytes to %s.", len(content), cleaned)), nil

@@ -1,0 +1,6 @@
+{
+  "name": "codex",
+  "llm": {
+    "backend": "codex"
+  }
+}

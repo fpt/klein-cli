@@ -297,15 +297,29 @@ branches: when a `CodexBackend` is set, the turn is routed to a codex thread
 is never called).
 
 klein keeps every frontend duty around the codex turn: the repl/claw surfaces,
-memory-context injection, run-log append, and **session↔thread mapping** — each
-klein session's codex `thread_id` is persisted in a sidecar next to the session
-file so a resumed session continues the same thread. The active skill's prompt is
-passed to codex as *developer instructions*. One codex app-server process is
-shared across all sessions (turns are serialized). klein's configured **external
-MCP servers** are translated into codex config so codex can reach them; klein's
-**native** tools (memory/schedule) are not yet exposed inside codex turns — that
-is the planned Phase 2 in-process MCP bridge. Requires the `codex` binary on
-`PATH`; auth/model are codex's own.
+memory-context injection, run-log append, and **session↔thread mapping**. The
+active skill's prompt is passed to codex as *developer instructions*. One codex
+app-server process is shared across all sessions (turns are serialized).
+
+**How klein's tools reach codex.** The Runner drives the app-server over the
+**low-level JSON-RPC protocol** (not the SDK's high-level `Thread` helpers),
+because klein registers its native tools via codex's experimental **`dynamicTools`**
+mechanism — which needs the `experimentalApi` capability negotiated at
+`initialize`, something the SDK's `New()` does not send. So the Runner spawns the
+app-server, `initialize`s with `experimentalApi`, registers klein's memory +
+schedule tools as `dynamicTools` on `thread/start`, and services codex's
+**`ItemToolCall`** callbacks in-process by dispatching to the live tool managers
+(same files, same locks — no HTTP, no MCP server). klein's configured **external
+MCP servers** are also passed through codex config; filesystem/shell come from
+codex's own native tools.
+
+Thread lifecycle: `dynamicTools` cannot be re-registered on `thread/resume`, so a
+tool-enabled thread is always one this process started — a session's persisted
+`thread_id` from a prior run is replaced by a fresh (tool-enabled) thread on its
+next turn (memory-context injection still carries facts across restarts).
+
+Requires the `codex` binary on `PATH` (with `dynamicTools` support — experimental);
+auth/model are codex's own.
 
 ---
 

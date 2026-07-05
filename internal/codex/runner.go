@@ -1,139 +1,276 @@
-// Package codex adapts the codex app-server (via the codex-sdk-go client) as a
-// whole-agent backend for klein. Unlike the chat backends (anthropic/openai/…),
-// codex runs its own reasoning + tool loop; klein routes a conversation turn to
-// a codex thread and takes back the final assistant text. See doc/DESIGN.md
-// (backend layer) and the Runner's RunTurn.
+// Package codex adapts the codex app-server as a whole-agent backend for klein.
+// Unlike the chat backends, codex runs its own reasoning + tool loop; klein
+// routes a conversation turn to a codex thread and takes back the final text.
+//
+// It drives the app-server over the LOW-LEVEL JSON-RPC protocol (not the SDK's
+// high-level Thread helpers) for one reason: klein exposes its own tools to
+// codex via the experimental `dynamicTools` mechanism, which requires the
+// `experimentalApi` capability negotiated at `initialize` — something the SDK's
+// New() does not send. Codex then calls back for those tools via ItemToolCall
+// over the same stdio connection (see dynamictools.go). See doc/DESIGN.md.
 package codex
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"sync"
 
-	sdk "github.com/pmenglund/codex-sdk-go"
+	"github.com/pmenglund/codex-sdk-go/protocol"
+	"github.com/pmenglund/codex-sdk-go/rpc"
+
+	"github.com/fpt/klein-cli/pkg/agent/domain"
 )
 
 // Config configures a Runner. Model/Effort come from klein's llm settings; the
 // rest from the optional "codex" settings block.
 type Config struct {
-	CodexPath      string         // path to the codex binary ("" → "codex" on PATH)
-	Model          string         // model, from llm.model ("" → codex default)
-	Effort         string         // reasoning effort, from llm.effort ("" → default)
-	ApprovalPolicy string         // "" → "never" (headless auto-approve)
-	SandboxMode    string         // "" → "workspace-write"
-	Cwd            string         // working directory for codex threads
-	MCPServers     map[string]any // codex mcp_servers table (see MCPServersConfig)
+	Tools          domain.ToolManager
+	MCPServers     map[string]any
+	CodexPath      string
+	Model          string
+	Effort         string
+	ApprovalPolicy string
+	SandboxMode    string
+	Cwd            string
 }
 
 // Runner wraps a single codex app-server process, shared across all klein
-// sessions in the host process. Each klein session maps to one codex thread
-// (RunTurn's threadID). Turns are serialized (one app-server; and the shared
-// tool stores assume a single writer).
+// sessions. Each session maps to one codex thread (RunTurn's threadID). Turns
+// are serialized (one process; and klein's tool stores assume a single writer).
 type Runner struct {
-	client *sdk.Codex
-	cfg    Config
-	mu     sync.Mutex
+	cfg      Config
+	client   *rpc.Client
+	started  map[string]bool
+	dynTools []map[string]any
+	mu       sync.Mutex
 }
 
-// NewRunner spawns the codex app-server. Close it to stop the process. It
-// requires the codex binary on PATH (or Config.CodexPath); auth and model
-// config are codex's own (the codex CLI login/config).
+const clientName = "klein"
+
+// NewRunner spawns the codex app-server, negotiates the experimentalApi
+// capability, and precomputes the dynamic-tool specs. Close it to stop the
+// process. Requires the codex binary on PATH (or Config.CodexPath); auth/model
+// are codex's own.
 func NewRunner(ctx context.Context, cfg Config) (*Runner, error) {
-	c, err := sdk.New(ctx, sdk.Options{
-		Spawn: sdk.SpawnOptions{
-			CodexPath: cfg.CodexPath,
-			Stderr:    os.Stderr,
-		},
-		// Headless: no human is present to approve command/file/permission
-		// requests, so accept them (the sandbox mode still bounds what codex can do).
-		ApprovalHandler: sdk.AutoApproveHandler{},
-	})
-	if err != nil {
-		return nil, fmt.Errorf("start codex app-server: %w", err)
+	path := cfg.CodexPath
+	if path == "" {
+		path = "codex"
 	}
-	return &Runner{client: c, cfg: cfg}, nil
+	// The spawn context governs process startup only; lifetime is tied to Close.
+	transport, err := rpc.SpawnStdio(context.WithoutCancel(ctx), path, []string{"app-server"}, os.Stderr)
+	if err != nil {
+		return nil, fmt.Errorf("spawn codex app-server: %w", err)
+	}
+
+	handler := &toolHandler{tools: cfg.Tools}
+	client := rpc.NewClient(transport, rpc.ClientOptions{RequestHandler: handler})
+
+	if _, err := client.Initialize(ctx, protocol.InitializeParams{
+		ClientInfo:   protocol.ClientInfo{Name: clientName, Version: "1.0"},
+		Capabilities: protocol.InitializeCapabilities{ExperimentalApi: true},
+	}); err != nil {
+		_ = client.Close()
+		return nil, fmt.Errorf("initialize codex app-server: %w", err)
+	}
+	if err := client.Notify(ctx, "initialized", nil); err != nil {
+		_ = client.Close()
+		return nil, fmt.Errorf("codex initialized notify: %w", err)
+	}
+
+	return &Runner{
+		client:   client,
+		cfg:      cfg,
+		dynTools: buildDynamicTools(cfg.Tools),
+		started:  make(map[string]bool),
+	}, nil
 }
 
-// RunTurn runs one turn against a codex thread. An empty threadID starts a new
-// thread; otherwise the thread is resumed. developerInstructions steers codex
-// (klein passes the active skill's prompt). Returns the thread id (freshly
-// created when threadID was empty) and the final assistant text.
+// RunTurn runs one turn against a codex thread and returns the thread id and the
+// final assistant text. An empty threadID (or one this process did not start)
+// begins a fresh thread with klein's dynamic tools registered — codex's
+// thread/resume cannot re-register dynamic tools, so a tool-enabled thread is
+// always one we started this run. developerInstructions (the active skill
+// prompt) steers codex.
 func (r *Runner) RunTurn(ctx context.Context, threadID, prompt, developerInstructions string) (string, string, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	th, err := r.openThread(ctx, threadID, developerInstructions)
+	if threadID == "" || !r.started[threadID] {
+		id, err := r.startThread(ctx, developerInstructions)
+		if err != nil {
+			return threadID, "", err
+		}
+		r.started[id] = true
+		threadID = id
+	}
+
+	resp, err := r.runTurn(ctx, threadID, prompt)
 	if err != nil {
 		return threadID, "", err
 	}
+	return threadID, resp, nil
+}
 
-	var opts *sdk.TurnOptions
+func (r *Runner) startThread(ctx context.Context, developerInstructions string) (string, error) {
+	params := map[string]any{
+		"cwd":            r.cfg.Cwd,
+		"approvalPolicy": r.approvalPolicy(),
+		"sandbox":        r.sandboxMode(),
+	}
+	if r.cfg.Model != "" {
+		params["model"] = r.cfg.Model
+	}
+	if developerInstructions != "" {
+		params["developerInstructions"] = developerInstructions
+	}
+	if len(r.dynTools) > 0 {
+		params["dynamicTools"] = r.dynTools
+	}
+	if len(r.cfg.MCPServers) > 0 {
+		params["config"] = map[string]any{"mcp_servers": r.cfg.MCPServers}
+	}
+
+	var resp struct {
+		ThreadID string `json:"threadId"`
+		Thread   struct {
+			ID string `json:"id"`
+		} `json:"thread"`
+	}
+	if err := r.client.Call(ctx, "thread/start", params, &resp); err != nil {
+		return "", fmt.Errorf("codex thread/start: %w", err)
+	}
+	id := resp.ThreadID
+	if id == "" {
+		id = resp.Thread.ID
+	}
+	if id == "" {
+		return "", errors.New("codex thread/start returned no thread id")
+	}
+	return id, nil
+}
+
+// runTurn starts a turn and drains notifications until the turn completes,
+// returning the last agent message text.
+func (r *Runner) runTurn(ctx context.Context, threadID, prompt string) (string, error) {
+	iter := r.client.SubscribeNotifications(0)
+	defer iter.Close()
+
+	turnParams := map[string]any{
+		"threadId": threadID,
+		"input":    []map[string]any{{keyType: keyText, keyText: prompt}},
+	}
 	if r.cfg.Effort != "" {
-		opts = &sdk.TurnOptions{Effort: sdk.ReasoningEffort(r.cfg.Effort)}
+		turnParams["effort"] = r.cfg.Effort
 	}
-	res, err := th.Run(ctx, prompt, opts)
-	if err != nil {
-		return th.ID(), "", fmt.Errorf("codex turn: %w", err)
+	if err := r.client.Call(ctx, "turn/start", turnParams, &json.RawMessage{}); err != nil {
+		return "", fmt.Errorf("codex turn/start: %w", err)
 	}
-	return th.ID(), res.FinalResponse, nil
-}
 
-func (r *Runner) openThread(ctx context.Context, threadID, devInstr string) (*sdk.Thread, error) {
-	if threadID == "" {
-		th, err := r.client.StartThread(ctx, sdk.ThreadStartOptions{
-			Model:                 r.cfg.Model,
-			Cwd:                   r.cfg.Cwd,
-			ApprovalPolicy:        r.approvalPolicy(),
-			SandboxPolicy:         r.sandbox(),
-			DeveloperInstructions: devInstr,
-			Config:                r.threadConfig(),
-		})
+	final := ""
+	for {
+		note, err := iter.Next(ctx)
 		if err != nil {
-			return nil, fmt.Errorf("start codex thread: %w", err)
+			return "", fmt.Errorf("codex notification stream: %w", err)
 		}
-		return th, nil
+		text, status := classifyNote(note, threadID)
+		if text != "" {
+			final = text
+		}
+		switch status {
+		case noteDone:
+			return final, nil
+		case noteFailed:
+			return final, fmt.Errorf("codex turn failed: %s", string(note.Raw))
+		default: // noteContinue
+		}
 	}
-	th, err := r.client.ResumeThread(ctx, sdk.ThreadResumeOptions{
-		ThreadID:              threadID,
-		Model:                 r.cfg.Model,
-		Cwd:                   r.cfg.Cwd,
-		ApprovalPolicy:        r.approvalPolicy(),
-		Sandbox:               r.sandbox(),
-		DeveloperInstructions: devInstr,
-		Config:                r.threadConfig(),
-	})
-	if err != nil {
-		return nil, fmt.Errorf("resume codex thread %s: %w", threadID, err)
-	}
-	return th, nil
 }
 
-func (r *Runner) threadConfig() map[string]any {
-	if len(r.cfg.MCPServers) == 0 {
-		return nil
+type noteStatus int
+
+const (
+	noteContinue noteStatus = iota
+	noteDone
+	noteFailed
+)
+
+// classifyNote returns any assistant text carried by the notification and
+// whether the turn is done/failed. Notifications for other threads are ignored
+// (the subscription is process-global).
+func classifyNote(note rpc.Notification, threadID string) (string, noteStatus) {
+	var p struct {
+		ThreadID string          `json:"threadId"`
+		Item     json.RawMessage `json:"item"`
 	}
-	return map[string]any{"mcp_servers": r.cfg.MCPServers}
+	_ = json.Unmarshal(note.Raw, &p)
+	if p.ThreadID != "" && p.ThreadID != threadID {
+		return "", noteContinue
+	}
+	switch note.Method {
+	case "item/completed":
+		if text, ok := extractText(p.Item); ok {
+			return text, noteContinue
+		}
+	case "turn/completed":
+		return "", noteDone
+	case "turn/failed", "error":
+		return "", noteFailed
+	}
+	return "", noteContinue
 }
 
 func (r *Runner) approvalPolicy() string {
 	if r.cfg.ApprovalPolicy != "" {
 		return r.cfg.ApprovalPolicy
 	}
-	return sdk.ApprovalPolicyNever
+	return "never"
 }
 
-func (r *Runner) sandbox() sdk.SandboxMode {
+func (r *Runner) sandboxMode() string {
 	if r.cfg.SandboxMode != "" {
-		return sdk.SandboxMode(r.cfg.SandboxMode)
+		return r.cfg.SandboxMode
 	}
-	return sdk.SandboxModeWorkspaceWrite
+	return "workspace-write"
 }
 
-// Close stops the codex app-server process. Safe to call on a nil Runner.
+// Close stops the codex app-server process. Safe on a nil Runner.
 func (r *Runner) Close() error {
 	if r == nil || r.client == nil {
 		return nil
 	}
-	return r.client.Close()
+	if err := r.client.Close(); err != nil {
+		return fmt.Errorf("close codex client: %w", err)
+	}
+	return nil
+}
+
+// extractText pulls the assistant text out of an item/completed payload's item.
+// Codex items carry the text either directly or nested one level under a variant
+// key (agent message).
+func extractText(raw json.RawMessage) (string, bool) {
+	if len(raw) == 0 {
+		return "", false
+	}
+	var direct struct {
+		Text string `json:"text"`
+	}
+	if json.Unmarshal(raw, &direct) == nil && direct.Text != "" {
+		return direct.Text, true
+	}
+	var wrapper map[string]json.RawMessage
+	if json.Unmarshal(raw, &wrapper) != nil || len(wrapper) != 1 {
+		return "", false
+	}
+	for _, inner := range wrapper {
+		var nested struct {
+			Text string `json:"text"`
+		}
+		if json.Unmarshal(inner, &nested) == nil && nested.Text != "" {
+			return nested.Text, true
+		}
+	}
+	return "", false
 }

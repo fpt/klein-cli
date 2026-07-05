@@ -479,7 +479,15 @@ func applyDefaults(settings *Settings) {
 	if settings.LLM.Backend == "" {
 		settings.LLM.Backend = defaults.LLM.Backend
 	}
-	if settings.LLM.Model == "" {
+	// codex owns its own model (via the codex CLI), so it must not inherit a
+	// chat-model default. The base Settings is seeded from GetDefaultSettings
+	// before the file is unmarshaled, so an omitted model surfaces here as the
+	// ollama default — clear that leak for codex (an explicit model is kept).
+	if settings.LLM.Backend == "codex" {
+		if settings.LLM.Model == defaults.LLM.Model {
+			settings.LLM.Model = ""
+		}
+	} else if settings.LLM.Model == "" {
 		settings.LLM.Model = defaults.LLM.Model
 	}
 	if settings.LLM.BaseURL == "" && settings.LLM.Backend == "ollama" {

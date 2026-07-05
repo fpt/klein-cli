@@ -11,6 +11,7 @@ import (
 // codex's mcp_servers table: stdio → command/args/env, url → url, disabled
 // servers dropped.
 func TestMCPServersConfig(t *testing.T) {
+	t.Parallel()
 	servers := []domain.MCPServerConfig{
 		{
 			Name:    "browser-sandbox",
@@ -43,6 +44,7 @@ func TestMCPServersConfig(t *testing.T) {
 // TestMCPServersConfigEmpty returns nil (not an empty map) when nothing enabled,
 // so ThreadStartOptions.Config stays unset.
 func TestMCPServersConfigEmpty(t *testing.T) {
+	t.Parallel()
 	if got := MCPServersConfig(nil); got != nil {
 		t.Errorf("expected nil for no servers, got %#v", got)
 	}

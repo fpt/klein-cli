@@ -348,10 +348,6 @@ klein claw                                    # default instance (~/.klein)
 klein claw --settings ~/work/settings.json    # isolated instance (its own base_dir)
 ```
 
-**Migration:** `klein claw migrate` folds a legacy `~/.klein/claw/config.json`
-into the `claw` section of `settings.json` and moves its
-`memory`/`sessions`/`schedules.json` into `base_dir`.
-
 ### Interactive CLI — `klein claw repl`
 
 `klein claw repl` opens an interactive terminal chat that shares claw's tools

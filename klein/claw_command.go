@@ -2,12 +2,10 @@ package main
 
 import (
 	"context"
-	"encoding/json"
 	"flag"
 	"fmt"
 	"os"
 	"os/signal"
-	"path/filepath"
 	"strings"
 	"syscall"
 
@@ -34,12 +32,10 @@ import (
 // `klein --serve` instead.
 func runClawCommand(args []string) int {
 	// Subcommands are detected before flag parsing so their own flags (e.g.
-	// `migrate --settings X`) parse — Go's flag package stops at the first
+	// `repl --settings X`) parse — Go's flag package stops at the first
 	// positional argument otherwise.
 	if len(args) > 0 {
 		switch args[0] {
-		case "migrate":
-			return clawMigrate(args[1:])
 		case "repl", "chat":
 			return runClawREPL(args[1:])
 		default:
@@ -141,7 +137,6 @@ func runClawCommand(args []string) int {
 const clawUsage = `Usage:
   klein claw [--settings <path>] [--agent-addr <addr>] [--serve-addr <addr>]
   klein claw repl [--settings <path>] [--skill <name>]
-  klein claw migrate [--settings <path>]
 
 Runs the messaging gateway. Configuration lives in the "claw" section of
 settings.json; sessions, memory, and the schedule store are derived from the
@@ -149,9 +144,7 @@ shared "base_dir" (default ~/.klein).
 
   repl     Interactive terminal chat sharing claw's tools (memory, schedules,
            MCP) and backend, with its own session. Runs alongside the gateway —
-           schedules/memory it changes are picked up via the shared base dir.
-  migrate  Fold a legacy ~/.klein/claw/config.json into settings.json and move
-           its memory/sessions/schedules into the base dir.`
+           schedules/memory it changes are picked up via the shared base dir.`
 
 // buildClawToolManagers assembles the MCP + memory + schedule tool managers the
 // claw agent exposes, mirroring `klein --serve`. The returned integration (nil
@@ -240,92 +233,5 @@ func runClawREPL(args []string) int {
 
 	fmt.Printf("klein claw — interactive (base dir: %s, skill: %s)\n", baseDir, *skillFlag)
 	app.StartInteractiveMode(ctx, a, *skillFlag)
-	return 0
-}
-
-// clawMigrate folds a legacy ~/.klein/claw/config.json into the claw section of
-// settings.json and relocates its state directories into the base dir.
-func clawMigrate(args []string) int {
-	fs := flag.NewFlagSet("claw migrate", flag.ContinueOnError)
-	settingsPathFlag := fs.String("settings", "", "Path to settings file to migrate into")
-	if err := fs.Parse(args); err != nil {
-		return 2
-	}
-	settingsPath := *settingsPathFlag
-
-	home, err := os.UserHomeDir()
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "Cannot resolve home directory: %v\n", err)
-		return 1
-	}
-	oldDir := filepath.Join(home, ".klein", "claw")
-	oldCfg := filepath.Join(oldDir, "config.json")
-
-	raw, err := os.ReadFile(oldCfg)
-	if err != nil {
-		fmt.Printf("No legacy config at %s — nothing to migrate.\n", oldCfg)
-		return 0
-	}
-
-	// Strip the retired path/heartbeat keys; keep only behavior in the claw block.
-	var m map[string]json.RawMessage
-	if err := json.Unmarshal(raw, &m); err != nil {
-		fmt.Fprintf(os.Stderr, "Legacy config %s is not valid JSON: %v\n", oldCfg, err)
-		return 1
-	}
-	delete(m, "sessions_dir")
-	delete(m, "schedules_file")
-	delete(m, "heartbeat")
-	if mem, ok := m["memory"]; ok {
-		var mm map[string]json.RawMessage
-		if json.Unmarshal(mem, &mm) == nil {
-			delete(mm, "base_dir")
-			if len(mm) == 0 {
-				delete(m, "memory")
-			} else if b, err := json.Marshal(mm); err == nil {
-				m["memory"] = b
-			}
-		}
-	}
-	clawBlock, err := json.Marshal(m)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "Failed to build claw block: %v\n", err)
-		return 1
-	}
-
-	settings, err := config.LoadSettings(settingsPath)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "Failed to load settings: %v\n", err)
-		return 1
-	}
-	settings.Claw = clawBlock
-	if err := settings.Save(); err != nil {
-		fmt.Fprintf(os.Stderr, "Failed to save settings: %v\n", err)
-		return 1
-	}
-	fmt.Println("Migrated claw config into settings.json (\"claw\" section).")
-
-	// Relocate state into the base dir when the destination is free.
-	base := settings.ResolvedBaseDir()
-	moves := []struct{ from, to string }{
-		{filepath.Join(oldDir, "memory"), filepath.Join(base, "memory")},
-		{filepath.Join(oldDir, "sessions"), filepath.Join(base, "sessions")},
-		{filepath.Join(oldDir, "schedules.json"), filepath.Join(base, "schedules.json")},
-	}
-	for _, mv := range moves {
-		if _, err := os.Stat(mv.from); err != nil {
-			continue
-		}
-		if _, err := os.Stat(mv.to); err == nil {
-			fmt.Printf("  Skipped %s → %s (destination exists; move manually)\n", mv.from, mv.to)
-			continue
-		}
-		if err := os.Rename(mv.from, mv.to); err != nil {
-			fmt.Printf("  Could not move %s → %s: %v\n", mv.from, mv.to, err)
-			continue
-		}
-		fmt.Printf("  Moved %s → %s\n", mv.from, mv.to)
-	}
-	fmt.Printf("\nReview the migrated Discord token in %s and delete %s once verified.\n", settingsPath, oldDir)
 	return 0
 }

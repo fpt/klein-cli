@@ -102,8 +102,11 @@ while still providing the frontend (repl/claw), memory-context injection,
 session↔thread mapping, and run-logs. Requires the **`codex` binary on `PATH`**
 (auth/model come from the codex CLI's own config; `llm.model`/`llm.effort` map
 onto the thread when set). klein's configured external MCP servers are passed
-through to codex; klein's native tools (memory/schedule) are **not** available
-inside a codex turn in this phase (that's Phase 2 — an in-process MCP bridge).
+through to codex, and klein's **native tools (memory + schedule) are registered
+with codex as experimental `dynamicTools`** — codex calls back to klein
+in-process over the app-server JSON-RPC connection, hitting the same live tool
+managers (so a codex turn can read/curate memory and manage schedules). This
+needs a codex build with `dynamicTools`/`experimentalApi` support.
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|

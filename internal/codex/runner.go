@@ -80,12 +80,33 @@ func NewRunner(ctx context.Context, cfg Config) (*Runner, error) {
 		return nil, fmt.Errorf("codex initialized notify: %w", err)
 	}
 
+	// Eagerly validate that codex is usable (authenticated) so a login/config
+	// failure surfaces at klein startup, not on the user's first prompt.
+	if err := probeReady(ctx, client); err != nil {
+		_ = client.Close()
+		return nil, err
+	}
+
 	return &Runner{
 		client:   client,
 		cfg:      cfg,
 		dynTools: buildDynamicTools(cfg.Tools),
 		started:  make(map[string]bool),
 	}, nil
+}
+
+// probeReady checks that the codex app-server is authenticated. codex's
+// initialize succeeds even when logged out, so without this the first failure
+// only appears on the first turn.
+func probeReady(ctx context.Context, client *rpc.Client) error {
+	var resp protocol.GetAccountResponse
+	if err := client.Call(ctx, "account/read", protocol.GetAccountParams{}, &resp); err != nil {
+		return fmt.Errorf("codex readiness check (account/read) failed: %w", err)
+	}
+	if resp.RequiresOpenaiAuth && resp.Account == nil {
+		return errors.New("codex is not logged in — run `codex login` (or configure an API key for the codex CLI)")
+	}
+	return nil
 }
 
 // RunTurn runs one turn against a codex thread and returns the thread id and the

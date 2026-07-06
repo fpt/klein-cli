@@ -510,7 +510,14 @@ func maybeStartCodex(ctx context.Context, settings *config.Settings, workingDir 
 		return nil, nil
 	}
 	logger.Info("Starting codex app-server backend", "model", settings.LLM.Model)
-	return codex.NewRunnerFromSettings(ctx, settings, workingDir)
+	// NewRunnerFromSettings spawns the app-server and validates it is
+	// authenticated, so a login/config failure surfaces here at startup.
+	runner, err := codex.NewRunnerFromSettings(ctx, settings, workingDir)
+	if err != nil {
+		return nil, err
+	}
+	logger.Info("Codex backend ready")
+	return runner, nil
 }
 
 // hasEnabledMCPServers checks if there are any enabled MCP servers

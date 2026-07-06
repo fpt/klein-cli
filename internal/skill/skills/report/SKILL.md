@@ -23,6 +23,12 @@ Task: $ARGUMENTS
   the schedule that already fired — produce the underlying report now.
 - If a data source fails, try an alternative tool; if all fail, deliver what you
   have and note the gap in one line. Never respond with only an apology.
+- Report faithfully: use only data you actually gathered. Never fabricate
+  numbers, quotes, or sources; if a figure is estimated or a source failed, say
+  so in one line. Do not present unverified data as fact.
+- You have no user to confirm with and are only producing a report — do NOT take
+  risky or outward-facing actions (deleting/modifying files or state, sending
+  messages elsewhere, force-pushing). Gather and report; don't change systems.
 
 ## How to gather data
 

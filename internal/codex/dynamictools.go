@@ -20,15 +20,75 @@ const (
 	jsonTypeObject  = "object"
 	keyText         = "text"
 	keyType         = "type"
+
+	decisionAccept  = "accept"  // approve a command/file-change request
+	decisionDecline = "decline" // deny it; codex continues the turn
 )
 
-// toolHandler services codex's experimental dynamic-tool callbacks. It embeds
-// AutoApproveHandler (all the approval methods) and overrides ItemToolCall to
-// dispatch into klein's tool managers — so a codex turn reaches klein's native
-// tools over the same stdio JSON-RPC connection (no MCP server).
+// ApprovalRequest describes an action codex is asking permission to perform
+// (used when approval_policy is "on-request"). Kind is a short verb phrase
+// ("run a command", "apply file changes"); Summary is the specifics.
+type ApprovalRequest struct {
+	Kind    string
+	Summary string
+}
+
+// Approver decides an approval request. Return true to accept, false to decline.
+type Approver func(ApprovalRequest) bool
+
+// toolHandler services codex's server→client callbacks. It embeds
+// AutoApproveHandler (the default accept-everything approval methods) and
+// overrides ItemToolCall (dispatch klein's dynamic tools) plus the command/file
+// approval methods. When approver is nil every request is accepted (headless);
+// when set (interactive/on-request) it is asked.
 type toolHandler struct {
 	sdk.AutoApproveHandler
-	tools domain.ToolManager // klein tools exposed as dynamic tools (may be nil)
+	tools    domain.ToolManager // klein tools exposed as dynamic tools (may be nil)
+	approver Approver           // nil = auto-accept
+}
+
+// approve returns true when the request should proceed. Nil approver = accept.
+func (h *toolHandler) approve(req ApprovalRequest) bool {
+	if h.approver == nil {
+		return true
+	}
+	return h.approver(req)
+}
+
+func ptrStr(s *string) string {
+	if s == nil {
+		return ""
+	}
+	return *s
+}
+
+// ItemCommandExecutionRequestApproval is called when codex wants to run a shell
+// command and approval_policy requires a decision.
+func (h *toolHandler) ItemCommandExecutionRequestApproval(
+	_ context.Context, p protocol.CommandExecutionRequestApprovalParams,
+) (*protocol.CommandExecutionRequestApprovalResponse, error) {
+	summary := ptrStr(p.Command)
+	if cwd := ptrStr(p.Cwd); cwd != "" {
+		summary += "  (in " + cwd + ")"
+	}
+	if h.approve(ApprovalRequest{Kind: "run a command", Summary: summary}) {
+		return &protocol.CommandExecutionRequestApprovalResponse{Decision: decisionAccept}, nil
+	}
+	return &protocol.CommandExecutionRequestApprovalResponse{Decision: decisionDecline}, nil
+}
+
+// ItemFileChangeRequestApproval is called when codex wants to apply file edits.
+func (h *toolHandler) ItemFileChangeRequestApproval(
+	_ context.Context, p protocol.FileChangeRequestApprovalParams,
+) (*protocol.FileChangeRequestApprovalResponse, error) {
+	summary := "apply proposed file changes"
+	if p.Reason != nil && *p.Reason != "" {
+		summary = *p.Reason
+	}
+	if h.approve(ApprovalRequest{Kind: "edit files", Summary: summary}) {
+		return &protocol.FileChangeRequestApprovalResponse{Decision: decisionAccept}, nil
+	}
+	return &protocol.FileChangeRequestApprovalResponse{Decision: decisionDecline}, nil
 }
 
 func (h *toolHandler) ItemToolCall(

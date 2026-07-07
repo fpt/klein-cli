@@ -111,7 +111,7 @@ needs a codex build with `dynamicTools`/`experimentalApi` support.
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
 | `codex_path` | string | `codex` (PATH) | Path to the codex binary |
-| `approval_policy` | string | `never` | `never` / `on-failure` / `on-request` / `untrusted` (headless auto-approves) |
+| `approval_policy` | string | *(mode-dependent)* | `never` / `on-failure` / `on-request` / `untrusted`. **Default depends on the surface**: the interactive repl (`klein claw repl`, `klein -b codex`) uses `on-request` and prompts you (y/N) before codex runs a command or edits files; headless surfaces (the `klein claw` gateway, `--serve`, one-shot) use `never` and auto-approve since no one is present. Set this explicitly to override the mode default. |
 | `sandbox_mode` | string | `workspace-write` | `read-only` / `workspace-write` / `danger-full-access` |
 
 ```json

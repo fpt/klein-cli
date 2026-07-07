@@ -44,6 +44,34 @@ go install github.com/fpt/klein-cli/klein@latest
 **For Google Gemini:**
 - Set `GEMINI_API_KEY` environment variable
 
+**For OpenAI Codex (`-b codex`, agentic backend):**
+- Install the [`codex` CLI](https://github.com/openai/codex) and make sure `codex` is on your `PATH`
+- Log in once: `codex login` (ChatGPT account or API key). klein uses codex's own auth/model — no klein env key. A login/config problem surfaces at klein startup.
+- Model comes from codex (or set `llm.model`); reasoning effort from `llm.effort`.
+
+> **Linux sandbox note:** codex sandboxes command/file execution with **bubblewrap** (`bwrap`), which needs the kernel to allow **unprivileged user namespaces**. Installing `bwrap` is not enough — many hardened kernels and Ubuntu 23.10+/24.04 (via AppArmor) block userns, and you'll see:
+> `codex_app_server: Codex's Linux sandbox uses bubblewrap and needs access to create user namespaces.`
+>
+> Fix one of two ways:
+>
+> 1. **Allow unprivileged user namespaces** (keeps codex sandboxed — recommended):
+>    ```bash
+>    # Ubuntu 23.10+/24.04 (AppArmor gate)
+>    sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+>    echo 'kernel.apparmor_restrict_unprivileged_userns=0' | sudo tee /etc/sysctl.d/60-userns.conf
+>    # Debian / older Ubuntu
+>    sudo sysctl -w kernel.unprivileged_userns_clone=1
+>    echo 'kernel.unprivileged_userns_clone=1' | sudo tee /etc/sysctl.d/60-userns.conf
+>    sudo sysctl --system
+>    ```
+>    Verify: `bwrap --ro-bind / / --unshare-user echo ok` prints `ok`.
+>
+> 2. **Skip codex's OS sandbox** (quick unblock — no isolation) via settings.json:
+>    ```json
+>    { "llm": { "backend": "codex" }, "codex": { "sandbox_mode": "danger-full-access" } }
+>    ```
+>    Codex then runs commands with no process isolation, so prefer the interactive `klein claw repl` (which prompts for approval before each command/file edit) over the headless gateway when using this.
+
 ### Basic Usage
 
 **Interactive Mode (default):**

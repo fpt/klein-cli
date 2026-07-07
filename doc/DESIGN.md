@@ -361,7 +361,58 @@ CLI, the gateway, and the REPL agree on locations:
 
 ---
 
-## 10. Where things live
+## 10. The reason → verify → evaluate loop (prompt design principle)
+
+klein's quality on non-trivial and research tasks comes from the model running a
+**hypothesis → verification → evaluation** cycle rather than answering in one
+shot: propose an action, treat its result as *evidence*, judge whether that
+evidence actually proves the claim, and continue if it doesn't. This mirrors
+OpenAI Codex, whose edge on research/debugging comes from the same discipline.
+It is a property we deliberately maintain, so keep it intact when editing prompts.
+
+Three seams enforce it — two in code (model-agnostic, apply to every skill) and
+one in the skill prompts:
+
+- **The ReAct loop feeds every tool result back for re-evaluation** (§4d). The
+  loop itself is the observe→act→observe cycle. `IterationAdvisor`
+  (`internal/app/iteration_advisor.go`) sharpens the *evaluate* step: after a tool
+  result it injects an ephemeral nudge to treat the result as evidence — does it
+  confirm or contradict the expectation? revise rather than repeat on a
+  contradiction; conclude only when the evidence is sufficient. (Ephemeral so the
+  static tool list stays cacheable — see §5.)
+- **`/goal` runs an evidence-driven completion audit** (`internal/app/goal.go`).
+  After each turn `evaluateGoal` treats completion as *unproven*: it requires
+  authoritative evidence (command output, test results, file contents — not
+  intentions), matches the evidence to the goal's scope, and counts
+  uncertain/indirect evidence as *not met*. The continuation directive then tells
+  the agent to work from current-state evidence rather than assuming earlier steps
+  succeeded. (Its output stays the two-line `MET:`/`REASON:` contract that
+  `parseGoalEvaluation` and its tests depend on.)
+- **Skill prompts carry the cycle explicitly.** The research skills each end with
+  a verification gate — `research-stock` "Verify before you report" (price and
+  news are separate evidence; a headline is a hypothesis to confirm against price
+  action), `report` "Verify before you finalize" (every figure traces to data
+  gathered this run; corroborate key numbers), `web` "Verify & synthesize" (each
+  claim backed by fetched content; follow links to fill gaps rather than guess).
+  The `code` skill's "Verifying & reporting" and "When stuck" sections do the same
+  for coding.
+
+**When you modify prompts, preserve:**
+1. **State a hypothesis before acting** — don't guess or assert; plan the check.
+2. **Verify against authoritative evidence** — run the test/command, read the
+   file, fetch the second source; prefer specific checks before broad claims.
+3. **Evaluate honestly** — treat weak, indirect, or single-source evidence as not
+   proven; revise the approach on a contradiction instead of repeating the call.
+4. **Report faithfully** — never claim success when checks fail or a figure is
+   unverified; when checks pass, say so plainly without hedging.
+
+If you change the `/goal` evaluator, keep the `MET:`/`REASON:` two-line output
+(`internal/app/goal.go`, `loop_goal_test.go`). If you change the `IterationAdvisor`
+nudges, keep them ephemeral so Anthropic prompt caching still hits (§5).
+
+---
+
+## 11. Where things live
 
 | Concern | Package / file |
 |---------|----------------|

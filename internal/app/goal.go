@@ -61,7 +61,7 @@ func runGoal(ctx context.Context, a *Agent, skillName, args string) {
 	fmt.Fprintf(w, "  Working toward it (max %d turns; Ctrl+C to stop)...\n", maxTurns)
 
 	// The first directive is the condition itself.
-	directive := fmt.Sprintf("Work toward this goal: %s\n\nTake the next concrete step now.", condition)
+	directive := fmt.Sprintf("Work toward this goal: %s\n\nTake the next concrete step now, and verify each step against the actual state (run the command, test, or read the file) rather than assuming it worked.", condition)
 	start := time.Now()
 
 	for turn := 1; turn <= maxTurns; turn++ {
@@ -84,7 +84,7 @@ func runGoal(ctx context.Context, a *Agent, skillName, args string) {
 		}
 		fmt.Fprintf(w, "◎ Not yet: %s\n", reason)
 		// Feed the evaluator's reason back as guidance for the next turn.
-		directive = fmt.Sprintf("Continue working toward this goal: %s\n\nThe goal is not met yet: %s\nTake the next concrete step now.", condition, reason)
+		directive = fmt.Sprintf("Continue working toward this goal: %s\n\nThe goal is not met yet: %s\n\nWork from evidence: inspect the current state (run the check, read the file, run the test) rather than assuming earlier steps succeeded. Take the next concrete step now, and verify its result before moving on.", condition, reason)
 	}
 
 	fmt.Fprintf(w, "\n◎ Goal stopped: reached the %d-turn limit without confirming completion.\n", maxTurns)
@@ -99,7 +99,7 @@ const goalEvalReason = "evaluator response could not be parsed; continuing"
 func (a *Agent) evaluateGoal(ctx context.Context, condition string) (bool, string) {
 	transcript := a.recentTranscript(16)
 
-	prompt := fmt.Sprintf(`You are a strict completion evaluator. Decide whether the GOAL below is satisfied based ONLY on what the assistant has already demonstrated in the TRANSCRIPT. You cannot run commands or read files yourself.
+	prompt := fmt.Sprintf(`You are a strict completion evaluator. Decide whether the GOAL below is satisfied based ONLY on what the assistant has already demonstrated in the TRANSCRIPT. You cannot run commands or read files yourself, so the transcript is your only evidence.
 
 GOAL:
 %s
@@ -107,11 +107,16 @@ GOAL:
 TRANSCRIPT (most recent turns):
 %s
 
+Audit the evidence before deciding:
+- Treat completion as unproven until the transcript shows authoritative evidence for every part of the goal — actual command output, test results, or file contents, not intentions, plans, or claims of success.
+- Match the evidence to the goal's scope: a narrow check (one test, one file) does not prove a broad claim.
+- Treat uncertain, indirect, or merely-plausible evidence as NOT met.
+
 Respond with EXACTLY two lines and nothing else:
 MET: yes
 REASON: <one short sentence>
 
-Use "MET: yes" only if the transcript clearly demonstrates the goal is satisfied; otherwise "MET: no".`, condition, transcript)
+Use "MET: yes" only if the transcript proves every part of the goal is satisfied; otherwise "MET: no".`, condition, transcript)
 
 	resp, err := a.GetLLMClient().Chat(ctx, []message.Message{
 		message.NewChatMessage(message.MessageTypeUser, prompt),

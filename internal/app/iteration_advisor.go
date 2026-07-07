@@ -81,7 +81,7 @@ func (a *IterationAdvisor) InjectMessage(state domain.State, curIter, iterLimit 
 		if len(lastMsg.Images()) > 0 {
 			messages = append(messages, "You received a tool result with visual content (images). IMPORTANT: You must analyze the images and provide a comprehensive visual analysis based on what you can see in the images. Focus on the user's original request and describe the visual content thoroughly. Do not call additional tools - provide your final analysis based on the visual information.")
 		} else {
-			messages = append(messages, "You received a tool result. Analyze it and decide next steps to respond to original user request.")
+			messages = append(messages, "You received a tool result. Treat it as evidence: does it confirm or contradict what you expected? If it contradicts your assumption, revise your approach instead of repeating the same call. Then decide the next step toward the user's original request — gather what is still unverified, or conclude if the evidence is now sufficient.")
 
 			content := lastMsg.Content()
 			if strings.Contains(content, "All validation checks passed") || strings.Contains(content, "Code compiles successfully") {

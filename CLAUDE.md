@@ -724,6 +724,8 @@ state.AddMessage(summaryMsg)
 
 The system uses SKILL.md files (YAML frontmatter + markdown content) to define skills. Skills are loaded from multiple sources with a priority-based override system.
 
+> **Editing prompts?** Preserve the reason → verify → evaluate loop: state a hypothesis before acting, verify against authoritative evidence, evaluate honestly (weak/single-source evidence is not proof), and report faithfully. This is a deliberate design property — see [doc/DESIGN.md §10](doc/DESIGN.md) before changing skill prompts, `iteration_advisor.go`, or the `/goal` evaluator in `goal.go`.
+
 **Skill Format:**
 Each skill is a SKILL.md file containing YAML frontmatter and markdown body:
 

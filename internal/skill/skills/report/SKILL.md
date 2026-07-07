@@ -41,6 +41,16 @@ Task: $ARGUMENTS
 - More tools (including MCP servers) can be loaded with `ToolSearch` — search
   before concluding a capability is missing.
 
+## Verify before you finalize
+
+- Every figure or claim must trace to data you actually gathered this run. Before
+  finalizing, re-read the deliverable and drop or label anything you cannot back
+  with a retrieved number or source.
+- When a number matters, confirm it with a second tool or source. If two sources
+  disagree, report the discrepancy rather than silently picking one.
+- Match confidence to the evidence: hedge estimates and single-source claims;
+  state figures you verified plainly, with their date/range.
+
 ## Output format
 
 - The response body IS the report — it is posted verbatim to the destination

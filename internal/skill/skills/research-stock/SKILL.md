@@ -23,6 +23,18 @@ Request: $ARGUMENTS
 4. `MarketNews` (optionally filtered) for the themes driving it; `WebFetch` a
    headline link when a detail matters.
 
+## Verify before you report
+
+- Price and news are separate evidence — check they agree. Treat a headline as a
+  hypothesis for the move, then confirm it against the actual price action from
+  `MarketHistory` before stating it as the driver. If they don't line up, say so
+  instead of repeating the headline.
+- Be cautious with causation: with a single source, write "coincided with" rather
+  than "caused". Corroborate a claimed driver with the price move or a second
+  source before asserting it.
+- Report only figures you actually retrieved, each with its date/range. If a
+  number couldn't be confirmed, label it or omit it — never fill a gap with a guess.
+
 ## Report format (mobile-friendly, < 2000 chars)
 
 - **Price & move**: latest price, day change, and the period change (state the range).

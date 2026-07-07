@@ -13,12 +13,12 @@ Working Directory: {{workingDir}}
 ## Workflow
 
 1. **Fetch the page** with WebFetch to get HTML content as markdown
-2. **Analyze the content** against the user's prompt — identify relevant text, links, images, and PDF references
+2. **Analyze the content** against the user's prompt — treat the prompt as the question to answer, then look for text, links, images, and PDF references that confirm or contradict a candidate answer
 3. **Follow up** on relevant resources:
    - **Images**: WebFetch the image URL directly (returns base64 for vision analysis)
    - **PDFs**: Download with WebFetch, then use PDFInfo and PDFRead to extract content. Use PDFExtractImages for image-based PDFs.
    - **Linked pages**: WebFetch additional URLs if needed for context
-4. **Synthesize** findings into a clear answer
+4. **Verify & synthesize** — confirm each claim in your answer is supported by content you actually fetched. If a detail is missing, follow a link or search again rather than guessing; note any gap or conflict rather than papering over it
 
 ## Tool Usage
 
@@ -38,5 +38,6 @@ Working Directory: {{workingDir}}
 - Keep responses focused on what the user asked. Don't dump raw content; summarize and extract relevant parts.
 - Use TodoWrite for multi-step research tasks to track progress
 - Cite sources with URLs when presenting findings
+- Verify before you conclude: don't assert anything the fetched sources don't support. If the evidence is thin, single-source, or conflicting, say so instead of presenting it as settled.
 
 $ARGUMENTS

@@ -252,7 +252,7 @@ func main() {
 		}
 
 		// Codex backend: one shared app-server process for all sessions.
-		codexRunner, err := maybeStartCodex(ctx, settings, workingDirectory, logger)
+		codexRunner, err := maybeStartCodex(ctx, settings, workingDirectory, logger, false)
 		if err != nil {
 			logger.Error("Failed to start codex backend", "error", err)
 			os.Exit(1)
@@ -274,7 +274,8 @@ func main() {
 	a := app.NewAgentWithOptions(llmClient, workingDirectory, mcpToolManagers, settings, logger, out, skipSessionRestore, isInteractiveMode, fsRepo)
 
 	// Codex backend for interactive/one-shot CLI (plain `klein -b codex`).
-	if codexRunner, err := maybeStartCodex(ctx, settings, workingDirectory, logger); err != nil {
+	// Only the interactive REPL prompts for approvals; one-shot/file mode is headless.
+	if codexRunner, err := maybeStartCodex(ctx, settings, workingDirectory, logger, isInteractiveMode); err != nil {
 		logger.Error("Failed to start codex backend", "error", err)
 		os.Exit(1)
 	} else if codexRunner != nil {
@@ -505,19 +506,54 @@ func loadPluginsFromFlags(marketplace string, pluginDirs []string, logger *pkgLo
 // maybeStartCodex spawns the codex app-server when llm.backend == "codex",
 // returning nil (no error) for every other backend. The returned Runner is
 // shared across sessions and must be Closed by the caller.
-func maybeStartCodex(ctx context.Context, settings *config.Settings, workingDir string, logger *pkgLogger.Logger) (*codex.Runner, error) {
+func maybeStartCodex(ctx context.Context, settings *config.Settings, workingDir string, logger *pkgLogger.Logger, interactive bool) (*codex.Runner, error) {
 	if settings.LLM.Backend != "codex" {
 		return nil, nil
 	}
 	logger.Info("Starting codex app-server backend", "model", settings.LLM.Model)
+	// Approval mode depends on the surface: the interactive repl uses
+	// "on-request" and prompts the user; headless modes (claw gateway, --serve,
+	// one-shot) auto-accept ("never"). An explicit codex.approval_policy overrides.
+	opts := codex.RunnerOptions{ApprovalPolicy: "never"}
+	if interactive {
+		opts = codex.RunnerOptions{ApprovalPolicy: "on-request", Approver: terminalApprover()}
+	}
 	// NewRunnerFromSettings spawns the app-server and validates it is
 	// authenticated, so a login/config failure surfaces here at startup.
-	runner, err := codex.NewRunnerFromSettings(ctx, settings, workingDir)
+	runner, err := codex.NewRunnerFromSettings(ctx, settings, workingDir, opts)
 	if err != nil {
 		return nil, err
 	}
 	logger.Info("Codex backend ready")
 	return runner, nil
+}
+
+// terminalApprover prompts the user (y/N) for codex on-request approvals.
+// It reads a line from stdin byte-by-byte so it doesn't buffer ahead of the
+// REPL's readline (the two never read concurrently — the approver only runs
+// mid-turn, while readline is idle).
+func terminalApprover() codex.Approver {
+	return func(req codex.ApprovalRequest) bool {
+		fmt.Printf("\n🔐 codex wants to %s:\n    %s\nApprove? [y/N] ", req.Kind, req.Summary)
+		var b []byte
+		buf := make([]byte, 1)
+		for {
+			n, err := os.Stdin.Read(buf)
+			if n > 0 {
+				if buf[0] == '\n' {
+					break
+				}
+				if buf[0] != '\r' {
+					b = append(b, buf[0])
+				}
+			}
+			if err != nil {
+				break
+			}
+		}
+		ans := strings.ToLower(strings.TrimSpace(string(b)))
+		return ans == "y" || ans == "yes"
+	}
 }
 
 // hasEnabledMCPServers checks if there are any enabled MCP servers

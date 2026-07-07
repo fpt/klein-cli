@@ -97,7 +97,7 @@ func runClawCommand(args []string) int {
 		if codexWorkingDir == "" {
 			codexWorkingDir = "."
 		}
-		codexRunner, err := maybeStartCodex(ctx, settings, codexWorkingDir, logger)
+		codexRunner, err := maybeStartCodex(ctx, settings, codexWorkingDir, logger, false)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "Failed to start codex backend: %v\n", err)
 			return 1
@@ -247,8 +247,8 @@ func runClawREPL(args []string) int {
 	fsRepo := infra.NewOSFilesystemRepository()
 	a := app.NewAgentWithOptions(llmClient, workingDir, mcpToolManagers, settings, logger, out, false, true, fsRepo)
 
-	// Codex backend for the interactive claw REPL.
-	if codexRunner, err := maybeStartCodex(ctx, settings, workingDir, logger); err != nil {
+	// Codex backend for the interactive claw REPL — prompts for on-request approvals.
+	if codexRunner, err := maybeStartCodex(ctx, settings, workingDir, logger, true); err != nil {
 		fmt.Fprintf(os.Stderr, "Failed to start codex backend: %v\n", err)
 		return 1
 	} else if codexRunner != nil {

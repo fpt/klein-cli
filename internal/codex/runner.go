@@ -29,6 +29,7 @@ import (
 type Config struct {
 	Tools          domain.ToolManager
 	MCPServers     map[string]any
+	Approver       Approver // decides on-request approvals (nil = auto-accept, for headless)
 	CodexPath      string
 	Model          string
 	Effort         string
@@ -65,7 +66,7 @@ func NewRunner(ctx context.Context, cfg Config) (*Runner, error) {
 		return nil, fmt.Errorf("spawn codex app-server: %w", err)
 	}
 
-	handler := &toolHandler{tools: cfg.Tools}
+	handler := &toolHandler{tools: cfg.Tools, approver: cfg.Approver}
 	client := rpc.NewClient(transport, rpc.ClientOptions{RequestHandler: handler})
 
 	if _, err := client.Initialize(ctx, protocol.InitializeParams{

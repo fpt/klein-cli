@@ -251,37 +251,55 @@ func main() {
 			sessDir = settings.SessionsDir()
 		}
 
-		// Codex backend: one shared app-server process for all sessions.
-		codexRunner, err := maybeStartCodex(ctx, settings, workingDirectory, logger, false)
-		if err != nil {
-			logger.Error("Failed to start codex backend", "error", err)
+		// Codex backend: one shared app-server process for all sessions (headless).
+		codexRunner, startErr := codex.Start(
+			ctx, settings, workingDirectory, logger, codex.RunnerOptions{ApprovalPolicy: codex.ApprovalNever},
+		)
+		if startErr != nil {
+			logger.Error("Failed to start codex backend", "error", startErr)
 			os.Exit(1)
 		}
-		var codexBackend app.CodexBackend
+		var agentBackend domain.AgentBackend
 		if codexRunner != nil {
-			codexBackend = codexRunner
+			agentBackend = codex.NewSharedBackend(codexRunner)
 			defer codexRunner.Close()
 		}
 
 		logger.Info("Starting Connect-gRPC server", "addr", *serveAddr)
-		if err := connectserver.StartServer(ctx, *serveAddr, settings, mcpToolManagers, logger, sessDir, codexBackend); err != nil {
-			logger.Error("Server failed", "error", err)
+		if serveErr := connectserver.StartServer(
+			ctx, *serveAddr, settings, mcpToolManagers, logger, sessDir, agentBackend,
+		); serveErr != nil {
+			logger.Error("Server failed", "error", serveErr)
 			os.Exit(1)
 		}
 		return
 	}
 
-	a := app.NewAgentWithOptions(llmClient, workingDirectory, mcpToolManagers, settings, logger, out, skipSessionRestore, isInteractiveMode, fsRepo)
-
 	// Codex backend for interactive/one-shot CLI (plain `klein -b codex`).
 	// Only the interactive REPL prompts for approvals; one-shot/file mode is headless.
-	if codexRunner, err := maybeStartCodex(ctx, settings, workingDirectory, logger, isInteractiveMode); err != nil {
-		logger.Error("Failed to start codex backend", "error", err)
-		os.Exit(1)
-	} else if codexRunner != nil {
-		a.SetCodexBackend(codexRunner)
-		defer codexRunner.Close()
+	// codex.Select returns nil for every non-codex backend, so the factory just
+	// runs the ReAct loop as usual.
+	codexOpts := codex.RunnerOptions{ApprovalPolicy: codex.ApprovalNever}
+	if isInteractiveMode {
+		codexOpts = codex.RunnerOptions{ApprovalPolicy: codex.ApprovalOnRequest, Approver: terminalApprover()}
 	}
+	a, cleanup, err := app.NewAgentWithOptions(ctx, app.AgentOptions{
+		Settings:           settings,
+		WorkingDir:         workingDirectory,
+		MCPToolManagers:    mcpToolManagers,
+		Logger:             logger,
+		Out:                out,
+		FsRepo:             fsRepo,
+		SkipSessionRestore: skipSessionRestore,
+		IsInteractiveMode:  isInteractiveMode,
+		LLMClient:          llmClient,
+		AgentBackend:       codex.Select(settings, logger, codexOpts),
+	})
+	if err != nil {
+		logger.Error("Failed to create agent", "error", err)
+		os.Exit(1)
+	}
+	defer cleanup()
 
 	// Register loaded plugins with the agent so its skill catalog, command
 	// dispatcher, and agent loader can see them.
@@ -501,31 +519,6 @@ func loadPluginsFromFlags(marketplace string, pluginDirs []string, logger *pkgLo
 	}
 
 	return out
-}
-
-// maybeStartCodex spawns the codex app-server when llm.backend == "codex",
-// returning nil (no error) for every other backend. The returned Runner is
-// shared across sessions and must be Closed by the caller.
-func maybeStartCodex(ctx context.Context, settings *config.Settings, workingDir string, logger *pkgLogger.Logger, interactive bool) (*codex.Runner, error) {
-	if settings.LLM.Backend != "codex" {
-		return nil, nil
-	}
-	logger.Info("Starting codex app-server backend", "model", settings.LLM.Model)
-	// Approval mode depends on the surface: the interactive repl uses
-	// "on-request" and prompts the user; headless modes (claw gateway, --serve,
-	// one-shot) auto-accept ("never"). An explicit codex.approval_policy overrides.
-	opts := codex.RunnerOptions{ApprovalPolicy: "never"}
-	if interactive {
-		opts = codex.RunnerOptions{ApprovalPolicy: "on-request", Approver: terminalApprover()}
-	}
-	// NewRunnerFromSettings spawns the app-server and validates it is
-	// authenticated, so a login/config failure surfaces here at startup.
-	runner, err := codex.NewRunnerFromSettings(ctx, settings, workingDir, opts)
-	if err != nil {
-		return nil, err
-	}
-	logger.Info("Codex backend ready")
-	return runner, nil
 }
 
 // terminalApprover prompts the user (y/N) for codex on-request approvals.

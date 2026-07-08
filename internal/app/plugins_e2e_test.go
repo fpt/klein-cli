@@ -1,6 +1,7 @@
 package app
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"testing"
@@ -11,14 +12,6 @@ import (
 	"github.com/fpt/klein-cli/pkg/agent/domain"
 	pkgLogger "github.com/fpt/klein-cli/pkg/logger"
 )
-
-// stubLLM is a no-op LLM that satisfies domain.LLM. We only need the agent
-// to *construct* — no actual chat is performed in these tests.
-type stubLLM struct{}
-
-func (stubLLM) Chat(_ any, _ any, _ bool, _ chan<- string) (any, error) { return nil, nil }
-func (stubLLM) ModelID() string                                         { return "stub" }
-func (stubLLM) MaxTokens() int                                          { return 0 }
 
 // TestPluginsWireUpEndToEnd loads m6o-plugin-marketplace, constructs a real
 // Agent (no LLM call), and verifies command/agent registration round-trips
@@ -49,8 +42,23 @@ func TestPluginsWireUpEndToEnd(t *testing.T) {
 	logger := pkgLogger.NewLogger(pkgLogger.LogLevelError)
 	fsRepo := infra.NewOSFilesystemRepository()
 
-	// We don't have a real LLM; pass nil — RegisterPlugins doesn't need it.
-	a := NewAgentWithOptions(nil, workDir, map[string]domain.ToolManager{}, settings, logger, os.Stdout, true, false, fsRepo)
+	// RegisterPlugins doesn't need a real LLM; the factory builds a default client
+	// from settings (no network at construction). No AgentBackend, so no external
+	// process; cleanup is a noop.
+	a, cleanup, err := NewAgentWithOptions(context.Background(), AgentOptions{
+		Settings:           settings,
+		WorkingDir:         workDir,
+		MCPToolManagers:    map[string]domain.ToolManager{},
+		Logger:             logger,
+		Out:                os.Stdout,
+		FsRepo:             fsRepo,
+		SkipSessionRestore: true,
+		IsInteractiveMode:  false,
+	})
+	if err != nil {
+		t.Fatalf("NewAgentWithOptions: %v", err)
+	}
+	defer cleanup()
 	a.RegisterPlugins(plugins)
 
 	cases := []struct {

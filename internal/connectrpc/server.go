@@ -13,16 +13,14 @@ import (
 
 	"connectrpc.com/connect"
 
-	agentv1 "github.com/fpt/klein-cli/internal/gen/agentv1"
-	"github.com/fpt/klein-cli/internal/gen/agentv1/agentv1connect"
-
 	"github.com/fpt/klein-cli/internal/app"
 	"github.com/fpt/klein-cli/internal/config"
+	agentv1 "github.com/fpt/klein-cli/internal/gen/agentv1"
+	"github.com/fpt/klein-cli/internal/gen/agentv1/agentv1connect"
 	"github.com/fpt/klein-cli/internal/infra"
 	"github.com/fpt/klein-cli/internal/skill"
 	"github.com/fpt/klein-cli/pkg/agent/domain"
 	"github.com/fpt/klein-cli/pkg/agent/events"
-	client "github.com/fpt/klein-cli/pkg/client"
 	pkgLogger "github.com/fpt/klein-cli/pkg/logger"
 )
 
@@ -42,8 +40,8 @@ type AgentServer struct {
 	settings        *config.Settings
 	mcpToolManagers map[string]domain.ToolManager
 	logger          *pkgLogger.Logger
-	sessionsDir     string           // Directory for per-session persistence files
-	codexRunner     app.CodexBackend // non-nil when llm.backend == "codex"; shared across sessions
+	sessionsDir     string              // Directory for per-session persistence files
+	agentBackend    domain.AgentBackend // non-nil when a whole-agent backend (codex) is configured; shared across sessions
 }
 
 type sessionState struct {
@@ -52,7 +50,10 @@ type sessionState struct {
 }
 
 // NewAgentServer creates a Connect AgentService handler.
-func NewAgentServer(settings *config.Settings, mcpToolManagers map[string]domain.ToolManager, logger *pkgLogger.Logger, sessionsDir string, codexRunner app.CodexBackend) *AgentServer {
+func NewAgentServer(
+	settings *config.Settings, mcpToolManagers map[string]domain.ToolManager, logger *pkgLogger.Logger,
+	sessionsDir string, agentBackend domain.AgentBackend,
+) *AgentServer {
 	return &AgentServer{
 		sessions:        make(map[string]*sessionState),
 		keyToSession:    make(map[string]string),
@@ -60,7 +61,7 @@ func NewAgentServer(settings *config.Settings, mcpToolManagers map[string]domain
 		mcpToolManagers: mcpToolManagers,
 		logger:          logger.WithComponent("connect-server"),
 		sessionsDir:     sessionsDir,
-		codexRunner:     codexRunner,
+		agentBackend:    agentBackend,
 	}
 }
 
@@ -89,21 +90,26 @@ func (s *AgentServer) StartSession(ctx context.Context, req *connect.Request[age
 		workingDir = msg.Settings.WorkingDir
 	}
 
-	// Create LLM client for this session
-	llmClient, err := client.NewLLMClient(settings.LLM)
-	if err != nil {
-		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to create LLM client: %w", err))
-	}
-
 	// In Connect/gRPC mode: auto-approve all tool calls, each session gets isolated in-memory state.
-	// Persistence is enabled per-session via X-Persistence-Key header.
+	// Persistence is enabled per-session via X-Persistence-Key header. The factory
+	// builds the LLM client from settings and attaches the shared agent backend
+	// (e.g. codex app-server) when configured; sessions share one backend process,
+	// so no per-session cleanup is needed here.
 	fsRepo := infra.NewOSFilesystemRepository()
 	out := io.Discard
-	agent := app.NewAgentWithOptions(llmClient, workingDir, s.mcpToolManagers, settings, s.logger, out, true, false, fsRepo)
-
-	// Codex backend (shared app-server process) routes turns to a codex thread.
-	if s.codexRunner != nil {
-		agent.SetCodexBackend(s.codexRunner)
+	agent, _, err := app.NewAgentWithOptions(ctx, app.AgentOptions{
+		Settings:           settings,
+		WorkingDir:         workingDir,
+		MCPToolManagers:    s.mcpToolManagers,
+		Logger:             s.logger,
+		Out:                out,
+		FsRepo:             fsRepo,
+		SkipSessionRestore: true,
+		IsInteractiveMode:  false,
+		AgentBackend:       s.agentBackend,
+	})
+	if err != nil {
+		return nil, connect.NewError(connect.CodeInternal, err)
 	}
 
 	// Enable file-backed persistence if a persistence key is provided

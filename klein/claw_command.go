@@ -10,6 +10,7 @@ import (
 	"syscall"
 
 	"github.com/fpt/klein-cli/internal/app"
+	"github.com/fpt/klein-cli/internal/codex"
 	"github.com/fpt/klein-cli/internal/config"
 	connectserver "github.com/fpt/klein-cli/internal/connectrpc"
 	"github.com/fpt/klein-cli/internal/gateway"
@@ -97,20 +98,24 @@ func runClawCommand(args []string) int {
 		if codexWorkingDir == "" {
 			codexWorkingDir = "."
 		}
-		codexRunner, err := maybeStartCodex(ctx, settings, codexWorkingDir, logger, false)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "Failed to start codex backend: %v\n", err)
+		codexRunner, startErr := codex.Start(
+			ctx, settings, codexWorkingDir, logger, codex.RunnerOptions{ApprovalPolicy: codex.ApprovalNever},
+		)
+		if startErr != nil {
+			fmt.Fprintf(os.Stderr, "Failed to start codex backend: %v\n", startErr)
 			return 1
 		}
-		var codexBackend app.CodexBackend
+		var agentBackend domain.AgentBackend
 		if codexRunner != nil {
-			codexBackend = codexRunner
+			agentBackend = codex.NewSharedBackend(codexRunner)
 			defer codexRunner.Close()
 		}
 
-		bound, err := connectserver.StartServerListener(ctx, *serveAddr, settings, mcpToolManagers, logger, cfg.SessionsDir, codexBackend)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "Failed to start embedded agent server: %v\n", err)
+		bound, listenErr := connectserver.StartServerListener(
+			ctx, *serveAddr, settings, mcpToolManagers, logger, cfg.SessionsDir, agentBackend,
+		)
+		if listenErr != nil {
+			fmt.Fprintf(os.Stderr, "Failed to start embedded agent server: %v\n", listenErr)
 			return 1
 		}
 		cfg.AgentAddr = "http://" + bound
@@ -245,16 +250,26 @@ func runClawREPL(args []string) int {
 	}
 
 	fsRepo := infra.NewOSFilesystemRepository()
-	a := app.NewAgentWithOptions(llmClient, workingDir, mcpToolManagers, settings, logger, out, false, true, fsRepo)
 
 	// Codex backend for the interactive claw REPL — prompts for on-request approvals.
-	if codexRunner, err := maybeStartCodex(ctx, settings, workingDir, logger, true); err != nil {
-		fmt.Fprintf(os.Stderr, "Failed to start codex backend: %v\n", err)
+	// codex.Select returns nil for non-codex backends, leaving the ReAct loop in place.
+	codexOpts := codex.RunnerOptions{ApprovalPolicy: codex.ApprovalOnRequest, Approver: terminalApprover()}
+	a, cleanup, err := app.NewAgentWithOptions(ctx, app.AgentOptions{
+		Settings:          settings,
+		WorkingDir:        workingDir,
+		MCPToolManagers:   mcpToolManagers,
+		Logger:            logger,
+		Out:               out,
+		FsRepo:            fsRepo,
+		IsInteractiveMode: true,
+		LLMClient:         llmClient,
+		AgentBackend:      codex.Select(settings, logger, codexOpts),
+	})
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Failed to create agent: %v\n", err)
 		return 1
-	} else if codexRunner != nil {
-		a.SetCodexBackend(codexRunner)
-		defer codexRunner.Close()
 	}
+	defer cleanup()
 
 	fmt.Printf("klein claw — interactive (base dir: %s, skill: %s)\n", baseDir, *skillFlag)
 	app.StartInteractiveMode(ctx, a, *skillFlag)

@@ -10,7 +10,6 @@ import (
 	"golang.org/x/net/http2"
 	"golang.org/x/net/http2/h2c"
 
-	"github.com/fpt/klein-cli/internal/app"
 	"github.com/fpt/klein-cli/internal/config"
 	"github.com/fpt/klein-cli/internal/gen/agentv1/agentv1connect"
 	"github.com/fpt/klein-cli/pkg/agent/domain"
@@ -20,8 +19,11 @@ import (
 // buildServer constructs the h2c HTTP server for the agent service. Addr is left
 // unset so callers can either ListenAndServe (StartServer) or bind a listener
 // themselves (StartServerListener).
-func buildServer(settings *config.Settings, mcpToolManagers map[string]domain.ToolManager, logger *pkgLogger.Logger, sessionsDir string, codexRunner app.CodexBackend) *http.Server {
-	server := NewAgentServer(settings, mcpToolManagers, logger, sessionsDir, codexRunner)
+func buildServer(
+	settings *config.Settings, mcpToolManagers map[string]domain.ToolManager, logger *pkgLogger.Logger,
+	sessionsDir string, agentBackend domain.AgentBackend,
+) *http.Server {
+	server := NewAgentServer(settings, mcpToolManagers, logger, sessionsDir, agentBackend)
 
 	path, handler := agentv1connect.NewAgentServiceHandler(server)
 	mux := http.NewServeMux()
@@ -41,8 +43,11 @@ func shutdownOnCancel(ctx context.Context, srv *http.Server) {
 }
 
 // StartServer starts the Connect-gRPC HTTP/2 server and blocks until ctx is cancelled.
-func StartServer(ctx context.Context, addr string, settings *config.Settings, mcpToolManagers map[string]domain.ToolManager, logger *pkgLogger.Logger, sessionsDir string, codexRunner app.CodexBackend) error {
-	srv := buildServer(settings, mcpToolManagers, logger, sessionsDir, codexRunner)
+func StartServer(
+	ctx context.Context, addr string, settings *config.Settings, mcpToolManagers map[string]domain.ToolManager,
+	logger *pkgLogger.Logger, sessionsDir string, agentBackend domain.AgentBackend,
+) error {
+	srv := buildServer(settings, mcpToolManagers, logger, sessionsDir, agentBackend)
 	srv.Addr = addr
 
 	go shutdownOnCancel(ctx, srv)
@@ -60,8 +65,11 @@ func StartServer(ctx context.Context, addr string, settings *config.Settings, mc
 // returns the actual listen address. Pass "127.0.0.1:0" for an ephemeral local
 // port — right for an in-process embedded server (e.g. `klein claw`) where the
 // caller dials the returned address. Serving stops when ctx is cancelled.
-func StartServerListener(ctx context.Context, addr string, settings *config.Settings, mcpToolManagers map[string]domain.ToolManager, logger *pkgLogger.Logger, sessionsDir string, codexRunner app.CodexBackend) (string, error) {
-	srv := buildServer(settings, mcpToolManagers, logger, sessionsDir, codexRunner)
+func StartServerListener(
+	ctx context.Context, addr string, settings *config.Settings, mcpToolManagers map[string]domain.ToolManager,
+	logger *pkgLogger.Logger, sessionsDir string, agentBackend domain.AgentBackend,
+) (string, error) {
+	srv := buildServer(settings, mcpToolManagers, logger, sessionsDir, agentBackend)
 
 	ln, err := net.Listen("tcp", addr)
 	if err != nil {

@@ -66,7 +66,7 @@ type Agent struct {
 	// codexBackend, when set (llm.backend == "codex"), routes Invoke to a codex
 	// app-server thread instead of the ReAct loop. codexThreadID caches this
 	// session's thread id (also persisted alongside the session file).
-	codexBackend  CodexBackend
+	codexBackend  domain.BackendRunner
 	codexThreadID string
 
 	// Plugin registry. Commands and agents are stored under their scoped
@@ -93,17 +93,11 @@ func (a *Agent) SetAllowedToolsOverride(tools []string) {
 	a.allowedToolsOverride = tools
 }
 
-// CodexBackend runs a conversation turn via an external codex app-server. When
-// set, Invoke routes to it instead of the ReAct loop (Option C: codex is the
-// agent for this session; klein provides the frontend, memory-context injection,
-// session↔thread mapping, and run-log). threadID is empty for a session's first
-// turn; RunTurn returns the (created) thread id to persist for continuation.
-type CodexBackend interface {
-	RunTurn(ctx context.Context, threadID, prompt, developerInstructions string) (newThreadID, response string, err error)
-}
-
-// SetCodexBackend enables the codex backend for this agent.
-func (a *Agent) SetCodexBackend(b CodexBackend) { a.codexBackend = b }
+// SetCodexBackend enables a whole-agent backend (e.g. codex) for this agent.
+// When set, Invoke routes each turn to it instead of the ReAct loop (Option C:
+// the backend is the agent for this session; klein provides the frontend,
+// memory-context injection, session↔thread mapping, and run-log).
+func (a *Agent) SetCodexBackend(b domain.BackendRunner) { a.codexBackend = b }
 
 // SetEventHandler sets an external event handler that receives all agent events.
 // Used by the Connect server to translate events into streaming RPC responses.
@@ -350,33 +344,129 @@ func truncate(s string, n int) string {
 	return s[:n] + "…"
 }
 
-// NewAgent creates a new Agent with MCP tools and settings.
-func NewAgent(llmClient domain.LLM, workingDir string, mcpToolManagers map[string]domain.ToolManager, settings *config.Settings, logger *pkgLogger.Logger, out io.Writer) *Agent {
-	fsRepo := infra.NewOSFilesystemRepository()
-	return NewAgentWithOptions(llmClient, workingDir, mcpToolManagers, settings, logger, out, false, true, fsRepo)
+// AgentOptions configures agent construction. NewAgentWithOptions is a factory
+// keyed on the backend type (Settings.LLM.Backend): it builds the LLM client and
+// wires an optional whole-agent backend, so callers no longer coordinate client
+// creation, agent construction, and backend startup separately.
+type AgentOptions struct {
+	Settings        *config.Settings
+	MCPToolManagers map[string]domain.ToolManager
+	Logger          *pkgLogger.Logger
+	Out             io.Writer
+	FsRepo          repository.FilesystemRepository
+
+	// LLMClient overrides client construction; when nil the client is built from
+	// Settings.LLM. Mainly for tests and custom wiring.
+	LLMClient domain.LLM
+
+	// AgentBackend provisions a whole-agent backend (e.g. codex). When non-nil,
+	// its EnsureBackendProcess is called and the resulting runner routes turns
+	// instead of the ReAct loop. nil means the ReAct loop handles every turn.
+	AgentBackend domain.AgentBackend
+
+	WorkingDir string
+
+	SkipSessionRestore bool
+	IsInteractiveMode  bool
 }
 
-// NewAgentWithOptions creates a new Agent with session control options.
-func NewAgentWithOptions(llmClient domain.LLM, workingDir string, mcpToolManagers map[string]domain.ToolManager, settings *config.Settings, logger *pkgLogger.Logger, out io.Writer, skipSessionRestore bool, isInteractiveMode bool, fsRepo repository.FilesystemRepository) *Agent {
-	// Create individual tool managers
+// resolveLLMClient returns opts.LLMClient when set, otherwise builds one from the
+// configured backend (a stub for the codex backend, whose Chat is never called).
+func resolveLLMClient(opts AgentOptions) (domain.LLM, error) {
+	if opts.LLMClient != nil {
+		return opts.LLMClient, nil
+	}
+	c, err := client.NewLLMClient(opts.Settings.LLM)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create LLM client: %w", err)
+	}
+	return c, nil
+}
+
+// computeMemoryDir returns the project memory directory for interactive mode, or
+// "" in one-shot/test mode (or when user config is unavailable).
+func computeMemoryDir(isInteractiveMode bool, workingDir string) string {
+	if !isInteractiveMode {
+		return ""
+	}
+	userConfig, err := config.DefaultUserConfig()
+	if err != nil {
+		return ""
+	}
+	dir, err := userConfig.GetProjectMemoryDir(workingDir)
+	if err != nil {
+		return ""
+	}
+	return dir
+}
+
+// newSharedSessionState creates the shared message state and its session file
+// path. Interactive mode restores from the project session file (unless
+// skipSessionRestore); one-shot/test mode gets a clean in-memory state.
+func newSharedSessionState(
+	isInteractiveMode, skipSessionRestore bool, workingDir string, logger *pkgLogger.Logger,
+) (domain.State, string) {
+	if !isInteractiveMode {
+		logger.DebugWithIntention(pkgLogger.IntentionStatus, "Starting with clean session", "reason", "one-shot mode")
+		return state.NewMessageState(), ""
+	}
+
+	userConfig, err := config.DefaultUserConfig()
+	if err != nil {
+		logger.Warn("Could not access user config for session persistence", "error", err)
+		return state.NewMessageState(), ""
+	}
+	sessionFilePath, err := userConfig.GetProjectSessionFile(workingDir)
+	if err != nil {
+		logger.Warn("Could not get session file path", "error", err)
+		return state.NewMessageState(), ""
+	}
+
+	messageRepo := infra.NewMessageHistoryRepository(sessionFilePath)
+	sharedState := state.NewMessageStateWithRepository(messageRepo)
+	if skipSessionRestore {
+		logger.DebugWithIntention(pkgLogger.IntentionStatus, "Starting with clean session",
+			"reason", "session restore skipped for file mode")
+		return sharedState, sessionFilePath
+	}
+	if err := sharedState.LoadFromFile(); err != nil {
+		logger.DebugWithIntention(pkgLogger.IntentionStatus, "Starting with new session",
+			"reason", "could not load existing session", "error", err)
+	} else {
+		logger.DebugWithIntention(pkgLogger.IntentionStatus, "Restored session state",
+			"message_count", len(sharedState.GetMessages()), "session_file", sessionFilePath)
+	}
+	return sharedState, sessionFilePath
+}
+
+// agentTools bundles the tool managers an Agent keeps references to after
+// construction, plus the composite/deferred views the ReAct loop binds per skill.
+type agentTools struct {
+	todo        *tool.TodoToolManager
+	task        *tool.TaskToolManager
+	askQuestion *tool.AskUserQuestionToolManager
+	planMode    *tool.PlanModeState
+	plan        *tool.PlanToolManager
+	spawnAgent  *tool.SpawnAgentToolManager
+	taskAgent   *tool.TaskAgentToolManager
+	all         *tool.CompositeToolManager
+	deferred    *tool.DeferredToolManager
+}
+
+// buildAgentTools constructs every tool manager (universal + specialized + MCP)
+// and combines them into the composite/deferred views. memoryDir (when non-empty)
+// and ~/.klein/skills are added to the filesystem allowlist.
+func buildAgentTools(opts AgentOptions, skills skill.SkillMap, memoryDir string) agentTools {
+	workingDir := opts.WorkingDir
+
 	var todoToolManager *tool.TodoToolManager
 	var taskToolManager *tool.TaskToolManager
-	if isInteractiveMode {
+	if opts.IsInteractiveMode {
 		todoToolManager = tool.NewTodoToolManager(workingDir)
 		taskToolManager = tool.NewTaskToolManager(workingDir)
 	} else {
 		todoToolManager = tool.NewInMemoryTodoToolManager()
 		taskToolManager = tool.NewInMemoryTaskToolManager()
-	}
-
-	// Compute memory directory for interactive mode; empty string in one-shot/test mode.
-	var memoryDir string
-	if isInteractiveMode {
-		if userConfig, err := config.DefaultUserConfig(); err == nil {
-			if dir, err := userConfig.GetProjectMemoryDir(workingDir); err == nil {
-				memoryDir = dir
-			}
-		}
 	}
 
 	fsConfig := infra.DefaultFileSystemConfig(workingDir)
@@ -388,98 +478,123 @@ func NewAgentWithOptions(llmClient domain.LLM, workingDir string, mcpToolManager
 	if home, err := os.UserHomeDir(); err == nil {
 		fsConfig.AllowedDirectories = append(fsConfig.AllowedDirectories, filepath.Join(home, ".klein", "skills"))
 	}
-	filesystemManager := tool.NewFileSystemToolManager(fsRepo, fsConfig, workingDir)
+	filesystemManager := tool.NewFileSystemToolManager(opts.FsRepo, fsConfig, workingDir)
 
-	bashConfig := tool.BashConfig{
+	bashToolManager := tool.NewBashToolManager(tool.BashConfig{
 		WorkingDir:          workingDir,
 		MaxDuration:         2 * time.Minute,
-		WhitelistedCommands: settings.Bash.WhitelistedCommands,
+		WhitelistedCommands: opts.Settings.Bash.WhitelistedCommands,
+	})
+
+	askQuestionManager := tool.NewAskUserQuestionToolManager()
+	planModeState := new(tool.PlanModeState) // starts as PlanModeOff
+	planToolManager := tool.NewPlanToolManager(planModeState)
+	spawnAgentManager := tool.NewSpawnAgentToolManager()
+	taskAgentManager := tool.NewTaskAgentToolManager()
+
+	// Combine ALL tool managers into one composite.
+	managers := []domain.ToolManager{
+		todoToolManager, taskToolManager, filesystemManager, bashToolManager,
+		tool.NewSearchToolManager(tool.SearchConfig{WorkingDir: workingDir}),
+		tool.NewWebToolManager(), tool.NewPDFToolManager(workingDir), tool.NewMarketToolManager(),
+		tool.NewSkillToolManager(skills, workingDir), askQuestionManager, planToolManager,
+		spawnAgentManager, taskAgentManager, tool.NewResearcherToolManager(),
 	}
-	bashToolManager := tool.NewBashToolManager(bashConfig)
+	for _, mcpManager := range opts.MCPToolManagers {
+		managers = append(managers, mcpManager)
+	}
+	allToolManagers := tool.NewCompositeToolManager(managers...)
 
-	searchToolManager := tool.NewSearchToolManager(tool.SearchConfig{WorkingDir: workingDir})
-	webToolManager := tool.NewWebToolManager()
-	pdfToolManager := tool.NewPDFToolManager(workingDir)
-	marketToolManager := tool.NewMarketToolManager()
+	return agentTools{
+		todo:        todoToolManager,
+		task:        taskToolManager,
+		askQuestion: askQuestionManager,
+		planMode:    planModeState,
+		plan:        planToolManager,
+		spawnAgent:  spawnAgentManager,
+		taskAgent:   taskAgentManager,
+		all:         allToolManagers,
+		deferred:    tool.NewDeferredToolManager(allToolManagers),
+	}
+}
 
-	// Load skills (embedded + filesystem) before creating tool managers
+// NewAgent creates a new Agent with MCP tools and settings.
+func NewAgent(
+	llmClient domain.LLM, workingDir string, mcpToolManagers map[string]domain.ToolManager,
+	settings *config.Settings, logger *pkgLogger.Logger, out io.Writer,
+) *Agent {
+	agent, _, err := NewAgentWithOptions(context.Background(), AgentOptions{
+		Settings:          settings,
+		WorkingDir:        workingDir,
+		MCPToolManagers:   mcpToolManagers,
+		Logger:            logger,
+		Out:               out,
+		FsRepo:            infra.NewOSFilesystemRepository(),
+		IsInteractiveMode: true,
+		LLMClient:         llmClient,
+	})
+	if err != nil {
+		// NewAgent has no error return and no AgentBackend is supplied here, so the
+		// only failure path (backend startup) is unreachable; log defensively.
+		logger.Error("NewAgent construction failed", "error", err)
+	}
+	return agent
+}
+
+// NewAgentWithOptions builds an Agent from opts, creating the LLM client from
+// Settings.LLM.Backend (unless opts.LLMClient is set) and starting/attaching the
+// optional whole-agent backend. It returns the Agent, a cleanup func (never nil;
+// closes any backend process the factory started), and an error.
+func NewAgentWithOptions(ctx context.Context, opts AgentOptions) (*Agent, func(), error) {
+	cleanup := func() {}
+	settings := opts.Settings
+	workingDir := opts.WorkingDir
+	logger := opts.Logger
+	out := opts.Out
+	fsRepo := opts.FsRepo
+	skipSessionRestore := opts.SkipSessionRestore
+	isInteractiveMode := opts.IsInteractiveMode
+
+	// Build the LLM client from the backend type unless one was injected. For the
+	// codex backend this yields a stub whose Chat is never called (turns route to
+	// the backend runner below).
+	llmClient, err := resolveLLMClient(opts)
+	if err != nil {
+		return nil, cleanup, err
+	}
+
+	// Compute memory directory for interactive mode; empty string in one-shot/test mode.
+	memoryDir := computeMemoryDir(isInteractiveMode, workingDir)
+
+	// Load skills (embedded + filesystem) before creating tool managers.
 	skills, err := skill.LoadSkills(workingDir)
 	if err != nil {
 		logger.Warn("Failed to load skills, using empty fallback", "error", err)
 		skills = make(skill.SkillMap)
 	}
 
-	// Create skill tool manager (provides ReadSkill tool)
-	skillToolManager := tool.NewSkillToolManager(skills, workingDir)
-
-	askQuestionManager := tool.NewAskUserQuestionToolManager()
-
-	planModeState := new(tool.PlanModeState) // starts as PlanModeOff
-	planToolManager := tool.NewPlanToolManager(planModeState)
-
-	spawnAgentManager := tool.NewSpawnAgentToolManager()
-	taskAgentManager := tool.NewTaskAgentToolManager()
-	researcherManager := tool.NewResearcherToolManager()
-
-	// Load persistent permission rules (user + project + local).
-	// Missing files are silently ignored; never fatal.
+	// Load persistent permission rules (user + project + local); missing files are
+	// silently ignored, never fatal.
 	permRules := permission.LoadForProject(workingDir)
 
-	// Combine ALL tool managers into one composite
-	managers := []domain.ToolManager{todoToolManager, taskToolManager, filesystemManager, bashToolManager, searchToolManager, webToolManager, pdfToolManager, marketToolManager, skillToolManager, askQuestionManager, planToolManager, spawnAgentManager, taskAgentManager, researcherManager}
-	for _, mcpManager := range mcpToolManagers {
-		managers = append(managers, mcpManager)
-	}
-	allToolManagers := tool.NewCompositeToolManager(managers...)
-	deferredTools := tool.NewDeferredToolManager(allToolManagers)
+	// Build every tool manager (universal + specialized + MCP) and the
+	// composite/deferred views the ReAct loop binds per skill.
+	tools := buildAgentTools(opts, skills, memoryDir)
 
 	// Create or restore shared message state with session persistence
-	var sharedState domain.State
-	var sessionFilePath string
-
-	if isInteractiveMode {
-		if userConfig, err := config.DefaultUserConfig(); err == nil {
-			if sessionPath, err := userConfig.GetProjectSessionFile(workingDir); err == nil {
-				sessionFilePath = sessionPath
-				messageRepo := infra.NewMessageHistoryRepository(sessionFilePath)
-				sharedState = state.NewMessageStateWithRepository(messageRepo)
-
-				if !skipSessionRestore {
-					if err := sharedState.LoadFromFile(); err != nil {
-						logger.DebugWithIntention(pkgLogger.IntentionStatus, "Starting with new session",
-							"reason", "could not load existing session", "error", err)
-					} else {
-						logger.DebugWithIntention(pkgLogger.IntentionStatus, "Restored session state",
-							"message_count", len(sharedState.GetMessages()), "session_file", sessionFilePath)
-					}
-				} else {
-					logger.DebugWithIntention(pkgLogger.IntentionStatus, "Starting with clean session",
-						"reason", "session restore skipped for file mode")
-				}
-			} else {
-				logger.Warn("Could not get session file path", "error", err)
-				sharedState = state.NewMessageState()
-			}
-		} else {
-			logger.Warn("Could not access user config for session persistence", "error", err)
-			sharedState = state.NewMessageState()
-		}
-	} else {
-		sharedState = state.NewMessageState()
-		logger.DebugWithIntention(pkgLogger.IntentionStatus, "Starting with clean session", "reason", "one-shot mode")
-	}
+	sharedState, sessionFilePath := newSharedSessionState(isInteractiveMode, skipSessionRestore, workingDir, logger)
 
 	a := &Agent{
 		llmClient:          llmClient,
-		allToolManagers:    allToolManagers,
-		deferredTools:      deferredTools,
-		todoToolManager:    todoToolManager,
-		taskToolManager:    taskToolManager,
-		askQuestionManager: askQuestionManager,
-		planMode:           planModeState,
-		planToolManager:    planToolManager,
-		spawnAgentManager:  spawnAgentManager,
-		taskAgentManager:   taskAgentManager,
+		allToolManagers:    tools.all,
+		deferredTools:      tools.deferred,
+		todoToolManager:    tools.todo,
+		taskToolManager:    tools.task,
+		askQuestionManager: tools.askQuestion,
+		planMode:           tools.planMode,
+		planToolManager:    tools.plan,
+		spawnAgentManager:  tools.spawnAgent,
+		taskAgentManager:   tools.taskAgent,
 		fsRepo:             fsRepo,
 		workingDir:         workingDir,
 		sharedState:        sharedState,
@@ -494,17 +609,43 @@ func NewAgentWithOptions(llmClient domain.LLM, workingDir string, mcpToolManager
 		memoryDir:          memoryDir,
 	}
 
-	// Wire spawn_agent callback (two-phase init: callback references the agent).
-	spawnAgentManager.SetCallback(func(ctx context.Context, task string, skillName string, allowedTools []string, maxIterations int) (string, error) {
-		return a.SpawnSubAgent(ctx, task, skillName, allowedTools, maxIterations)
-	})
+	cleanup, err = a.wireToolsAndBackend(ctx, tools, opts.AgentBackend)
+	if err != nil {
+		return nil, cleanup, err
+	}
+
+	return a, cleanup, nil
+}
+
+// wireToolsAndBackend performs the two-phase init that needs the constructed
+// Agent: it wires the self-referential spawn/Task callbacks and provisions the
+// optional whole-agent backend, returning the cleanup for any process started
+// (never nil).
+func (a *Agent) wireToolsAndBackend(
+	ctx context.Context, tools agentTools, backend domain.AgentBackend,
+) (func(), error) {
+	// Wire spawn_agent callback (callback references the agent).
+	tools.spawnAgent.SetCallback(
+		func(ctx context.Context, task, skillName string, allowedTools []string, maxIterations int) (string, error) {
+			return a.SpawnSubAgent(ctx, task, skillName, allowedTools, maxIterations)
+		})
 
 	// Wire Task callback for plugin-defined subagents.
-	taskAgentManager.SetCallback(func(ctx context.Context, subagentType, prompt string) (string, error) {
+	tools.taskAgent.SetCallback(func(ctx context.Context, subagentType, prompt string) (string, error) {
 		return a.RunPluginAgent(ctx, subagentType, prompt)
 	})
 
-	return a
+	// Provision the whole-agent backend (e.g. codex), if one was injected. This
+	// may start an external process; its cleanup is folded into the returned func.
+	if backend == nil {
+		return func() {}, nil
+	}
+	runner, cleanup, err := backend.EnsureBackendProcess(ctx, a.workingDir)
+	if err != nil {
+		return func() {}, fmt.Errorf("failed to start agent backend: %w", err)
+	}
+	a.SetCodexBackend(runner)
+	return cleanup, nil
 }
 
 // Invoke executes a specified skill. Optional images are base64-encoded strings

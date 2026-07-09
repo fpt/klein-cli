@@ -40,6 +40,10 @@ type Settings struct {
 	// llm.backend == "codex"). Model/effort still come from the llm block.
 	Codex CodexSettings `json:"codex,omitempty"`
 
+	// Kessel configures the kessel app-server backend (used only when
+	// llm.backend == "kessel"). Kessel owns its own model configuration.
+	Kessel KesselSettings `json:"kessel,omitempty"`
+
 	// Repository for persistence (nil for in-memory only)
 	settingsRepository repository.SettingsRepository `json:"-"`
 }
@@ -258,6 +262,15 @@ type CodexSettings struct {
 	SandboxMode    string `json:"sandbox_mode,omitempty"`    // read-only|workspace-write|danger-full-access ("" → workspace-write)
 }
 
+// KesselSettings configures the kessel app-server backend (llm.backend ==
+// "kessel"). Kessel runs its own agent loop and owns its model configuration,
+// so klein only needs to know how to launch it and whether to be consulted
+// before it mutates anything. It has no sandbox of its own.
+type KesselSettings struct {
+	KesselPath     string `json:"kessel_path,omitempty"`     // path to the kessel binary ("" → "kessel-cli" on PATH)
+	ApprovalPolicy string `json:"approval_policy,omitempty"` // never|on-request ("" → the mode default)
+}
+
 // BashSettings contains bash tool configuration
 type BashSettings struct {
 	WhitelistedCommands []string `json:"whitelisted_commands,omitempty"` // Commands that don't require approval
@@ -459,16 +472,24 @@ func GetDefaultLLMSettingsForBackend(backend string) LLMSettings {
 			Thinking:  false, // Gemini doesn't support thinking in our implementation
 			MaxTokens: 0,
 		}
-	case "codex":
-		// Model is left empty: codex uses the model configured in its own CLI
-		// config unless overridden via llm.model / -m.
+	case "codex", "kessel":
+		// Model is left empty: these backends use the model configured in their
+		// own config unless overridden via llm.model / -m.
 		return LLMSettings{
-			Backend: "codex",
+			Backend: backend,
 		}
 	default:
 		// Default to ollama settings for unknown backends
 		return GetDefaultLLMSettingsForBackend("ollama")
 	}
+}
+
+// isAgentServerBackend reports whether the backend is a whole-agent app-server
+// backend, which owns its own model and credentials. Mirrors
+// agentserver.IsAgentBackend, duplicated here because agentserver imports this
+// package.
+func isAgentServerBackend(backend string) bool {
+	return backend == "codex" || backend == "kessel"
 }
 
 // applyDefaults fills in missing fields with default values
@@ -479,11 +500,12 @@ func applyDefaults(settings *Settings) {
 	if settings.LLM.Backend == "" {
 		settings.LLM.Backend = defaults.LLM.Backend
 	}
-	// codex owns its own model (via the codex CLI), so it must not inherit a
-	// chat-model default. The base Settings is seeded from GetDefaultSettings
-	// before the file is unmarshaled, so an omitted model surfaces here as the
-	// ollama default — clear that leak for codex (an explicit model is kept).
-	if settings.LLM.Backend == "codex" {
+	// An app-server backend owns its own model (via its own config), so it must
+	// not inherit a chat-model default. The base Settings is seeded from
+	// GetDefaultSettings before the file is unmarshaled, so an omitted model
+	// surfaces here as the ollama default — clear that leak (an explicit model
+	// is kept).
+	if isAgentServerBackend(settings.LLM.Backend) {
 		if settings.LLM.Model == defaults.LLM.Model {
 			settings.LLM.Model = ""
 		}
@@ -508,13 +530,15 @@ func applyDefaults(settings *Settings) {
 // ValidateSettings validates the settings configuration
 func ValidateSettings(settings *Settings) error {
 	// Validate LLM settings
-	if settings.LLM.Backend != "ollama" && settings.LLM.Backend != "anthropic" && settings.LLM.Backend != "openai" && settings.LLM.Backend != "gemini" && settings.LLM.Backend != "codex" {
-		return fmt.Errorf("unsupported LLM backend: %s (must be 'ollama', 'anthropic', 'openai', 'gemini', or 'codex')", settings.LLM.Backend)
+	switch settings.LLM.Backend {
+	case "ollama", "anthropic", "openai", "gemini", "codex", "kessel":
+	default:
+		return fmt.Errorf("unsupported LLM backend: %s (must be 'ollama', 'anthropic', 'openai', 'gemini', 'codex', or 'kessel')", settings.LLM.Backend)
 	}
 
-	// codex manages its own model and auth via the codex CLI, so an empty model
-	// is fine and no API key is required here.
-	if settings.LLM.Backend != "codex" && settings.LLM.Model == "" {
+	// An app-server backend manages its own model and auth, so an empty model is
+	// fine and no API key is required here.
+	if !isAgentServerBackend(settings.LLM.Backend) && settings.LLM.Model == "" {
 		return fmt.Errorf("LLM model is required")
 	}
 

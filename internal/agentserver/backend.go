@@ -1,4 +1,4 @@
-package codex
+package agentserver
 
 import (
 	"context"
@@ -8,8 +8,22 @@ import (
 	pkgLogger "github.com/fpt/klein-cli/pkg/logger"
 )
 
-// BackendName is the settings.LLM.Backend value that selects the codex backend.
-const BackendName = "codex"
+// settings.LLM.Backend values that select a whole-agent app-server backend.
+//
+// Both speak the same JSON-RPC app-server protocol, so one Runner drives either;
+// they differ only in the binary spawned. Kessel implements the subset of the
+// protocol this package uses (see rs-kessel's crates/lib/src/appserver).
+const (
+	BackendCodex  = "codex"
+	BackendKessel = "kessel"
+)
+
+// IsAgentBackend reports whether a backend name selects a whole-agent backend —
+// one that runs its own reasoning + tool loop, bypassing klein's ReAct loop —
+// as opposed to a chat model plugged in as a domain.LLM.
+func IsAgentBackend(backend string) bool {
+	return backend == BackendCodex || backend == BackendKessel
+}
 
 // Approval policy values for RunnerOptions.ApprovalPolicy: ApprovalNever
 // auto-accepts (headless surfaces), ApprovalOnRequest prompts (interactive repl).
@@ -21,7 +35,7 @@ const (
 // noop is the cleanup returned when a backend owns no closable resource.
 func noop() {}
 
-// Start eagerly spawns the codex app-server when settings select the codex
+// Start eagerly spawns the app-server when settings select a whole-agent
 // backend, returning (nil, nil) for every other backend. The returned Runner is
 // shared across sessions and must be Closed by the caller; wrap it with
 // NewSharedBackend to inject it into agent construction. opts supplies the
@@ -29,31 +43,31 @@ func noop() {}
 func Start(
 	ctx context.Context, settings *config.Settings, workingDir string, logger *pkgLogger.Logger, opts RunnerOptions,
 ) (*Runner, error) {
-	if settings.LLM.Backend != BackendName {
+	if !IsAgentBackend(settings.LLM.Backend) {
 		return nil, nil
 	}
-	logger.Info("Starting codex app-server backend", "model", settings.LLM.Model)
+	logger.Info("Starting app-server backend", "backend", settings.LLM.Backend, "model", settings.LLM.Model)
 	// NewRunnerFromSettings spawns the app-server and validates it is
 	// authenticated, so a login/config failure surfaces here at startup.
 	runner, err := NewRunnerFromSettings(ctx, settings, workingDir, opts)
 	if err != nil {
 		return nil, err
 	}
-	logger.Info("Codex backend ready")
+	logger.Info("Agent backend ready", "backend", settings.LLM.Backend)
 	return runner, nil
 }
 
-// lazyBackend spawns a fresh codex app-server on EnsureBackendProcess and hands
-// back a cleanup that closes it. Used by the single-agent surfaces (CLI one-shot
-// / interactive repl / claw repl) where the agent owns the codex process.
+// lazyBackend spawns a fresh app-server on EnsureBackendProcess and hands back a
+// cleanup that closes it. Used by the single-agent surfaces (CLI one-shot /
+// interactive repl / claw repl) where the agent owns the backend process.
 type lazyBackend struct {
 	settings *config.Settings
 	logger   *pkgLogger.Logger
 	opts     RunnerOptions
 }
 
-// NewBackend returns an AgentBackend that starts a dedicated codex app-server
-// when the agent is constructed. opts carries the mode's approval behavior.
+// NewBackend returns an AgentBackend that starts a dedicated app-server when the
+// agent is constructed. opts carries the mode's approval behavior.
 func NewBackend(settings *config.Settings, logger *pkgLogger.Logger, opts RunnerOptions) domain.AgentBackend {
 	return &lazyBackend{settings: settings, logger: logger, opts: opts}
 }
@@ -85,10 +99,10 @@ func (b *sharedBackend) EnsureBackendProcess(_ context.Context, _ string) (domai
 }
 
 // Select returns an AgentBackend for the configured backend, or nil when the
-// backend needs no external process (every backend other than codex). opts
-// supplies the codex approval behavior for the lazy (agent-owned) case.
+// backend needs no external process (every backend other than codex/kessel).
+// opts supplies the approval behavior for the lazy (agent-owned) case.
 func Select(settings *config.Settings, logger *pkgLogger.Logger, opts RunnerOptions) domain.AgentBackend {
-	if settings.LLM.Backend != BackendName {
+	if !IsAgentBackend(settings.LLM.Backend) {
 		return nil
 	}
 	return NewBackend(settings, logger, opts)

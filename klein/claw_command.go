@@ -10,7 +10,7 @@ import (
 	"syscall"
 
 	"github.com/fpt/klein-cli/internal/app"
-	"github.com/fpt/klein-cli/internal/codex"
+	"github.com/fpt/klein-cli/internal/agentserver"
 	"github.com/fpt/klein-cli/internal/config"
 	connectserver "github.com/fpt/klein-cli/internal/connectrpc"
 	"github.com/fpt/klein-cli/internal/gateway"
@@ -94,21 +94,21 @@ func runClawCommand(args []string) int {
 			defer integration.Close()
 		}
 
-		codexWorkingDir := cfg.WorkingDir
-		if codexWorkingDir == "" {
-			codexWorkingDir = "."
+		backendWorkingDir := cfg.WorkingDir
+		if backendWorkingDir == "" {
+			backendWorkingDir = "."
 		}
-		codexRunner, startErr := codex.Start(
-			ctx, settings, codexWorkingDir, logger, codex.RunnerOptions{ApprovalPolicy: codex.ApprovalNever},
+		backendRunner, startErr := agentserver.Start(
+			ctx, settings, backendWorkingDir, logger, agentserver.RunnerOptions{ApprovalPolicy: agentserver.ApprovalNever},
 		)
 		if startErr != nil {
-			fmt.Fprintf(os.Stderr, "Failed to start codex backend: %v\n", startErr)
+			fmt.Fprintf(os.Stderr, "Failed to start agent backend: %v\n", startErr)
 			return 1
 		}
 		var agentBackend domain.AgentBackend
-		if codexRunner != nil {
-			agentBackend = codex.NewSharedBackend(codexRunner)
-			defer codexRunner.Close()
+		if backendRunner != nil {
+			agentBackend = agentserver.NewSharedBackend(backendRunner)
+			defer backendRunner.Close()
 		}
 
 		bound, listenErr := connectserver.StartServerListener(
@@ -252,8 +252,8 @@ func runClawREPL(args []string) int {
 	fsRepo := infra.NewOSFilesystemRepository()
 
 	// Codex backend for the interactive claw REPL — prompts for on-request approvals.
-	// codex.Select returns nil for non-codex backends, leaving the ReAct loop in place.
-	codexOpts := codex.RunnerOptions{ApprovalPolicy: codex.ApprovalOnRequest, Approver: terminalApprover()}
+	// agentserver.Select returns nil for backends that need no external process, leaving the ReAct loop in place.
+	backendOpts := agentserver.RunnerOptions{ApprovalPolicy: agentserver.ApprovalOnRequest, Approver: terminalApprover(settings.LLM.Backend)}
 	a, cleanup, err := app.NewAgentWithOptions(ctx, app.AgentOptions{
 		Settings:          settings,
 		WorkingDir:        workingDir,
@@ -263,7 +263,7 @@ func runClawREPL(args []string) int {
 		FsRepo:            fsRepo,
 		IsInteractiveMode: true,
 		LLMClient:         llmClient,
-		AgentBackend:      codex.Select(settings, logger, codexOpts),
+		AgentBackend:      agentserver.Select(settings, logger, backendOpts),
 	})
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Failed to create agent: %v\n", err)

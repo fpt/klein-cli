@@ -9,7 +9,7 @@ import (
 	"strings"
 
 	"github.com/fpt/klein-cli/internal/app"
-	"github.com/fpt/klein-cli/internal/codex"
+	"github.com/fpt/klein-cli/internal/agentserver"
 	"github.com/fpt/klein-cli/internal/config"
 	connectserver "github.com/fpt/klein-cli/internal/connectrpc"
 	"github.com/fpt/klein-cli/internal/infra"
@@ -71,8 +71,8 @@ func main() {
 	}
 
 	// Define command line flags
-	var backend = flag.String("b", "", "LLM backend (ollama, anthropic, openai, or gemini)")
-	var backendLong = flag.String("backend", "", "LLM backend (ollama, anthropic, openai, or gemini)")
+	var backend = flag.String("b", "", "LLM backend (ollama, anthropic, openai, gemini, codex, or kessel)")
+	var backendLong = flag.String("backend", "", "LLM backend (ollama, anthropic, openai, gemini, codex, or kessel)")
 	var model = flag.String("m", "", "Model name to use")
 	var modelLong = flag.String("model", "", "Model name to use")
 	var effort = flag.String("effort", "", "Reasoning effort for reasoning-capable models (none|minimal|low|medium|high|xhigh; primarily OpenAI)")
@@ -251,18 +251,18 @@ func main() {
 			sessDir = settings.SessionsDir()
 		}
 
-		// Codex backend: one shared app-server process for all sessions (headless).
-		codexRunner, startErr := codex.Start(
-			ctx, settings, workingDirectory, logger, codex.RunnerOptions{ApprovalPolicy: codex.ApprovalNever},
+		// Whole-agent backend (codex/kessel): one shared app-server process for all sessions (headless).
+		backendRunner, startErr := agentserver.Start(
+			ctx, settings, workingDirectory, logger, agentserver.RunnerOptions{ApprovalPolicy: agentserver.ApprovalNever},
 		)
 		if startErr != nil {
-			logger.Error("Failed to start codex backend", "error", startErr)
+			logger.Error("Failed to start agent backend", "error", startErr)
 			os.Exit(1)
 		}
 		var agentBackend domain.AgentBackend
-		if codexRunner != nil {
-			agentBackend = codex.NewSharedBackend(codexRunner)
-			defer codexRunner.Close()
+		if backendRunner != nil {
+			agentBackend = agentserver.NewSharedBackend(backendRunner)
+			defer backendRunner.Close()
 		}
 
 		logger.Info("Starting Connect-gRPC server", "addr", *serveAddr)
@@ -275,13 +275,13 @@ func main() {
 		return
 	}
 
-	// Codex backend for interactive/one-shot CLI (plain `klein -b codex`).
+	// Whole-agent backend for interactive/one-shot CLI (plain `klein -b codex` or `-b kessel`).
 	// Only the interactive REPL prompts for approvals; one-shot/file mode is headless.
-	// codex.Select returns nil for every non-codex backend, so the factory just
+	// agentserver.Select returns nil for every backend that needs no external process, so the factory just
 	// runs the ReAct loop as usual.
-	codexOpts := codex.RunnerOptions{ApprovalPolicy: codex.ApprovalNever}
+	backendOpts := agentserver.RunnerOptions{ApprovalPolicy: agentserver.ApprovalNever}
 	if isInteractiveMode {
-		codexOpts = codex.RunnerOptions{ApprovalPolicy: codex.ApprovalOnRequest, Approver: terminalApprover()}
+		backendOpts = agentserver.RunnerOptions{ApprovalPolicy: agentserver.ApprovalOnRequest, Approver: terminalApprover(settings.LLM.Backend)}
 	}
 	a, cleanup, err := app.NewAgentWithOptions(ctx, app.AgentOptions{
 		Settings:           settings,
@@ -293,7 +293,7 @@ func main() {
 		SkipSessionRestore: skipSessionRestore,
 		IsInteractiveMode:  isInteractiveMode,
 		LLMClient:          llmClient,
-		AgentBackend:       codex.Select(settings, logger, codexOpts),
+		AgentBackend:       agentserver.Select(settings, logger, backendOpts),
 	})
 	if err != nil {
 		logger.Error("Failed to create agent", "error", err)
@@ -521,13 +521,13 @@ func loadPluginsFromFlags(marketplace string, pluginDirs []string, logger *pkgLo
 	return out
 }
 
-// terminalApprover prompts the user (y/N) for codex on-request approvals.
+// terminalApprover prompts the user (y/N) for a backend's on-request approvals.
 // It reads a line from stdin byte-by-byte so it doesn't buffer ahead of the
 // REPL's readline (the two never read concurrently — the approver only runs
 // mid-turn, while readline is idle).
-func terminalApprover() codex.Approver {
-	return func(req codex.ApprovalRequest) bool {
-		fmt.Printf("\n🔐 codex wants to %s:\n    %s\nApprove? [y/N] ", req.Kind, req.Summary)
+func terminalApprover(backend string) agentserver.Approver {
+	return func(req agentserver.ApprovalRequest) bool {
+		fmt.Printf("\n🔐 %s wants to %s:\n    %s\nApprove? [y/N] ", backend, req.Kind, req.Summary)
 		var b []byte
 		buf := make([]byte, 1)
 		for {

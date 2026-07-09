@@ -1,14 +1,23 @@
-// Package codex adapts the codex app-server as a whole-agent backend for klein.
-// Unlike the chat backends, codex runs its own reasoning + tool loop; klein
-// routes a conversation turn to a codex thread and takes back the final text.
+// Package agentserver adapts an external app-server as a whole-agent backend for
+// klein. Unlike the chat backends, such a backend runs its own reasoning + tool
+// loop; klein routes a conversation turn to one of its threads and takes back
+// the final text.
+//
+// Two backends are supported. Both speak the same JSON-RPC app-server protocol
+// and differ only in the binary spawned:
+//
+//   - codex  — the codex app-server (`codex app-server`)
+//   - kessel — the kessel agent (`kessel-cli app-server`), which implements the
+//     subset of that protocol used here
 //
 // It drives the app-server over the LOW-LEVEL JSON-RPC protocol (not the SDK's
-// high-level Thread helpers) for one reason: klein exposes its own tools to
-// codex via the experimental `dynamicTools` mechanism, which requires the
+// high-level Thread helpers) for one reason: klein exposes its own tools to the
+// backend via the experimental `dynamicTools` mechanism, which requires the
 // `experimentalApi` capability negotiated at `initialize` — something the SDK's
-// New() does not send. Codex then calls back for those tools via ItemToolCall
-// over the same stdio connection (see dynamictools.go). See doc/DESIGN.md.
-package codex
+// New() does not send. The backend then calls back for those tools via
+// ItemToolCall over the same stdio connection (see dynamictools.go). See
+// doc/DESIGN.md.
+package agentserver
 
 import (
 	"context"
@@ -25,12 +34,17 @@ import (
 )
 
 // Config configures a Runner. Model/Effort come from klein's llm settings; the
-// rest from the optional "codex" settings block.
+// rest from the optional "codex"/"kessel" settings block.
 type Config struct {
-	Tools          domain.ToolManager
-	MCPServers     map[string]any
-	Approver       Approver // decides on-request approvals (nil = auto-accept, for headless)
-	CodexPath      string
+	Tools      domain.ToolManager
+	MCPServers map[string]any
+	Approver   Approver // decides on-request approvals (nil = auto-accept, for headless)
+	// Command and Args spawn the app-server ("codex app-server", "kessel-cli app-server").
+	Command string
+	Args    []string
+	// Backend names which app-server this is, for backend-specific behavior
+	// (e.g. the codex-only auth probe) and for log/error messages.
+	Backend        string
 	Model          string
 	Effort         string
 	ApprovalPolicy string
@@ -51,19 +65,18 @@ type Runner struct {
 
 const clientName = "klein"
 
-// NewRunner spawns the codex app-server, negotiates the experimentalApi
-// capability, and precomputes the dynamic-tool specs. Close it to stop the
-// process. Requires the codex binary on PATH (or Config.CodexPath); auth/model
-// are codex's own.
+// NewRunner spawns the app-server, negotiates the experimentalApi capability,
+// and precomputes the dynamic-tool specs. Close it to stop the process. Requires
+// the backend binary on PATH (or an explicit path in settings); auth/model are
+// the backend's own.
 func NewRunner(ctx context.Context, cfg Config) (*Runner, error) {
-	path := cfg.CodexPath
-	if path == "" {
-		path = "codex"
+	if cfg.Command == "" {
+		return nil, errors.New("agent backend: no command configured")
 	}
 	// The spawn context governs process startup only; lifetime is tied to Close.
-	transport, err := rpc.SpawnStdio(context.WithoutCancel(ctx), path, []string{"app-server"}, os.Stderr)
+	transport, err := rpc.SpawnStdio(context.WithoutCancel(ctx), cfg.Command, cfg.Args, os.Stderr)
 	if err != nil {
-		return nil, fmt.Errorf("spawn codex app-server: %w", err)
+		return nil, fmt.Errorf("spawn %s app-server: %w", cfg.Command, err)
 	}
 
 	handler := &toolHandler{tools: cfg.Tools, approver: cfg.Approver}
@@ -74,16 +87,18 @@ func NewRunner(ctx context.Context, cfg Config) (*Runner, error) {
 		Capabilities: protocol.InitializeCapabilities{ExperimentalApi: true},
 	}); err != nil {
 		_ = client.Close()
-		return nil, fmt.Errorf("initialize codex app-server: %w", err)
+		return nil, fmt.Errorf("initialize %s app-server: %w", cfg.Command, err)
 	}
 	if err := client.Notify(ctx, "initialized", nil); err != nil {
 		_ = client.Close()
-		return nil, fmt.Errorf("codex initialized notify: %w", err)
+		return nil, fmt.Errorf("%s initialized notify: %w", cfg.Command, err)
 	}
 
-	// Eagerly validate that codex is usable (authenticated) so a login/config
-	// failure surfaces at klein startup, not on the user's first prompt.
-	if err := probeReady(ctx, client); err != nil {
+	// Eagerly validate the backend is usable so a login/config failure surfaces
+	// at klein startup, not on the user's first prompt. Doubles as a liveness
+	// check on the handshake. Kessel answers this too — it carries credentials in
+	// its own config and reports no auth requirement.
+	if err := probeReady(ctx, client, cfg.Backend); err != nil {
 		_ = client.Close()
 		return nil, err
 	}
@@ -96,13 +111,14 @@ func NewRunner(ctx context.Context, cfg Config) (*Runner, error) {
 	}, nil
 }
 
-// probeReady checks that the codex app-server is authenticated. codex's
-// initialize succeeds even when logged out, so without this the first failure
-// only appears on the first turn.
-func probeReady(ctx context.Context, client *rpc.Client) error {
+// probeReady checks that the app-server is authenticated. initialize succeeds
+// even when codex is logged out, so without this the first failure only appears
+// on the first turn. Backends with no login (kessel) report no auth requirement
+// and pass.
+func probeReady(ctx context.Context, client *rpc.Client, backend string) error {
 	var resp protocol.GetAccountResponse
 	if err := client.Call(ctx, "account/read", protocol.GetAccountParams{}, &resp); err != nil {
-		return fmt.Errorf("codex readiness check (account/read) failed: %w", err)
+		return fmt.Errorf("%s readiness check (account/read) failed: %w", backend, err)
 	}
 	if resp.RequiresOpenaiAuth && resp.Account == nil {
 		return errors.New("codex is not logged in — run `codex login` (or configure an API key for the codex CLI)")

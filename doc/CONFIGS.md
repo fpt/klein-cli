@@ -77,7 +77,7 @@ The `claw` object configures the `klein claw` gateway; see
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
-| `backend` | string | `"ollama"` | Backend: `ollama`, `anthropic`, `openai`, `gemini`, `codex` |
+| `backend` | string | `"ollama"` | Backend: `ollama`, `anthropic`, `openai`, `gemini`, `codex`, `kessel` |
 | `model` | string | *(backend-specific)* | Model name |
 | `base_url` | string | *(backend-specific)* | API base URL (Ollama and OpenAI/Azure only) |
 | `thinking` | bool | `true` | Enable thinking mode when model supports it |
@@ -92,6 +92,7 @@ The `claw` object configures the `klein claw` gateway; see
 | `openai` | `gpt-5.4-mini` | *(OpenAI API)* |
 | `gemini` | `gemini-2.5-flash-lite` | *(Google API)* |
 | `codex` | *(codex-owned)* | *(codex app-server)* |
+| `kessel` | *(kessel-owned)* | *(kessel app-server)* |
 
 ### `codex` — codex app-server backend
 
@@ -118,6 +119,40 @@ needs a codex build with `dynamicTools`/`experimentalApi` support.
 {
   "llm": { "backend": "codex", "model": "gpt-5.4", "effort": "medium" },
   "codex": { "sandbox_mode": "workspace-write" }
+}
+```
+
+### `kessel` — kessel app-server backend
+
+Used only when `llm.backend == "kessel"`. Like codex, kessel is a **whole-agent**
+backend driven over the same app-server JSON-RPC protocol (`internal/agentserver`
+serves both): klein routes each turn to a kessel thread and takes back the final
+answer, while klein keeps the frontend, memory-context injection, and
+session↔thread mapping. Requires the **`kessel-cli` binary on `PATH`**.
+
+Kessel owns its own model and credentials — it reads `MODEL_PATH` (a local GGUF)
+or `OPENAI_API_KEY` from the environment it is spawned in, so `llm.model` is
+optional. klein's native tools (memory + schedule) are registered as
+`dynamicTools` exactly as for codex, and kessel calls back in-process over the
+same connection. klein's external MCP servers are passed through; kessel's own
+`read`/`glob`/`grep`/`write`/`edit`/`bash` tools cover filesystem and shell.
+
+Two differences from codex worth knowing:
+
+- **No sandbox.** `codex.sandbox_mode` has no kessel equivalent, so
+  `approval_policy` is the only gate on filesystem and shell mutations.
+- **No login.** Kessel has nothing to authenticate against beyond the API key or
+  model path in its own environment.
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `kessel_path` | string | `kessel-cli` (PATH) | Path to the kessel binary |
+| `approval_policy` | string | *(mode-dependent)* | `never` / `on-request`. Same mode defaults as codex: the interactive repl prompts you (y/N) before kessel writes a file or runs a command; headless surfaces auto-approve. Set explicitly to override. |
+
+```json
+{
+  "llm": { "backend": "kessel" },
+  "kessel": { "kessel_path": "/usr/local/bin/kessel-cli", "approval_policy": "on-request" }
 }
 ```
 

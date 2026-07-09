@@ -26,7 +26,7 @@ Every entry point ultimately builds the same stack. From the bottom up:
 ├──────────────────────────────────────────────────────────────┤
 │ Backend (domain.LLM)      anthropic · openai · gemini · ollama│  chat, tool-calling, thinking
 └──────────────────────────────────────────────────────────────┘
-       (plus codex — a whole-agent backend routed above domain.LLM; see §7)
+   (plus codex & kessel — whole-agent backends routed above domain.LLM; see §7)
 ```
 
 The three layers the rest of this doc drills into:
@@ -286,40 +286,53 @@ append is the dominant memory op.
   `effort` come from the agent's `settings.json` — the gateway does **not** set
   them (it only passes a working directory when starting a session).
 
-### Codex — a whole-agent backend (not a `domain.LLM`)
+### Whole-agent backends: codex and kessel (not `domain.LLM`s)
 
-`backend: "codex"` is special. Codex (`internal/codex`, wrapping the
-codex app-server) is not a chat model — it runs its **own** reasoning + tool
-loop. So it is *not* plugged in as a `domain.LLM`; instead `app.Agent.Invoke`
-branches: when a `CodexBackend` is set, the turn is routed to a codex thread
-(`Runner.RunTurn`) and the ReAct loop + `ToolManager` are bypassed entirely. The
-`domain.LLM` slot holds only a stub (so construction and `ModelID()` work; `Chat`
-is never called).
+`backend: "codex"` and `backend: "kessel"` are special. Neither is a chat model —
+each runs its **own** reasoning + tool loop. So they are *not* plugged in as a
+`domain.LLM`; instead `app.Agent.Invoke` branches: when a `CodexBackend` is set,
+the turn is routed to a backend thread (`Runner.RunTurn`) and the ReAct loop +
+`ToolManager` are bypassed entirely. The `domain.LLM` slot holds only a stub (so
+construction and `ModelID()` work; `Chat` is never called).
 
-klein keeps every frontend duty around the codex turn: the repl/claw surfaces,
+Both are driven by **one** implementation, `internal/agentserver`, because both
+speak the same JSON-RPC **app-server protocol**. They differ only in the binary
+spawned (`codex app-server` vs `kessel-cli app-server`, resolved by `command()`)
+and in who owns the model: codex takes it from the codex CLI's config, kessel
+from its own. kessel implements the subset of the protocol used here (see
+rs-kessel `crates/lib/src/appserver/`).
+
+klein keeps every frontend duty around the backend turn: the repl/claw surfaces,
 memory-context injection, run-log append, and **session↔thread mapping**. The
-active skill's prompt is passed to codex as *developer instructions*. One codex
+active skill's prompt is passed to the backend as *developer instructions*. One
 app-server process is shared across all sessions (turns are serialized).
 
-**How klein's tools reach codex.** The Runner drives the app-server over the
-**low-level JSON-RPC protocol** (not the SDK's high-level `Thread` helpers),
-because klein registers its native tools via codex's experimental **`dynamicTools`**
+**How klein's tools reach the backend.** The Runner drives the app-server over
+the **low-level JSON-RPC protocol** (not the SDK's high-level `Thread` helpers),
+because klein registers its native tools via the experimental **`dynamicTools`**
 mechanism — which needs the `experimentalApi` capability negotiated at
 `initialize`, something the SDK's `New()` does not send. So the Runner spawns the
 app-server, `initialize`s with `experimentalApi`, registers klein's memory +
-schedule tools as `dynamicTools` on `thread/start`, and services codex's
+schedule tools as `dynamicTools` on `thread/start`, and services the backend's
 **`ItemToolCall`** callbacks in-process by dispatching to the live tool managers
 (same files, same locks — no HTTP, no MCP server). klein's configured **external
-MCP servers** are also passed through codex config; filesystem/shell come from
-codex's own native tools.
+MCP servers** are also passed through backend config; filesystem/shell come from
+the backend's own native tools.
 
 Thread lifecycle: `dynamicTools` cannot be re-registered on `thread/resume`, so a
 tool-enabled thread is always one this process started — a session's persisted
 `thread_id` from a prior run is replaced by a fresh (tool-enabled) thread on its
 next turn (memory-context injection still carries facts across restarts).
 
-Requires the `codex` binary on `PATH` (with `dynamicTools` support — experimental);
-auth/model are codex's own.
+**Approvals.** `approval_policy` decides who authorizes a mutation. Under
+`never` the backend proceeds unasked (headless surfaces). Otherwise it raises
+`item/commandExecution/requestApproval` / `item/fileChange/requestApproval`, and
+klein's `toolHandler` either auto-accepts (headless, `Approver == nil`) or
+prompts the user (interactive repl). Note kessel has **no sandbox** of its own —
+`codex.sandbox_mode` does not apply to it, so approvals are the only gate.
+
+Requires the `codex` binary on `PATH` (with `dynamicTools` support —
+experimental) or the `kessel-cli` binary; auth/model are the backend's own.
 
 ---
 

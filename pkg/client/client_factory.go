@@ -20,10 +20,11 @@ func NewLLMClient(settings config.LLMSettings) (domain.LLM, error) {
 		return openai.NewOpenAIClient(settings.Model, settings.MaxTokens, settings.Effort)
 	case "gemini":
 		return gemini.NewGeminiClientWithTokens(settings.Model, settings.MaxTokens)
-	case "codex":
-		// codex is a whole-agent backend routed via internal/codex; this stub
-		// only satisfies domain.LLM for agent construction (Chat is never called).
-		return &codexStubLLM{model: settings.Model}, nil
+	case "codex", "kessel":
+		// These are whole-agent backends routed via internal/agentserver; this
+		// stub only satisfies domain.LLM for agent construction (Chat is never
+		// called).
+		return &agentStubLLM{backend: settings.Backend, model: settings.Model}, nil
 	default:
 		return ollama.NewOllamaClient(settings.Model, settings.MaxTokens, settings.Thinking)
 	}

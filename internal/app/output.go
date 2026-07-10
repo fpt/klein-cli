@@ -8,6 +8,19 @@ import (
 	"unicode/utf8"
 
 	"golang.org/x/term"
+
+	"github.com/fpt/klein-cli/pkg/agent/events"
+)
+
+// ANSI escape codes for console coloring. These are written inline to the
+// console writer, matching the existing thinking/response-header output; the
+// events forwarded to external consumers (Connect server / gateway) carry no
+// color, so downstream surfaces are unaffected.
+const (
+	ansiReset = "\x1b[0m"
+	ansiDim   = "\x1b[90m" // bright black / gray
+	ansiCyan  = "\x1b[36m"
+	ansiRed   = "\x1b[31m"
 )
 
 // WriteSplashScreen writes an ASCII art splash screen of Klein to w.
@@ -161,6 +174,40 @@ func WriteSplashScreen(w io.Writer, colored bool) {
 		)
 	}
 	fmt.Fprintln(w)
+}
+
+// toolResultMaxLines caps how many trailing lines of a tool result are shown on
+// the console (applied to both successful and failed results so a noisy command
+// does not flood the terminal).
+const toolResultMaxLines = 5
+
+// writeToolResult renders a tool/command result to the console: the last few
+// lines of output, dimmed hints for truncation/empty output, and errors in red.
+// Failures are truncated the same as successes — a non-zero exit does not turn
+// the whole (often long) output into a wall of red ERROR lines.
+func writeToolResult(w io.Writer, data events.ToolResultData) {
+	if w == nil {
+		return
+	}
+	if data.Content == "" {
+		fmt.Fprintf(w, "%s  (no output)%s\n", ansiDim, ansiReset)
+		return
+	}
+
+	lines := strings.Split(data.Content, "\n")
+	if len(lines) > toolResultMaxLines {
+		fmt.Fprintf(w, "%s  ...(%d more lines)%s\n", ansiDim, len(lines)-toolResultMaxLines, ansiReset)
+		lines = lines[len(lines)-toolResultMaxLines:]
+	}
+
+	for _, line := range lines {
+		line = truncate(line, 80)
+		if data.IsError {
+			fmt.Fprintf(w, "%s  ERROR %s%s\n", ansiRed, line, ansiReset)
+		} else {
+			fmt.Fprintf(w, "  %s\n", line)
+		}
+	}
 }
 
 // WriteResponseHeader writes a standardized response header to w.

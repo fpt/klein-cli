@@ -25,12 +25,15 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"strings"
 	"sync"
 
 	"github.com/pmenglund/codex-sdk-go/protocol"
 	"github.com/pmenglund/codex-sdk-go/rpc"
 
 	"github.com/fpt/klein-cli/pkg/agent/domain"
+	"github.com/fpt/klein-cli/pkg/agent/events"
+	"github.com/fpt/klein-cli/pkg/message"
 )
 
 // Config configures a Runner. Model/Effort come from klein's llm settings; the
@@ -132,9 +135,15 @@ func probeReady(ctx context.Context, client *rpc.Client, backend string) error {
 // thread/resume cannot re-register dynamic tools, so a tool-enabled thread is
 // always one we started this run. developerInstructions (the active skill
 // prompt) steers codex.
-func (r *Runner) RunTurn(ctx context.Context, threadID, prompt, developerInstructions string) (string, string, error) {
+func (r *Runner) RunTurn(
+	ctx context.Context, threadID, prompt, developerInstructions string, emit func(events.EventType, any),
+) (string, string, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+
+	if emit == nil {
+		emit = func(events.EventType, any) {}
+	}
 
 	if threadID == "" || !r.started[threadID] {
 		id, err := r.startThread(ctx, developerInstructions)
@@ -145,7 +154,7 @@ func (r *Runner) RunTurn(ctx context.Context, threadID, prompt, developerInstruc
 		threadID = id
 	}
 
-	resp, err := r.runTurn(ctx, threadID, prompt)
+	resp, err := r.runTurn(ctx, threadID, prompt, emit)
 	if err != nil {
 		return threadID, "", err
 	}
@@ -191,8 +200,12 @@ func (r *Runner) startThread(ctx context.Context, developerInstructions string) 
 }
 
 // runTurn starts a turn and drains notifications until the turn completes,
-// returning the last agent message text.
-func (r *Runner) runTurn(ctx context.Context, threadID, prompt string) (string, error) {
+// returning the last agent message text. Intermediate items (commands run,
+// reasoning, file changes, tool calls) are forwarded to emit as they stream in
+// so the caller can show what the backend is doing, not just the final text.
+func (r *Runner) runTurn(
+	ctx context.Context, threadID, prompt string, emit func(events.EventType, any),
+) (string, error) {
 	iter := r.client.SubscribeNotifications(0)
 	defer iter.Close()
 
@@ -207,13 +220,14 @@ func (r *Runner) runTurn(ctx context.Context, threadID, prompt string) (string, 
 		return "", fmt.Errorf("codex turn/start: %w", err)
 	}
 
+	progress := &turnProgress{emit: emit, announced: map[string]bool{}}
 	final := ""
 	for {
 		note, err := iter.Next(ctx)
 		if err != nil {
 			return "", fmt.Errorf("codex notification stream: %w", err)
 		}
-		text, status := classifyNote(note, threadID)
+		text, status := classifyNote(note, threadID, progress)
 		if text != "" {
 			final = text
 		}
@@ -237,8 +251,10 @@ const (
 
 // classifyNote returns any assistant text carried by the notification and
 // whether the turn is done/failed. Notifications for other threads are ignored
-// (the subscription is process-global).
-func classifyNote(note rpc.Notification, threadID string) (string, noteStatus) {
+// (the subscription is process-global). Along the way it forwards item activity
+// (item/started announces a command/tool call; item/completed carries its
+// result or a completed reasoning block) to the progress tracker for display.
+func classifyNote(note rpc.Notification, threadID string, progress *turnProgress) (string, noteStatus) {
 	var p struct {
 		ThreadID string          `json:"threadId"`
 		Item     json.RawMessage `json:"item"`
@@ -248,7 +264,10 @@ func classifyNote(note rpc.Notification, threadID string) (string, noteStatus) {
 		return "", noteContinue
 	}
 	switch note.Method {
+	case "item/started":
+		progress.render(p.Item, false)
 	case "item/completed":
+		progress.render(p.Item, true)
 		if text, ok := extractText(p.Item); ok {
 			return text, noteContinue
 		}
@@ -258,6 +277,166 @@ func classifyNote(note rpc.Notification, threadID string) (string, noteStatus) {
 		return "", noteFailed
 	}
 	return "", noteContinue
+}
+
+// codexItem is the subset of a codex ThreadItem (see the app-server protocol's
+// ItemCompletedNotification schema) that klein renders as progress. The `type`
+// field discriminates the variant; the rest are variant-specific and left zero
+// when absent.
+type codexItem struct {
+	AggregatedOutput *string  `json:"aggregatedOutput"`
+	ExitCode         *int     `json:"exitCode"`
+	Error            *string  `json:"error"`
+	ID               string   `json:"id"`
+	Type             string   `json:"type"`
+	Command          string   `json:"command"`
+	Status           string   `json:"status"`
+	Tool             string   `json:"tool"`
+	Server           string   `json:"server"`
+	Query            string   `json:"query"`
+	Summary          []string `json:"summary"`
+	Changes          []struct {
+		Path string `json:"path"`
+		Kind string `json:"kind"`
+	} `json:"changes"`
+}
+
+// Synthetic tool names klein assigns to codex activity so it renders through
+// the same ReAct event path as native tool use.
+const (
+	toolExec       = "exec"
+	toolApplyPatch = "apply_patch"
+	toolWebSearch  = "web_search"
+)
+
+// statusFailed is the codex CommandExecutionStatus/PatchApplyStatus value
+// marking a command or patch that did not succeed.
+const statusFailed = "failed"
+
+// Argument keys used when announcing codex activity as tool calls.
+const (
+	argCommand = "command"
+	argFiles   = "files"
+	argQuery   = "query"
+)
+
+// turnProgress translates a turn's codex ThreadItems into ReAct-style events so
+// the app layer renders backend activity through the same path as native tool
+// use. It tracks which items have already been announced (by item id) so a
+// tool call is shown exactly once whether codex emits item/started, only
+// item/completed, or both.
+type turnProgress struct {
+	emit      func(events.EventType, any)
+	announced map[string]bool
+}
+
+// render emits progress for one ThreadItem, dispatching by variant. completed
+// marks an item/completed notification (carrying the outcome) versus an
+// item/started announcement. agentMessage (returned as the turn text) and other
+// item types (plan, sleep, review-mode, …) are not rendered as progress.
+func (tp *turnProgress) render(raw json.RawMessage, completed bool) {
+	var it codexItem
+	if len(raw) == 0 || json.Unmarshal(raw, &it) != nil {
+		return
+	}
+
+	switch it.Type {
+	case "commandExecution":
+		tp.renderCommand(it, completed)
+	case "fileChange":
+		tp.renderFileChange(it, completed)
+	case "mcpToolCall", "dynamicToolCall":
+		tp.renderToolCall(it, completed)
+	case "webSearch":
+		tp.announce(it.ID, toolWebSearch, message.ToolArgumentValues{argQuery: it.Query})
+	case "reasoning":
+		if completed {
+			if s := strings.TrimSpace(strings.Join(it.Summary, "\n")); s != "" {
+				tp.emit(events.EventTypeThinkingChunk, events.ThinkingChunkData{Content: s + "\n"})
+			}
+		}
+	}
+}
+
+func (tp *turnProgress) renderCommand(it codexItem, completed bool) {
+	tp.announce(it.ID, toolExec, message.ToolArgumentValues{argCommand: it.Command})
+	if !completed {
+		return
+	}
+	tp.emit(events.EventTypeToolResult, events.ToolResultData{
+		ToolName: toolExec,
+		Content:  commandResultSummary(it.AggregatedOutput, it.ExitCode),
+		IsError:  it.Status == statusFailed || (it.ExitCode != nil && *it.ExitCode != 0),
+	})
+}
+
+func (tp *turnProgress) renderFileChange(it codexItem, completed bool) {
+	paths := make([]string, 0, len(it.Changes))
+	for _, c := range it.Changes {
+		paths = append(paths, strings.TrimSpace(c.Kind+" "+c.Path))
+	}
+	tp.announce(it.ID, toolApplyPatch, message.ToolArgumentValues{argFiles: paths})
+	if !completed {
+		return
+	}
+	tp.emit(events.EventTypeToolResult, events.ToolResultData{
+		ToolName: toolApplyPatch,
+		Content:  fmt.Sprintf("%d file(s): %s", len(it.Changes), statusOrDefault(it.Status, "applied")),
+		IsError:  it.Status == statusFailed,
+	})
+}
+
+func (tp *turnProgress) renderToolCall(it codexItem, completed bool) {
+	name := it.Tool
+	if it.Server != "" {
+		name = it.Server + "/" + it.Tool
+	}
+	tp.announce(it.ID, name, message.ToolArgumentValues{})
+	if !completed {
+		return
+	}
+	content := statusOrDefault(it.Status, "done")
+	isErr := it.Status == statusFailed
+	if it.Error != nil && *it.Error != "" {
+		content = *it.Error
+		isErr = true
+	}
+	tp.emit(events.EventTypeToolResult, events.ToolResultData{ToolName: name, Content: content, IsError: isErr})
+}
+
+// announce emits a ToolCallStart for an item the first time it is seen, keyed by
+// item id, so a call announced at item/started is not repeated at
+// item/completed (and is still shown when only item/completed arrives).
+func (tp *turnProgress) announce(id, tool string, args message.ToolArgumentValues) {
+	if id != "" {
+		if tp.announced[id] {
+			return
+		}
+		tp.announced[id] = true
+	}
+	tp.emit(events.EventTypeToolCallStart, events.ToolCallStartData{ToolName: tool, Arguments: args})
+}
+
+// commandResultSummary renders a command's output followed by its exit status.
+// The status goes last so it survives the app layer's tail-truncation of long
+// results — the exit code is the part the user most needs to see.
+func commandResultSummary(aggregatedOutput *string, exitCode *int) string {
+	status := "exit 0"
+	if exitCode != nil {
+		status = fmt.Sprintf("exit %d", *exitCode)
+	}
+	if aggregatedOutput == nil || strings.TrimSpace(*aggregatedOutput) == "" {
+		return status
+	}
+	return strings.TrimRight(*aggregatedOutput, "\n") + "\n" + status
+}
+
+// statusOrDefault returns status, or fallback when codex omitted it.
+func statusOrDefault(status, fallback string) string {
+	if status == "" {
+		return fallback
+	}
+	return status
 }
 
 func (r *Runner) approvalPolicy() string {

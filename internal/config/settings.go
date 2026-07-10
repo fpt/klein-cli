@@ -258,7 +258,7 @@ type AgentSettings struct {
 // optional with headless-friendly defaults.
 type CodexSettings struct {
 	CodexPath      string `json:"codex_path,omitempty"`      // path to the codex binary ("" → "codex" on PATH)
-	ApprovalPolicy string `json:"approval_policy,omitempty"` // never|on-failure|on-request|untrusted ("" → never)
+	ApprovalPolicy string `json:"approval_policy,omitempty"` //nolint:tagliatelle // never|on-request|untrusted|granular
 	SandboxMode    string `json:"sandbox_mode,omitempty"`    // read-only|workspace-write|danger-full-access ("" → workspace-write)
 }
 

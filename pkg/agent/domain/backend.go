@@ -2,7 +2,11 @@
 // app, client, and backend layers, free of any concrete infrastructure deps.
 package domain
 
-import "context"
+import (
+	"context"
+
+	"github.com/fpt/klein-cli/pkg/agent/events"
+)
 
 // BackendRunner runs a whole conversation turn via an external agent process
 // (e.g. the codex app-server). When an Agent has one set, Invoke routes the
@@ -11,8 +15,15 @@ import "context"
 //
 // threadID is empty for a session's first turn; RunTurn returns the (created)
 // thread id to persist for continuation.
+//
+// emit surfaces intermediate activity (commands the backend runs, reasoning,
+// file changes, tool calls) as it streams in, so callers can show progress the
+// same way the ReAct loop does. It may be nil (progress is then discarded) and
+// must be safe to call from the goroutine draining the backend.
 type BackendRunner interface {
-	RunTurn(ctx context.Context, threadID, prompt, developerInstructions string) (newThreadID, response string, err error)
+	RunTurn(
+		ctx context.Context, threadID, prompt, developerInstructions string, emit func(events.EventType, any),
+	) (newThreadID, response string, err error)
 }
 
 // AgentBackend lazily provisions the external process backing a whole-agent

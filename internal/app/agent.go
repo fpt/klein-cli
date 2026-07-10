@@ -341,7 +341,13 @@ func truncate(s string, n int) string {
 	if len(s) <= n {
 		return s
 	}
-	return s[:n] + "…"
+	// len is a byte count; truncate on a rune boundary so multibyte text
+	// (e.g. Japanese) is never split into an invalid sequence.
+	r := []rune(s)
+	if len(r) <= n {
+		return s
+	}
+	return string(r[:n]) + "…"
 }
 
 // AgentOptions configures agent construction. NewAgentWithOptions is a factory
@@ -1229,8 +1235,18 @@ func (a *Agent) invokeCodex(ctx context.Context, activeSkill *skill.Skill, userI
 	threadID := a.loadCodexThreadID()
 	devInstr := activeSkill.RenderContent("", a.workingDir)
 
-	newThreadID, response, err := a.codexBackend.RunTurn(ctx, threadID, userInput, devInstr)
+	// Route the backend's intermediate activity (commands it runs, reasoning,
+	// file changes, tool calls) through the same event pipeline as the ReAct
+	// loop, so progress is written to the console and forwarded to any external
+	// handler (Connect server / gateway) exactly like native tool use.
+	emitter := events.NewSimpleEventEmitter()
+	a.setupEventHandlers(emitter)
+
+	newThreadID, response, err := a.codexBackend.RunTurn(ctx, threadID, userInput, devInstr, emitter.EmitEvent)
 	if err != nil {
+		// Forward to the external handler only (Connect server / gateway rely on
+		// it). Interactive callers print the error themselves via executeTurn, so
+		// routing it through the console writer here would double it.
 		if a.externalEventHandler != nil {
 			a.externalEventHandler(events.AgentEvent{Type: events.EventTypeError, Data: events.ErrorData{Error: err}})
 		}
@@ -1251,9 +1267,10 @@ func (a *Agent) invokeCodex(ctx context.Context, activeSkill *skill.Skill, userI
 		}
 	}
 
-	if a.externalEventHandler != nil {
-		a.externalEventHandler(events.AgentEvent{Type: events.EventTypeResponse, Data: events.ResponseData{Message: assistant}})
-	}
+	// EventTypeResponse resets any in-progress thinking style and forwards the
+	// final message to the external handler (the console text itself is printed
+	// by the caller from the returned message).
+	emitter.EmitEvent(events.EventTypeResponse, events.ResponseData{Message: assistant})
 	return assistant, nil
 }
 
@@ -1301,7 +1318,8 @@ func (a *Agent) setupEventHandlers(emitter events.EventEmitter) {
 		switch event.Type {
 		case events.EventTypeToolCallStart:
 			if data, ok := event.Data.(events.ToolCallStartData); ok {
-				fmt.Fprintf(writer, "Running tool %s %v\n", data.ToolName, data.Arguments)
+				fmt.Fprintf(writer, "%sRunning tool%s %s%s%s %v\n",
+					ansiDim, ansiReset, ansiCyan, data.ToolName, ansiReset, data.Arguments)
 				if data.ToolName == "Read" {
 					if path, ok := data.Arguments["file_path"].(string); ok && path != "" {
 						a.recordRecentlyRead(path)
@@ -1311,27 +1329,7 @@ func (a *Agent) setupEventHandlers(emitter events.EventEmitter) {
 
 		case events.EventTypeToolResult:
 			if data, ok := event.Data.(events.ToolResultData); ok {
-				if data.Content == "" {
-					fmt.Fprintln(writer, "  (no output)")
-				} else if data.IsError {
-					lines := strings.Split(data.Content, "\n")
-					for _, line := range lines {
-						fmt.Fprintf(writer, "  ERROR %s\n", line)
-					}
-				} else {
-					lines := strings.Split(data.Content, "\n")
-					maxLines := 5
-					if len(lines) > maxLines {
-						fmt.Fprintf(writer, "  ...(%d more lines)\n", len(lines)-maxLines)
-						lines = lines[len(lines)-maxLines:]
-					}
-					for _, line := range lines {
-						if len(line) > 80 {
-							line = line[:77] + "..."
-						}
-						fmt.Fprintf(writer, "  %s\n", line)
-					}
-				}
+				writeToolResult(writer, data)
 			}
 
 		case events.EventTypeThinkingChunk:

@@ -75,6 +75,12 @@ func (s *Settings) SchedulesFile() string {
 	return filepath.Join(s.ResolvedBaseDir(), "schedules.json")
 }
 
+// MemoryDBFile is <base>/memory/memory.sqlite — the versioned long-term memory
+// store backing the Remember/Recall/Reinforce tools (memorydb).
+func (s *Settings) MemoryDBFile() string {
+	return filepath.Join(s.MemoryDir(), "memory.sqlite")
+}
+
 // LLMSettings contains LLM client configuration
 type LLMSettings struct {
 	Backend   string `json:"backend"`              // "ollama", "anthropic", "openai", or "gemini"

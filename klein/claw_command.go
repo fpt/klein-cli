@@ -6,17 +6,19 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strings"
 	"syscall"
 
-	"github.com/fpt/klein-cli/internal/app"
 	"github.com/fpt/klein-cli/internal/agentserver"
+	"github.com/fpt/klein-cli/internal/app"
 	"github.com/fpt/klein-cli/internal/config"
 	connectserver "github.com/fpt/klein-cli/internal/connectrpc"
 	"github.com/fpt/klein-cli/internal/gateway"
 	"github.com/fpt/klein-cli/internal/infra"
 	"github.com/fpt/klein-cli/internal/mcp"
 	"github.com/fpt/klein-cli/internal/tool"
+	"github.com/fpt/klein-cli/internal/tool/memorydb"
 	"github.com/fpt/klein-cli/pkg/agent/domain"
 	client "github.com/fpt/klein-cli/pkg/client"
 	pkgLogger "github.com/fpt/klein-cli/pkg/logger"
@@ -187,6 +189,17 @@ func buildClawToolManagers(ctx context.Context, settings *config.Settings, cfg *
 	logger.Info("Memory tools enabled", "dir", cfg.Memory.BaseDir)
 	mcpToolManagers["schedule"] = tool.NewScheduleToolManager(cfg.SchedulesFile)
 	logger.Info("Schedule tools enabled", "file", cfg.SchedulesFile)
+
+	// Versioned long-term memory (Remember/Recall/Reinforce) under the memory dir.
+	// The handle lives for the gateway's lifetime (WAL auto-checkpoints); degrade
+	// gracefully if it can't be opened.
+	kbPath := filepath.Join(cfg.Memory.BaseDir, "memory.sqlite")
+	if kb, err := memorydb.NewManager(kbPath); err != nil {
+		logger.Warn("Long-term memory (memorydb) disabled", "error", err)
+	} else {
+		mcpToolManagers["memorydb"] = kb
+		logger.Info("Long-term memory tools enabled", "file", kbPath)
+	}
 
 	return mcpToolManagers, integration
 }

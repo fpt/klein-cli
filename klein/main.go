@@ -6,16 +6,18 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 
-	"github.com/fpt/klein-cli/internal/app"
 	"github.com/fpt/klein-cli/internal/agentserver"
+	"github.com/fpt/klein-cli/internal/app"
 	"github.com/fpt/klein-cli/internal/config"
 	connectserver "github.com/fpt/klein-cli/internal/connectrpc"
 	"github.com/fpt/klein-cli/internal/infra"
 	"github.com/fpt/klein-cli/internal/mcp"
 	pluginpkg "github.com/fpt/klein-cli/internal/plugin"
 	"github.com/fpt/klein-cli/internal/tool"
+	"github.com/fpt/klein-cli/internal/tool/memorydb"
 	"github.com/fpt/klein-cli/pkg/agent/domain"
 	client "github.com/fpt/klein-cli/pkg/client"
 	pkgLogger "github.com/fpt/klein-cli/pkg/logger"
@@ -244,6 +246,18 @@ func main() {
 		}
 		mcpToolManagers["schedule"] = tool.NewScheduleToolManager(schedFile)
 		logger.Info("Schedule tools enabled", "file", schedFile)
+
+		// Register the versioned long-term memory (Remember/Recall/Reinforce),
+		// backed by sqlite under the shared memory dir. Degrade gracefully if it
+		// can't be opened, matching MCP tool behavior.
+		kbPath := filepath.Join(memDir, "memory.sqlite")
+		if kb, kbErr := memorydb.NewManager(kbPath); kbErr != nil {
+			logger.Warn("Long-term memory (memorydb) disabled", "error", kbErr)
+		} else {
+			mcpToolManagers["memorydb"] = kb
+			defer kb.Close()
+			logger.Info("Long-term memory tools enabled", "file", kbPath)
+		}
 
 		// Session persistence defaults to <base_dir>/sessions.
 		sessDir := *sessionsDir

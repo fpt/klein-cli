@@ -11,6 +11,9 @@ import (
 	"github.com/fpt/klein-cli/internal/tool/memorydb"
 )
 
+// cmdMemory is the /memory command name (REPL palette + dispatch).
+const cmdMemory = "memory"
+
 const memoryUsage = `Usage:
   /memory [list]        List active memories with reference stats
   /memory all           Include superseded/forgotten versions

@@ -76,7 +76,7 @@ func getSlashCommands() []SlashCommand {
 			},
 		},
 		{
-			Name:        "memory",
+			Name:        cmdMemory,
 			Description: "Inspect/curate long-term memory (list, show <id>, search <q>, forget <id>)",
 			Handler: func(a *Agent) bool {
 				handleMemoryCommand(a, "")
@@ -119,7 +119,7 @@ func handleSlashCommand(input string, a *Agent) bool {
 
 	// /memory takes subcommands/args, which the generic argument-less dispatch
 	// below would drop — handle it here with the full argument string.
-	if commandName == "memory" {
+	if commandName == cmdMemory {
 		_, args := SplitSlashCommand(input)
 		handleMemoryCommand(a, args)
 		return false
@@ -259,6 +259,10 @@ func StartInteractiveMode(ctx context.Context, a *Agent, skillName string) {
 		Stdin:                  pasteReader,
 	}
 
+	// rl is referenced by the listener (to redraw when we print candidates), so it
+	// is declared before the listener and assigned by NewEx below.
+	var rl *readline.Instance
+
 	// Simple listener - let readline handle everything, just sync our state
 	rlCfg.SetListener(func(line []rune, pos int, key rune) (newLine []rune, newPos int, ok bool) {
 		// Always sync our PromptBuilder state with readline's current state
@@ -275,12 +279,23 @@ func StartInteractiveMode(ctx context.Context, a *Agent, skillName string) {
 			return []rune{}, 0, true
 		}
 
+		// The moment the user types a leading '/', show the command palette so
+		// candidates are discoverable without pressing Tab.
+		if rl != nil && key == '/' && len(line) == 1 {
+			rl.Clean()
+			fmt.Println()
+			printSlashCandidates(a)
+			rl.Refresh()
+			return nil, 0, false
+		}
+
 		// Let readline handle all other keys (backspace, delete, arrows, typing, etc.)
 		// We don't interfere, just stay in sync
 		return nil, 0, false
 	})
 
-	rl, err := readline.NewEx(rlCfg)
+	var err error
+	rl, err = readline.NewEx(rlCfg)
 	if err != nil {
 		fmt.Printf("❌ Failed to initialize interactive mode: %v\n", err)
 		fmt.Println("💡 Please use one-shot mode instead: klein \"your request here\"")
@@ -397,6 +412,29 @@ func StartInteractiveMode(ctx context.Context, a *Agent, skillName string) {
 		if canceled {
 			fmt.Printf("🔄 Ready for next command.\n")
 		}
+	}
+}
+
+// slashCandidates returns the invocable /commands for display: built-ins, the
+// multi-turn drivers (/goal, /loop), and any loaded plugin commands.
+func slashCandidates(a *Agent) []SlashCommand {
+	cmds := getSlashCommands()
+	cmds = append(cmds,
+		SlashCommand{Name: cmdGoal, Description: "Set and track a goal across turns"},
+		SlashCommand{Name: cmdLoop, Description: "Repeat a prompt/command on an interval"},
+	)
+	for _, name := range a.ListPluginCommands() {
+		cmds = append(cmds, SlashCommand{Name: name, Description: "(plugin command)"})
+	}
+	return cmds
+}
+
+// printSlashCandidates lists the available slash commands. Shown live when the
+// user types a leading '/' in the REPL.
+func printSlashCandidates(a *Agent) {
+	fmt.Println("Commands (type to filter, Tab to complete):")
+	for _, c := range slashCandidates(a) {
+		fmt.Printf("  /%-12s %s\n", c.Name, c.Description)
 	}
 }
 

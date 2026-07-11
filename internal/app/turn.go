@@ -12,6 +12,13 @@ import (
 	"github.com/fpt/klein-cli/pkg/message"
 )
 
+// Multi-turn driving slash command names (dispatched by handleDrivingCommand,
+// listed in the REPL command palette).
+const (
+	cmdGoal = "goal"
+	cmdLoop = "loop"
+)
+
 // handleDrivingCommand dispatches the multi-turn driving slash commands
 // (/goal and /loop), which need the execution context and active skill. It
 // returns true if the input was one of these commands (whether or not it did
@@ -20,10 +27,10 @@ func handleDrivingCommand(ctx context.Context, a *Agent, skillName, input string
 	trimmed := strings.TrimSpace(input)
 	name, args, _ := strings.Cut(strings.TrimPrefix(trimmed, "/"), " ")
 	switch name {
-	case "goal":
+	case cmdGoal:
 		runGoal(ctx, a, skillName, args)
 		return true
-	case "loop":
+	case cmdLoop:
 		runLoop(ctx, a, skillName, args)
 		return true
 	}

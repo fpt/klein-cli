@@ -59,6 +59,26 @@ func captureStdout(t *testing.T, fn func()) string {
 	return buf.String()
 }
 
+func TestSlashCandidates(t *testing.T) {
+	t.Parallel()
+	a, _ := newMemoryAgent(t)
+
+	got := map[string]bool{}
+	for _, c := range slashCandidates(a) {
+		got[c.Name] = true
+	}
+	for _, want := range []string{"help", "memory", cmdGoal, cmdLoop} {
+		if !got[want] {
+			t.Errorf("slash candidates missing /%s", want)
+		}
+	}
+
+	out := captureStdout(t, func() { printSlashCandidates(a) })
+	if !strings.Contains(out, "/memory") || !strings.Contains(out, "Commands") {
+		t.Fatalf("printSlashCandidates output:\n%s", out)
+	}
+}
+
 func TestMemoryManagerDetected(t *testing.T) {
 	t.Parallel()
 	a, mgr := newMemoryAgent(t)

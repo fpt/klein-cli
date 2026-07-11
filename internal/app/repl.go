@@ -76,6 +76,14 @@ func getSlashCommands() []SlashCommand {
 			},
 		},
 		{
+			Name:        "memory",
+			Description: "Inspect/curate long-term memory (list, show <id>, search <q>, forget <id>)",
+			Handler: func(a *Agent) bool {
+				handleMemoryCommand(a, "")
+				return false
+			},
+		},
+		{
 			Name:        "quit",
 			Description: "Exit the interactive session",
 			Handler: func(a *Agent) bool {
@@ -108,6 +116,15 @@ func handleSlashCommand(input string, a *Agent) bool {
 	}
 
 	commandName := strings.TrimPrefix(parts[0], "/")
+
+	// /memory takes subcommands/args, which the generic argument-less dispatch
+	// below would drop — handle it here with the full argument string.
+	if commandName == "memory" {
+		_, args := SplitSlashCommand(input)
+		handleMemoryCommand(a, args)
+		return false
+	}
+
 	commands := getSlashCommands()
 
 	// Find and execute the command

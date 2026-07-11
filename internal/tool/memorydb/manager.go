@@ -62,6 +62,10 @@ func NewManagerWithStore(store *Store) *Manager {
 // Close releases the underlying database.
 func (m *Manager) Close() error { return m.store.Close() }
 
+// Store returns the underlying store for direct inspection/curation (e.g. the
+// REPL /memory command). Model-facing access goes through the tools instead.
+func (m *Manager) Store() *Store { return m.store }
+
 // arg is a terse message.ToolArgument constructor (keeps registrations readable).
 func arg(name, typ string, required bool, desc string) message.ToolArgument {
 	return message.ToolArgument{

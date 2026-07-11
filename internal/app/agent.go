@@ -22,6 +22,7 @@ import (
 	"github.com/fpt/klein-cli/internal/repository"
 	"github.com/fpt/klein-cli/internal/skill"
 	"github.com/fpt/klein-cli/internal/tool"
+	"github.com/fpt/klein-cli/internal/tool/memorydb"
 	"github.com/fpt/klein-cli/pkg/agent/domain"
 	"github.com/fpt/klein-cli/pkg/agent/events"
 	"github.com/fpt/klein-cli/pkg/agent/react"
@@ -62,6 +63,7 @@ type Agent struct {
 	externalEventHandler events.EventHandler // optional: forward events to external consumers (e.g., Connect server)
 	recentlyReadFiles    []string            // up to 5 most recently read unique file paths
 	memoryDir            string              // $HOME/.klein/projects/<hash>/memory/ (interactive mode only)
+	memoryManager        *memorydb.Manager   // sqlite long-term memory, when wired in (serve/claw); nil otherwise
 
 	// codexBackend, when set (llm.backend == "codex"), routes Invoke to a codex
 	// app-server thread instead of the ReAct loop. codexThreadID caches this
@@ -613,6 +615,7 @@ func NewAgentWithOptions(ctx context.Context, opts AgentOptions) (*Agent, func()
 		sessionRules:       newSessionRules(isInteractiveMode),
 		permRules:          permRules,
 		memoryDir:          memoryDir,
+		memoryManager:      findMemoryManager(opts.MCPToolManagers),
 	}
 
 	cleanup, err = a.wireToolsAndBackend(ctx, tools, opts.AgentBackend)
@@ -621,6 +624,21 @@ func NewAgentWithOptions(ctx context.Context, opts AgentOptions) (*Agent, func()
 	}
 
 	return a, cleanup, nil
+}
+
+// MemoryManager returns the sqlite long-term memory manager, or nil when it is
+// not wired into this session (e.g. the plain CLI, which has no memorydb).
+func (a *Agent) MemoryManager() *memorydb.Manager { return a.memoryManager }
+
+// findMemoryManager returns the first *memorydb.Manager among the MCP tool
+// managers, or nil.
+func findMemoryManager(managers map[string]domain.ToolManager) *memorydb.Manager {
+	for _, m := range managers {
+		if kb, ok := m.(*memorydb.Manager); ok {
+			return kb
+		}
+	}
+	return nil
 }
 
 // wireToolsAndBackend performs the two-phase init that needs the constructed

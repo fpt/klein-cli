@@ -6,6 +6,8 @@ import (
 
 	"github.com/fpt/klein-cli/internal/config"
 	"github.com/fpt/klein-cli/internal/tool"
+	"github.com/fpt/klein-cli/internal/tool/memorydb"
+	"github.com/fpt/klein-cli/pkg/agent/domain"
 )
 
 // RunnerOptions carries mode-dependent behavior the settings file doesn't fix.
@@ -62,10 +64,20 @@ func approvalPolicy(settings *config.Settings, opts RunnerOptions) string {
 func NewRunnerFromSettings(
 	ctx context.Context, settings *config.Settings, workingDir string, opts RunnerOptions,
 ) (*Runner, error) {
-	nativeTools := tool.NewCompositeToolManager(
+	nativeManagers := []domain.ToolManager{
 		tool.NewMemoryToolManager(settings.MemoryDir()),
 		tool.NewScheduleToolManager(settings.SchedulesFile()),
-	)
+	}
+	// Versioned long-term memory (Remember/Recall/Reinforce) as embedded dynamic
+	// tools. Degrade gracefully if the sqlite store can't be opened. The handle
+	// lives for the backend process's lifetime (WAL auto-checkpoints).
+	if kb, err := memorydb.NewManager(settings.MemoryDBFile()); err != nil {
+		// No logger here; skip silently rather than fail backend startup.
+		_ = err
+	} else {
+		nativeManagers = append(nativeManagers, kb)
+	}
+	nativeTools := tool.NewCompositeToolManager(nativeManagers...)
 
 	path, args, err := command(settings)
 	if err != nil {

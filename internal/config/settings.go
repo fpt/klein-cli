@@ -339,25 +339,29 @@ func LoadSettings(configPath string) (*Settings, error) {
 	// Create settings with file repository
 	settings := NewSettingsWithPath(configPath)
 
-	// If config path is empty, search for existing settings file
-	if configPath == "" {
+	// Resolve the settings file path: the explicit path, or a search of the
+	// standard locations (.agents/, ~/.klein/).
+	path := configPath
+	if path == "" {
 		foundPath, _ := settings.settingsRepository.FindSettingsFile()
-		if foundPath == "" {
-			// No settings file found, create default one and return defaults
-			return createDefaultSettingsFile()
-		}
+		path = foundPath
 	}
 
-	// Try to load settings
-	err := settings.Load()
-	if err != nil {
-		// If file doesn't exist and a specific path was provided, create it
+	// No settings file exists yet.
+	if _, statErr := os.Stat(path); path == "" || os.IsNotExist(statErr) {
 		if configPath != "" {
-			createdSettings, _ := createSettingsFileAtPath(configPath)
-			return createdSettings, nil
+			// An explicit path was requested but is missing: scaffold it.
+			return createSettingsFileAtPath(configPath)
 		}
-		// Otherwise return defaults
-		return GetDefaultSettings(), nil
+		// Nothing configured anywhere: create a default file and use defaults.
+		return createDefaultSettingsFile()
+	}
+
+	// The file exists — a load/parse failure here is a real error the user must
+	// see. Do NOT silently fall back to defaults (which hides typos) or
+	// overwrite the file with defaults.
+	if err := settings.Load(); err != nil {
+		return nil, fmt.Errorf("invalid settings file %s: %w", path, err)
 	}
 
 	return settings, nil

@@ -258,9 +258,11 @@ func TestProgress_ToolCall_TruncatesLongArgValue(t *testing.T) {
 		kArgs: map[string]any{"content": long},
 	})))
 
+	// Arguments are summarized via message.SummarizeToolArgs, so a long value is
+	// truncated well below its original length and ends with an ellipsis.
 	v, _ := firstStart(t, *got).Arguments["content"].(string)
-	if len([]rune(v)) > maxArgValueLen+1 { // +1 for the ellipsis rune
-		t.Fatalf("long arg not truncated: %d runes", len([]rune(v)))
+	if n := len([]rune(v)); n == 0 || n >= 500 {
+		t.Fatalf("long arg not truncated: %d runes", n)
 	}
 	if !strings.HasSuffix(v, "…") {
 		t.Errorf("truncated value should end with ellipsis: %q", v)

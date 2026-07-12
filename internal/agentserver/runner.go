@@ -411,21 +411,17 @@ func (tp *turnProgress) renderToolCall(it codexItem, completed bool) {
 // tail-truncated by the app layer, so only the input is capped here.
 const maxArgValueLen = 200
 
-// toolCallArgs parses a tool call's raw arguments into a display map, truncating
-// long string values so the input is visible without flooding the terminal. A
-// non-object payload is shown compactly under a single "input" key.
+// toolCallArgs parses a tool call's raw arguments into a display map, summarized
+// (via message.SummarizeToolArgs) exactly like native ReAct tool calls so tool
+// input is reported identically across backends. A non-object payload is shown
+// compactly under a single "input" key.
 func toolCallArgs(raw json.RawMessage) message.ToolArgumentValues {
 	if len(raw) == 0 {
 		return message.ToolArgumentValues{}
 	}
 	var obj map[string]any
 	if err := json.Unmarshal(raw, &obj); err == nil {
-		for k, v := range obj {
-			if s, ok := v.(string); ok {
-				obj[k] = truncateStr(s, maxArgValueLen)
-			}
-		}
-		return obj
+		return message.SummarizeToolArgs(obj)
 	}
 	return message.ToolArgumentValues{"input": compactJSON(raw, maxArgValueLen)}
 }

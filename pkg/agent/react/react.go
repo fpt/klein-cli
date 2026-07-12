@@ -422,7 +422,7 @@ func (r *ReAct) processResponse(ctx context.Context, currentIter int, resp messa
 		// Emit tool call start event
 		r.eventEmitter.EmitEvent(events.EventTypeToolCallStart, events.ToolCallStartData{
 			ToolName:  string(toolCall.ToolName()),
-			Arguments: r.summarizeToolArgs(toolCall.ToolArguments()),
+			Arguments: message.SummarizeToolArgs(toolCall.ToolArguments()),
 			CallID:    "", // Could add call ID if needed
 		})
 		msg, err := r.handleToolCall(ctx, toolCall)
@@ -473,7 +473,7 @@ func (r *ReAct) processResponse(ctx context.Context, currentIter int, resp messa
 				// so handlers don't race on the event emitter.
 				r.eventEmitter.EmitEvent(events.EventTypeToolCallStart, events.ToolCallStartData{
 					ToolName:  string(call.ToolName()),
-					Arguments: r.summarizeToolArgs(call.ToolArguments()),
+					Arguments: message.SummarizeToolArgs(call.ToolArguments()),
 				})
 				wg.Add(1)
 				go func(idx int, c *message.ToolCallMessage) {
@@ -501,7 +501,7 @@ func (r *ReAct) processResponse(ctx context.Context, currentIter int, resp messa
 				}
 				r.eventEmitter.EmitEvent(events.EventTypeToolCallStart, events.ToolCallStartData{
 					ToolName:  string(call.ToolName()),
-					Arguments: r.summarizeToolArgs(call.ToolArguments()),
+					Arguments: message.SummarizeToolArgs(call.ToolArguments()),
 				})
 				msg, err := r.handleToolCall(ctx, call)
 				if err != nil {
@@ -565,87 +565,6 @@ func (r *ReAct) printTruncatedToolResult(msg message.Message) {
 		Content:  content,
 		IsError:  isError,
 	})
-}
-
-// summarizeToolArgs produces a log-friendly version of tool arguments by truncating
-// large strings and collapsing deeply nested or large collections.
-func (r *ReAct) summarizeToolArgs(args message.ToolArgumentValues) message.ToolArgumentValues {
-	const (
-		maxStringLen  = 120 // max characters for string values
-		maxArrayItems = 8   // max items to display from arrays/slices
-		maxMapEntries = 12  // max entries to display from maps
-		maxDepth      = 2   // max recursion depth
-	)
-
-	var summarize func(v any, depth int) any
-	summarize = func(v any, depth int) any {
-		if depth > maxDepth {
-			return "…"
-		}
-		switch t := v.(type) {
-		case string:
-			if len(t) <= maxStringLen {
-				return t
-			}
-			return t[:maxStringLen-3] + "..."
-		case []byte:
-			s := string(t)
-			if len(s) <= maxStringLen {
-				return s
-			}
-			return s[:maxStringLen-3] + "..."
-		case []string:
-			n := len(t)
-			limit := n
-			if limit > maxArrayItems {
-				limit = maxArrayItems
-			}
-			out := make([]any, 0, limit)
-			for i := 0; i < limit; i++ {
-				out = append(out, summarize(t[i], depth+1))
-			}
-			if n > limit {
-				out = append(out, fmt.Sprintf("…+%d more", n-limit))
-			}
-			return out
-		case []any:
-			n := len(t)
-			limit := n
-			if limit > maxArrayItems {
-				limit = maxArrayItems
-			}
-			out := make([]any, 0, limit)
-			for i := 0; i < limit; i++ {
-				out = append(out, summarize(t[i], depth+1))
-			}
-			if n > limit {
-				out = append(out, fmt.Sprintf("…+%d more", n-limit))
-			}
-			return out
-		case map[string]any:
-			out := make(map[string]any)
-			count := 0
-			for k, val := range t {
-				if count >= maxMapEntries {
-					out["…"] = fmt.Sprintf("+%d more", len(t)-count)
-					break
-				}
-				out[k] = summarize(val, depth+1)
-				count++
-			}
-			return out
-		default:
-			// Numbers, bools, and other simple types
-			return t
-		}
-	}
-
-	result := summarize(map[string]any(args), 0)
-	if summarizedMap, ok := result.(map[string]any); ok {
-		return message.ToolArgumentValues(summarizedMap)
-	}
-	// Fallback to original args if something went wrong
-	return args
 }
 
 // emitEventWithIteration emits an event with iteration context

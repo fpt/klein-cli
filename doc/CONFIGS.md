@@ -147,7 +147,45 @@ Two differences from codex worth knowing:
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
 | `kessel_path` | string | `kessel-cli` (PATH) | Path to the kessel binary |
+| `config` | string | *(none)* | Path to a kessel config YAML (e.g. `../rs-kessel/configs/gemma4.yaml`). See below. |
 | `approval_policy` | string | *(mode-dependent)* | `never` / `on-request`. Same mode defaults as codex: the interactive repl prompts you (y/N) before kessel writes a file or runs a command; headless surfaces auto-approve. Set explicitly to override. |
+
+#### Running kessel from one of its config YAMLs
+
+`kessel-cli app-server` takes no config flag — it is configured **entirely by
+environment variables**. The `configs/*.yaml` files in rs-kessel are frontend
+configs (their `tts`/`stt`/`watcher` sections are for the Swift/C# apps).
+
+Point `kessel.config` at one and klein reads just its `llm:` and `agent:`
+sections, translating them into the environment kessel expects (Swift-only
+sections are ignored):
+
+| YAML key | Env var passed to `kessel-cli` |
+|----------|-------------------------------|
+| `llm.modelPath` | `MODEL_PATH` (an `hf:` spec is resolved/downloaded by kessel) |
+| `llm.baseURL` | `LLM_BASE_URL` (an explicit `""` means "local model") |
+| `llm.model` | `LLM_MODEL` |
+| `llm.apiKey` | `OPENAI_API_KEY` — **only if non-empty**; blank (the usual case) means kessel inherits it from your shell |
+| `llm.temperature` | `LLM_TEMPERATURE` |
+| `llm.maxTokens` | `MAX_TOKENS` |
+| `llm.reasoningEffort` | `REASONING_EFFORT` |
+| `agent.maxTurns` | `MAX_REACT_ITERATIONS` |
+
+Values from the config **override** the ambient shell; anything the file does not
+set (notably `OPENAI_API_KEY`) is inherited.
+
+```json
+{
+  "llm": { "backend": "kessel" },
+  "kessel": {
+    "kessel_path": "../rs-kessel/target/release/kessel-cli",
+    "config": "../rs-kessel/configs/gemma4.yaml",
+    "approval_policy": "on-request"
+  }
+}
+```
+
+Without `config`, kessel simply inherits klein's environment as before:
 
 ```json
 {

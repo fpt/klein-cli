@@ -275,6 +275,12 @@ type CodexSettings struct {
 type KesselSettings struct {
 	KesselPath     string `json:"kessel_path,omitempty"`     // path to the kessel binary ("" → "kessel-cli" on PATH)
 	ApprovalPolicy string `json:"approval_policy,omitempty"` // never|on-request ("" → the mode default)
+	// Config is an optional path to a kessel config YAML (e.g.
+	// ../rs-kessel/configs/gemma4.yaml). kessel-cli's app-server is configured by
+	// environment variables, so klein reads this file's llm/agent settings and
+	// passes them to the child as env. Its Swift-only sections (tts/stt/watcher)
+	// are ignored. Values here win over the ambient environment.
+	Config string `json:"config,omitempty"`
 }
 
 // BashSettings contains bash tool configuration

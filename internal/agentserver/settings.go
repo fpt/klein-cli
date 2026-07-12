@@ -84,9 +84,20 @@ func NewRunnerFromSettings(
 		return nil, err
 	}
 
+	// kessel-cli's app-server takes no config flag — it reads its settings from
+	// the environment. When a kessel config YAML is configured, translate its
+	// llm/agent sections into the child's env.
+	var env []string
+	if settings.LLM.Backend == BackendKessel && settings.Kessel.Config != "" {
+		if env, err = kesselEnv(settings.Kessel.Config); err != nil {
+			return nil, err
+		}
+	}
+
 	return NewRunner(ctx, Config{
 		Command:        path,
 		Args:           args,
+		Env:            env,
 		Backend:        settings.LLM.Backend,
 		Model:          settings.LLM.Model,
 		Effort:         settings.LLM.Effort,

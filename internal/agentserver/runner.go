@@ -20,6 +20,7 @@
 package agentserver
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -299,6 +300,13 @@ type codexItem struct {
 		Path string `json:"path"`
 		Kind string `json:"kind"`
 	} `json:"changes"`
+	// Tool-call input/output. Field names vary across backends and item variants,
+	// so several output candidates are captured and the first non-empty is shown;
+	// all are optional and absence degrades to the status string.
+	Arguments json.RawMessage `json:"arguments"`
+	Result    json.RawMessage `json:"result"`
+	Output    json.RawMessage `json:"output"`
+	Content   json.RawMessage `json:"content"`
 }
 
 // Synthetic tool names klein assigns to codex activity so it renders through
@@ -391,17 +399,119 @@ func (tp *turnProgress) renderToolCall(it codexItem, completed bool) {
 	if it.Server != "" {
 		name = it.Server + "/" + it.Tool
 	}
-	tp.announce(it.ID, name, message.ToolArgumentValues{})
+	tp.announce(it.ID, name, toolCallArgs(it.Arguments))
 	if !completed {
 		return
 	}
-	content := statusOrDefault(it.Status, "done")
-	isErr := it.Status == statusFailed
-	if it.Error != nil && *it.Error != "" {
-		content = *it.Error
-		isErr = true
-	}
+	content, isErr := toolCallOutcome(it)
 	tp.emit(events.EventTypeToolResult, events.ToolResultData{ToolName: name, Content: content, IsError: isErr})
+}
+
+// maxArgValueLen bounds a single displayed argument value; the result content is
+// tail-truncated by the app layer, so only the input is capped here.
+const maxArgValueLen = 200
+
+// toolCallArgs parses a tool call's raw arguments into a display map, truncating
+// long string values so the input is visible without flooding the terminal. A
+// non-object payload is shown compactly under a single "input" key.
+func toolCallArgs(raw json.RawMessage) message.ToolArgumentValues {
+	if len(raw) == 0 {
+		return message.ToolArgumentValues{}
+	}
+	var obj map[string]any
+	if err := json.Unmarshal(raw, &obj); err == nil {
+		for k, v := range obj {
+			if s, ok := v.(string); ok {
+				obj[k] = truncateStr(s, maxArgValueLen)
+			}
+		}
+		return obj
+	}
+	return message.ToolArgumentValues{"input": compactJSON(raw, maxArgValueLen)}
+}
+
+// toolCallOutcome extracts a displayable result + error flag for a completed
+// tool call: an explicit error, else the tool's output text, else the status.
+func toolCallOutcome(it codexItem) (content string, isErr bool) {
+	isErr = it.Status == statusFailed
+	if it.Error != nil && strings.TrimSpace(*it.Error) != "" {
+		return strings.TrimSpace(*it.Error), true
+	}
+	for _, raw := range []json.RawMessage{it.Result, it.Output, it.Content} {
+		if s := renderToolResult(raw); s != "" {
+			return s, isErr
+		}
+	}
+	return statusOrDefault(it.Status, "done"), isErr
+}
+
+// renderToolResult turns a raw tool-result payload into a readable string,
+// handling a JSON string, MCP-style content items ([{text:…}] or {content:[…]}),
+// or arbitrary JSON (compacted). Returns "" when there is nothing to show.
+func renderToolResult(raw json.RawMessage) string {
+	if len(raw) == 0 || string(raw) == "null" {
+		return ""
+	}
+	var s string
+	if json.Unmarshal(raw, &s) == nil {
+		return strings.TrimSpace(s)
+	}
+	if texts := contentItemTexts(raw); texts != "" {
+		return texts
+	}
+	return compactJSON(raw, 0)
+}
+
+// contentItemTexts joins the "text" fields of MCP-style content items, accepting
+// either a bare array or a {content:[…]} wrapper. Returns "" if neither matches.
+func contentItemTexts(raw json.RawMessage) string {
+	var wrapper struct {
+		Content json.RawMessage `json:"content"`
+	}
+	if json.Unmarshal(raw, &wrapper) == nil && len(wrapper.Content) > 0 {
+		if s := joinTexts(wrapper.Content); s != "" {
+			return s
+		}
+	}
+	return joinTexts(raw)
+}
+
+func joinTexts(raw json.RawMessage) string {
+	var items []struct {
+		Text string `json:"text"`
+	}
+	if json.Unmarshal(raw, &items) != nil {
+		return ""
+	}
+	parts := make([]string, 0, len(items))
+	for _, it := range items {
+		if t := strings.TrimSpace(it.Text); t != "" {
+			parts = append(parts, t)
+		}
+	}
+	return strings.Join(parts, "\n")
+}
+
+// compactJSON re-encodes raw as single-line JSON, truncated to limit runes (0 =
+// no limit). Falls back to the raw string if compaction fails.
+func compactJSON(raw json.RawMessage, limit int) string {
+	var buf bytes.Buffer
+	if err := json.Compact(&buf, raw); err != nil {
+		return truncateStr(strings.TrimSpace(string(raw)), limit)
+	}
+	return truncateStr(buf.String(), limit)
+}
+
+// truncateStr shortens s to limit runes with an ellipsis (limit <= 0 = no limit).
+func truncateStr(s string, limit int) string {
+	if limit <= 0 {
+		return s
+	}
+	r := []rune(s)
+	if len(r) <= limit {
+		return s
+	}
+	return string(r[:limit]) + "…"
 }
 
 // announce emits a ToolCallStart for an item the first time it is seen, keyed by

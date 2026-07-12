@@ -3,6 +3,7 @@ package agentserver
 import (
 	"encoding/json"
 	"maps"
+	"strings"
 	"testing"
 
 	"github.com/pmenglund/codex-sdk-go/rpc"
@@ -14,6 +15,9 @@ const (
 	testThread   = "thr_1"
 	stInProgress = "inProgress"
 	stCompleted  = "completed"
+
+	kTool = "tool"
+	kArgs = "arguments"
 )
 
 // capturedEvent records one emitted progress event for assertions.
@@ -165,6 +169,101 @@ func TestProgress_FileChange_EmitsPatch(t *testing.T) {
 	}
 	if start := (*got)[0].Data.(events.ToolCallStartData); start.ToolName != toolApplyPatch {
 		t.Errorf("fileChange tool = %q, want %q", start.ToolName, toolApplyPatch)
+	}
+}
+
+func firstStart(t *testing.T, got []capturedEvent) events.ToolCallStartData {
+	t.Helper()
+	for _, e := range got {
+		if d, ok := e.Data.(events.ToolCallStartData); ok {
+			return d
+		}
+	}
+	t.Fatal("no ToolCallStart event emitted")
+	return events.ToolCallStartData{}
+}
+
+func TestProgress_ToolCall_ShowsArgumentsAndResult(t *testing.T) {
+	t.Parallel()
+	progress, got := newProgress()
+
+	feed(progress, completed(itm("t1", "dynamicToolCall", map[string]any{
+		kTool:    "Recall",
+		"status": stCompleted,
+		kArgs:    map[string]any{argQuery: "sqlite"},
+		"result": "#1 [preference]: prefers modernc sqlite",
+	})))
+
+	// The call announces its input arguments (not an empty map).
+	start := firstStart(t, *got)
+	if start.ToolName != "Recall" || start.Arguments[argQuery] != "sqlite" {
+		t.Fatalf("ToolCallStart = %+v", start)
+	}
+	// The result carries the tool's real output (not just "completed").
+	res := toolResults(*got)
+	if len(res) != 1 || !strings.Contains(res[0].Content, "modernc sqlite") {
+		t.Fatalf("ToolResult = %+v", res)
+	}
+}
+
+func TestProgress_ToolCall_MCPContentItems(t *testing.T) {
+	t.Parallel()
+	progress, got := newProgress()
+
+	feed(progress, completed(itm("t2", "mcpToolCall", map[string]any{
+		"server": "godoc",
+		kTool:    "search",
+		"status": stCompleted,
+		kArgs:    map[string]any{"q": "io.Reader"},
+		"content": []any{
+			map[string]any{keyType: keyText, keyText: "Reader is the interface..."},
+		},
+	})))
+
+	if name := firstStart(t, *got).ToolName; name != "godoc/search" {
+		t.Errorf("tool name = %q, want godoc/search", name)
+	}
+	res := toolResults(*got)
+	if len(res) != 1 || !strings.Contains(res[0].Content, "Reader is the interface") {
+		t.Fatalf("MCP content items not extracted: %+v", res)
+	}
+}
+
+func TestProgress_ToolCall_FallsBackToStatus(t *testing.T) {
+	t.Parallel()
+	progress, got := newProgress()
+
+	// No arguments/result present: empty args + status content, i.e. the prior
+	// behavior — no regression when a backend omits these fields.
+	feed(progress, completed(itm("t3", "dynamicToolCall", map[string]any{
+		kTool: "Ping", "status": stCompleted,
+	})))
+
+	if args := firstStart(t, *got).Arguments; len(args) != 0 {
+		t.Errorf("expected empty args, got %+v", args)
+	}
+	res := toolResults(*got)
+	if len(res) != 1 || res[0].Content != stCompleted {
+		t.Fatalf("expected status fallback, got %+v", res)
+	}
+}
+
+func TestProgress_ToolCall_TruncatesLongArgValue(t *testing.T) {
+	t.Parallel()
+	progress, got := newProgress()
+
+	long := strings.Repeat("x", 500)
+	feed(progress, started(itm("t4", "dynamicToolCall", map[string]any{
+		kTool: "Remember",
+		kArgs: map[string]any{"content": long},
+	})))
+
+	v, _ := firstStart(t, *got).Arguments["content"].(string)
+	if len([]rune(v)) > maxArgValueLen+1 { // +1 for the ellipsis rune
+		t.Fatalf("long arg not truncated: %d runes", len([]rune(v)))
+	}
+	if !strings.HasSuffix(v, "…") {
+		t.Errorf("truncated value should end with ellipsis: %q", v)
 	}
 }
 

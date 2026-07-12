@@ -129,8 +129,9 @@ func main() {
 	// Load settings
 	settings, err := config.LoadSettings(*settingsPath)
 	if err != nil {
-		fmt.Printf("Warning: failed to load settings: %v\n", err)
-		settings = config.GetDefaultSettings()
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		fmt.Fprintln(os.Stderr, "Fix the settings file (or pass --settings <path>) and try again.")
+		os.Exit(1)
 	}
 
 	// Initialize structured logger based on settings

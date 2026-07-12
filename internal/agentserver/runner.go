@@ -46,6 +46,9 @@ type Config struct {
 	// Command and Args spawn the app-server ("codex app-server", "kessel-cli app-server").
 	Command string
 	Args    []string
+	// Env holds environment overrides for the child (kessel is configured purely
+	// by env; see kesselEnv). Empty means the child inherits klein's environment.
+	Env []string
 	// Backend names which app-server this is, for backend-specific behavior
 	// (e.g. the codex-only auth probe) and for log/error messages.
 	Backend        string
@@ -78,7 +81,11 @@ func NewRunner(ctx context.Context, cfg Config) (*Runner, error) {
 		return nil, errors.New("agent backend: no command configured")
 	}
 	// The spawn context governs process startup only; lifetime is tied to Close.
-	transport, err := rpc.SpawnStdio(context.WithoutCancel(ctx), cfg.Command, cfg.Args, os.Stderr)
+	// klein's own transport (not rpc.SpawnStdio) so the child's env can carry the
+	// backend's config-derived settings.
+	transport, err := spawnStdio(
+		context.WithoutCancel(ctx), cfg.Command, cfg.Args, childEnv(cfg.Env), os.Stderr,
+	)
 	if err != nil {
 		return nil, fmt.Errorf("spawn %s app-server: %w", cfg.Command, err)
 	}

@@ -17,6 +17,8 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -65,7 +67,14 @@ type Store struct {
 }
 
 // Open opens (creating if needed) the memory database at path and migrates it.
+// The parent directory is created if missing (except for the special ":memory:"
+// path used in tests).
 func Open(path string) (*Store, error) {
+	if path != ":memory:" && path != "" {
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			return nil, fmt.Errorf("create memory dir: %w", err)
+		}
+	}
 	dsn := path + "?_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)&_pragma=foreign_keys(ON)"
 	db, err := sql.Open("sqlite", dsn)
 	if err != nil {

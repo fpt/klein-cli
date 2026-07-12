@@ -8,6 +8,22 @@ import (
 	"time"
 )
 
+// TestOpenCreatesParentDir verifies Open creates a missing parent directory
+// (e.g. a fresh <base_dir>/memory/) rather than failing with CANTOPEN.
+func TestOpenCreatesParentDir(t *testing.T) {
+	t.Parallel()
+	// Nested path whose intermediate dirs do not exist yet.
+	path := filepath.Join(t.TempDir(), "memory", "sub", "mem.sqlite")
+	s, err := Open(path)
+	if err != nil {
+		t.Fatalf("Open with missing parent dir: %v", err)
+	}
+	defer s.Close()
+	if _, err := s.Remember(context.Background(), "fact", "fact", 0.5, nil, ""); err != nil {
+		t.Fatalf("Remember after auto-created dir: %v", err)
+	}
+}
+
 // newTestStore returns a file-backed store with a controllable clock so recency
 // and ordering are deterministic.
 func newTestStore(t *testing.T) *Store {

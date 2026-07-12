@@ -298,6 +298,23 @@ func main() {
 	if isInteractiveMode {
 		backendOpts = agentserver.RunnerOptions{ApprovalPolicy: agentserver.ApprovalOnRequest, Approver: terminalApprover(settings.LLM.Backend)}
 	}
+
+	// Long-term memory (Remember/Recall/Reinforce tools + the /memory REPL
+	// command) for the interactive REPL, backed by the shared sqlite store at
+	// <base_dir>/memory/memory.sqlite. WAL + busy_timeout make concurrent klein
+	// REPLs safe (concurrent readers, a serialized writer that waits rather than
+	// errors). One-shot/file mode stays ephemeral. Degrade gracefully on failure.
+	if isInteractiveMode {
+		kbPath := settings.MemoryDBFile()
+		if kb, kbErr := memorydb.NewManager(kbPath); kbErr != nil {
+			logger.Warn("Long-term memory (memorydb) disabled", "error", kbErr)
+		} else {
+			mcpToolManagers["memorydb"] = kb
+			defer kb.Close()
+			logger.Info("Long-term memory tools enabled", "file", kbPath)
+		}
+	}
+
 	a, cleanup, err := app.NewAgentWithOptions(ctx, app.AgentOptions{
 		Settings:           settings,
 		WorkingDir:         workingDirectory,

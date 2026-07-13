@@ -14,8 +14,10 @@ testsuite/
 ├── runner.sh              # Main test runner script
 ├── matrix_runner.sh       # Run tests across multiple backends
 ├── backends/              # Backend configuration files
+│   ├── anthropic.json
+│   ├── codex.json
 │   ├── gemini.json
-│   ├── ollama.json
+│   ├── kessel.json
 │   └── openai.json
 ├── testcases/             # Individual test cases
 │   ├── code_scenario/     # Simple code generation test
@@ -51,7 +53,7 @@ testsuite/
 # Build the binary first
 go build -o output/klein ./klein
 
-# Run a specific test with default backend (ollama)
+# Run a specific test with default backend (openai)
 CLI=output/klein ./testsuite/runner.sh fibonacci_test
 
 # Run with specific backend
@@ -120,13 +122,8 @@ BACKENDS=codex CLI=output/klein ./testsuite/matrix_runner.sh
 
 ## Backend Configurations
 
-### ollama.json
-- **Model**: gpt-oss:latest
-- **Features**: Native tool calling with thinking
-- **Token Limit**: 2000 tokens
-
 ### openai.json
-- **Model**: gpt-4o
+- **Model**: gpt-5.6-luna
 - **Features**: Native tool calling, structured output, vision
 - **Token Limit**: 2000 tokens
 

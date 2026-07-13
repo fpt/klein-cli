@@ -49,9 +49,9 @@ go run klein/main.go "Run go build on this project"
 
 # Multi-backend support
 go run klein/main.go -b anthropic "Analyze this codebase"
-go run klein/main.go -b openai -m gpt-4o "Create a REST API"
+go run klein/main.go -b openai -m gpt-5.6-luna "Create a REST API"
 go run klein/main.go -b gemini -m gemini-2.5-flash-lite "Optimize this code"
-go run klein/main.go -b ollama -m gpt-oss "Write unit tests"
+go run klein/main.go -b anthropic "Write unit tests"
 ```
 
 **Advanced Usage Examples:**
@@ -162,7 +162,7 @@ This is a Go-based skill-driven coding agent that uses SKILL.md-configured skill
 - `pkg/message/` - Message handling and thinking stream management
 - `pkg/client/` - LLM client implementations and abstractions:
   - `withtool.go` - ClientWithTool wrapper for tool management
-  - LLM client implementations (Ollama, Anthropic, OpenAI, Gemini)
+  - LLM client implementations (OpenAI, Anthropic, Gemini)
 
 **Key Types:**
 - `app.Agent` - Main application service handling skill execution with thinking channel management
@@ -208,7 +208,7 @@ The system uses skills defined in SKILL.md files (embedded + filesystem). Skills
 The system supports unified tool calling with automatic detection of model capabilities and sophisticated tool schema handling:
 
 **Native Tool Calling:**
-- Used by Anthropic Claude and tool-capable Ollama models (gpt-oss, etc.)
+- Used by OpenAI and Anthropic Claude
 - API-level tool definitions with structured tool_use/tool_result blocks
 - More efficient and reliable tool execution
 - Automatically detected via `IsToolCapable()` interface method
@@ -235,7 +235,7 @@ if len(args) > 0 {
 ```
 
 **Schema-as-Tool Pattern (Native Tool Calling for Structured Output):**
-- Used by tool-capable Ollama models for structured output (gpt-oss, etc.)
+- Used by tool-capable models for structured output
 - Creates a "respond" tool where target schema becomes tool parameters
 - Prompt enhancement instructs models to use the "respond" tool
 - JSON Schema validation ensures type-safe structured responses
@@ -345,14 +345,12 @@ mySchema := structuredClient.GetSchema() // Returns MyResponse, not any
 ```
 
 **Provider-Specific Implementations:**
-- **Ollama Tool**: Uses schema-as-tool pattern with native tool calling for structured output
 - **Anthropic**: Uses schema-as-tool pattern with native tool calling
 - **OpenAI/Gemini**: Uses native structured output with JSON Schema validation
 - **Automatic Detection**: Factory function chooses optimal approach per provider and model capabilities
 
 **Thinking Support:**
-Both Ollama and Anthropic support thinking capabilities:
-- **Ollama**: Reasoning models (gpt-oss) support the thinking parameter
+Anthropic and OpenAI reasoning models support thinking:
 - **Anthropic**: Claude models support ThinkingBlock responses for reasoning visibility
 - **Channel Management**: Application layer creates and manages thinking channels
 - **Stream Processing via Writer**: Thinking is streamed to an injected `io.Writer` for redirection (REPL, tests, or gRPC).
@@ -538,18 +536,12 @@ Instructions:
 - Module: `github.com/fpt/klein-cli`
 - Go Version: 1.24.4
 - Dependencies: 
-  - `github.com/ollama/ollama v0.11.10`
   - `github.com/anthropics/anthropic-sdk-go v1.5.0`
   - `github.com/openai/openai-go/v2 v2.0.2`
   - `google.golang.org/genai v1.19.0`
   - `github.com/chzyer/readline v1.5.1` - Terminal interaction with cursor movement and autocomplete
 
 ## Prerequisites
-
-**For Ollama (default):**
-- Ollama must be installed and running locally
-- Set `OLLAMA_HOST` environment variable if using non-default host
-- Ensure the model is available in Ollama
 
 **For Anthropic/Claude:**
 - Set `ANTHROPIC_API_KEY` environment variable with your API key
@@ -566,20 +558,15 @@ Instructions:
 
 ## Model Performance
 
-**Ollama Models:**
-
-**Native Tool Calling:**
-- `gpt-oss:latest` - Supports native Ollama tool calling API with thinking
-
 **Anthropic Models (Native Tool Calling):**
 - `claude-3-7-sonnet-latest` - Default Claude model
 - `claude-3-5-haiku-latest` - Faster Claude model
 - `claude-sonnet-4-20250514` - Latest Claude Sonnet 4
 
 **OpenAI Models (Native Tool Calling + Structured Output):**
-- `gpt-4o` - Latest GPT-4 Omni (vision, tool calling, structured output)
-- `gpt-4o-mini` - Smaller, faster GPT-4 Omni
-- `gpt-3.5-turbo` - Fast and cost-effective for most tasks
+- `gpt-5.6-luna` - Default (tool calling, structured output, vision)
+- `gpt-5.6-sol`
+- `gpt-5.6-terra`
 
 **Google Gemini Models (Native Schema + Structured Output):**
 - `gemini-2.5-flash-lite` - **Recommended** - Latest, fastest, most efficient
@@ -600,10 +587,6 @@ go test -cover ./pkg/agent/react/
 
 # Run specific test suites
 go test -v ./pkg/agent/react/ -run TestReAct_Invoke
-go test -v ./pkg/client/ollama/ -run TestToolSchemaIntegration
-
-# Test tool schema handling specifically
-go test ./pkg/client/ollama/ -v
 ```
 
 ### Integration Testing
@@ -622,7 +605,7 @@ NOTE: Use `make build` to build binary and always use `./output/klein` to run.
 4. **Allowlist Validation**: Test directory access restrictions
 
 **Tool Schema Testing:**
-1. **Native Tool Calling**: `go run klein/main.go -b ollama -m gpt-oss:latest "List files and analyze the code"`
+1. **Native Tool Calling**: `go run klein/main.go -b openai "List files and analyze the code"`
 2. **Parameter Handling**: Test tools with complex parameter schemas (tree_dir, search_local_files)
 3. **Schema Validation**: Verify proper parameter type mapping and validation
 4. **Tool Selection**: Test automatic routing for native tool calling based on model capabilities
@@ -674,7 +657,7 @@ The project includes comprehensive unit tests for:
 **Tool Schema Testing:**
 Comprehensive test suites for tool schema handling:
 
-**Native Tool Schema Testing (pkg/client/ollama/):**
+**Native Tool Schema Testing:**
 - "Respond" tool creation with target schemas as parameters
 - Schema-as-tool pattern validation
 - JSON Schema to API format conversion

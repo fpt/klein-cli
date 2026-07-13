@@ -7,17 +7,15 @@ import (
 	"github.com/fpt/klein-cli/pkg/agent/domain"
 	"github.com/fpt/klein-cli/pkg/client/anthropic"
 	"github.com/fpt/klein-cli/pkg/client/gemini"
-	"github.com/fpt/klein-cli/pkg/client/ollama"
 	"github.com/fpt/klein-cli/pkg/client/openai"
 )
 
-// NewLLMClient creates an LLM client based on settings.
+// NewLLMClient creates an LLM client based on settings. openai is the default:
+// unknown backends are rejected by config.ValidateSettings before reaching here.
 func NewLLMClient(settings config.LLMSettings) (domain.LLM, error) {
 	switch settings.Backend {
 	case "anthropic", "claude":
 		return anthropic.NewAnthropicClientWithTokens(settings.Model, settings.MaxTokens)
-	case "openai":
-		return openai.NewOpenAIClient(settings.Model, settings.MaxTokens, settings.Effort)
 	case "gemini":
 		return gemini.NewGeminiClientWithTokens(settings.Model, settings.MaxTokens)
 	case "codex", "kessel":
@@ -26,7 +24,11 @@ func NewLLMClient(settings config.LLMSettings) (domain.LLM, error) {
 		// called).
 		return &agentStubLLM{backend: settings.Backend, model: settings.Model}, nil
 	default:
-		return ollama.NewOllamaClient(settings.Model, settings.MaxTokens, settings.Thinking)
+		c, err := openai.NewOpenAIClient(settings.Model, settings.MaxTokens, settings.Effort)
+		if err != nil {
+			return nil, fmt.Errorf("create openai client: %w", err)
+		}
+		return c, nil
 	}
 }
 
@@ -39,12 +41,6 @@ func NewLLMClient(settings config.LLMSettings) (domain.LLM, error) {
 func NewClientWithToolManager(client domain.LLM, toolManager domain.ToolManager) (domain.ToolCallingLLM, error) {
 	// Build a fresh wrapper from the shared core based on the concrete type.
 	switch c := client.(type) {
-	case *ollama.OllamaClient:
-		// Ollama automatically chooses native tool calling vs schema-based on
-		// model capabilities.
-		toolClient := ollama.NewOllamaClientFromCore(c.OllamaCore)
-		toolClient.SetToolManager(toolManager)
-		return toolClient, nil
 	case *anthropic.AnthropicClient:
 		toolClient := anthropic.NewAnthropicClientFromCore(c.AnthropicCore)
 		toolClient.SetToolManager(toolManager)
@@ -79,11 +75,6 @@ func NewStructuredClient[T any](client domain.LLM) (domain.StructuredLLM[T], err
 
 	// Determine the appropriate structured client based on the client type
 	switch c := client.(type) {
-	case *ollama.OllamaClient:
-		if ollama.IsToolCapableModel(c.Model()) {
-			return NewToolCallingStructuredClient[T](c), nil
-		}
-		return nil, fmt.Errorf("model %s does not support structured output", c.Model())
 	case *anthropic.AnthropicClient:
 		// For Anthropic, use the generic tool calling-based structured client
 		return NewToolCallingStructuredClient[T](c), nil

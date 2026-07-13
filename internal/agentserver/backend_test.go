@@ -19,7 +19,7 @@ func TestIsAgentBackend(t *testing.T) {
 		{"kessel", true},
 		{"openai", false},
 		{"anthropic", false},
-		{"ollama", false},
+		{"gemini", false},
 		{"", false},
 	} {
 		if got := IsAgentBackend(tc.backend); got != tc.want {

@@ -168,7 +168,7 @@ func convertToolsToAnthropic(tools map[message.ToolName]message.Tool) []anthropi
 		var required []string
 
 		for _, arg := range tool.Arguments() {
-			// Enhanced schema conversion that handles complex types like Ollama
+			// Enhanced schema conversion that handles complex types
 			property := convertArgumentToAnthropicProperty(arg)
 			properties[string(arg.Name)] = property
 
@@ -205,7 +205,7 @@ func convertToolsToAnthropic(tools map[message.ToolName]message.Tool) []anthropi
 }
 
 // convertArgumentToAnthropicProperty converts a ToolArgument to Anthropic property schema
-// This provides enhanced schema conversion similar to Ollama's dynamic approach
+// This provides enhanced schema conversion with a dynamic approach
 func convertArgumentToAnthropicProperty(arg message.ToolArgument) map[string]any {
 	property := map[string]any{
 		"type":        arg.Type,

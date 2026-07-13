@@ -2,7 +2,7 @@
   "name": "openai",
   "llm": {
     "backend": "openai",
-    "model": "gpt-5.4-mini",
+    "model": "gpt-5.6-luna",
     "maxTokens": 2048
   }
 }

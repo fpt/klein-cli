@@ -12,10 +12,10 @@ NC='\033[0m' # No Color
 
 # Filtering env vars (comma-separated names, empty = all)
 #   TESTS="fibonacci,web_search"   — run only these testcases
-#   BACKENDS="ollama_qwen3_8b,anthropic" — run only these backends
+#   BACKENDS="openai,anthropic" — run only these backends
 #
 # Example:
-#   BACKENDS="ollama_gpt_oss_20b,ollama_qwen3_4b,ollama_qwen3_8b,ollama_qwen3_14b" \
+#   BACKENDS="openai,anthropic,gemini" \
 #   TESTS="fibonacci,web_search,coding" \
 #   CLI=output/klein ./testsuite/matrix_runner.sh
 
@@ -26,7 +26,7 @@ if [ -z "$CLI" ]; then
     echo ""
     echo "Optional filters (comma-separated names):"
     echo "  TESTS=fibonacci,web_search      run only matching testcases"
-    echo "  BACKENDS=ollama_qwen3_8b,anthropic  run only matching backends"
+    echo "  BACKENDS=openai,anthropic       run only matching backends"
     exit 1
 fi
 
@@ -71,13 +71,10 @@ in_filter() {
     echo "$filter" | tr ',' '\n' | grep -qx "$name"
 }
 
-# Function to check if a backend is available based on API keys / ollama
+# Function to check if a backend is available based on API keys
 is_backend_available() {
     local backend_name="$1"
     case "$backend_name" in
-        ollama*)
-            return 0
-            ;;
         openai)
             if [ -n "$OPENAI_API_KEY" ]; then
                 return 0

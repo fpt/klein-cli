@@ -12,7 +12,7 @@ import (
 )
 
 // ToolCallingStructuredClient implements StructuredLLM using tool calling with a "respond" tool
-// This works with any ToolCallingLLM (Anthropic, OpenAI, Ollama gpt-oss, etc.)
+// This works with any ToolCallingLLM (OpenAI, Anthropic, Gemini, etc.)
 type ToolCallingStructuredClient[T any] struct {
 	client          domain.ToolCallingLLM
 	generator       *jsonschema.Reflector

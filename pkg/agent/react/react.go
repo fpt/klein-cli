@@ -596,11 +596,9 @@ func (r *ReAct) estimateContextWindow() int {
 	case strings.Contains(clientType, "anthropic"):
 		return 200000 // Claude models typically have 200k+ context windows
 	case strings.Contains(clientType, "openai"):
-		return 128000 // GPT-4o models have 128k context windows
+		return 128000 // GPT-5.6 models have 128k context windows
 	case strings.Contains(clientType, "gemini"):
 		return 1000000 // Gemini models have very large context windows (1M+)
-	case strings.Contains(clientType, "ollama"):
-		return 128000 // Most modern Ollama models support 128k context
 	default:
 		return 100000 // Conservative fallback for unknown models
 	}

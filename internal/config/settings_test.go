@@ -30,8 +30,8 @@ func TestCreateDefaultSettingsFile(t *testing.T) {
 		t.Fatal("Expected non-nil settings")
 	}
 
-	if settings.LLM.Backend != "ollama" {
-		t.Errorf("Expected backend 'ollama', got '%s'", settings.LLM.Backend)
+	if settings.LLM.Backend != DefaultBackend {
+		t.Errorf("Expected backend %q, got %q", DefaultBackend, settings.LLM.Backend)
 	}
 
 	// Verify file was created
@@ -151,5 +151,36 @@ func TestLoadSettingsValidLoads(t *testing.T) {
 	}
 	if settings.LLM.Backend != testBackend || settings.LLM.Model != "claude-x" {
 		t.Fatalf("loaded values = %q/%q, want %s/claude-x", settings.LLM.Backend, settings.LLM.Model, testBackend)
+	}
+}
+
+// TestUnknownBackendIsRejectedNotCoerced guards a real footgun: an unrecognized
+// backend must keep its name so ValidateSettings rejects it, instead of being
+// silently rewritten to a working backend (which would make `-b ollama` quietly
+// run openai after the ollama client was removed).
+func TestUnknownBackendIsRejectedNotCoerced(t *testing.T) {
+	t.Parallel()
+	for _, name := range []string{"ollama", "bogus"} {
+		llm := GetDefaultLLMSettingsForBackend(name)
+		if llm.Backend != name {
+			t.Errorf("GetDefaultLLMSettingsForBackend(%q).Backend = %q; the name must be preserved "+
+				"so it can be rejected", name, llm.Backend)
+		}
+		s := GetDefaultSettings()
+		s.LLM = llm
+		if err := ValidateSettings(s); err == nil {
+			t.Errorf("ValidateSettings accepted unknown backend %q, want an error", name)
+		}
+	}
+}
+
+// TestDefaultAndUnsetBackendAreOpenAI pins the default backend.
+func TestDefaultAndUnsetBackendAreOpenAI(t *testing.T) {
+	t.Parallel()
+	if b := GetDefaultSettings().LLM.Backend; b != DefaultBackend {
+		t.Errorf("default backend = %q, want %q", b, DefaultBackend)
+	}
+	if b := GetDefaultLLMSettingsForBackend("").Backend; b != DefaultBackend {
+		t.Errorf("unset backend = %q, want %q", b, DefaultBackend)
 	}
 }

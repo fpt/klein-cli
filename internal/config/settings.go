@@ -81,16 +81,18 @@ func (s *Settings) MemoryDBFile() string {
 	return filepath.Join(s.MemoryDir(), "memory.sqlite")
 }
 
-// LLMSettings contains LLM client configuration
+// LLMSettings contains LLM client configuration.
+//
+//nolint:tagliatelle // json keys are the established on-disk settings schema
 type LLMSettings struct {
-	Backend   string `json:"backend"`              // "ollama", "anthropic", "openai", or "gemini"
+	Backend   string `json:"backend"`              // "openai", "anthropic", "gemini", "codex", or "kessel"
 	Model     string `json:"model"`                // model name
-	BaseURL   string `json:"base_url,omitempty"`   // for ollama or openai (Azure)
+	BaseURL   string `json:"base_url,omitempty"`   // optional provider base URL (OpenAI/Azure-compatible)
 	Thinking  bool   `json:"thinking,omitempty"`   // enable thinking mode
 	MaxTokens int    `json:"max_tokens,omitempty"` // maximum tokens for model responses (0 = use model default)
 	// Effort sets the reasoning effort for reasoning-capable models (primarily
 	// OpenAI GPT-5). Empty = backend default. The full vocabulary is in
-	// ValidEfforts, but actual support is model-dependent — e.g. gpt-5.4 accepts
+	// ValidEfforts, but actual support is model-dependent — e.g. gpt-5.6-luna accepts
 	// none/low/medium/high/xhigh but not minimal. Ignored by models without
 	// reasoning effort.
 	Effort string `json:"effort,omitempty"`
@@ -412,13 +414,7 @@ func SaveSettings(configPath string, settings *Settings) error {
 // GetDefaultSettings returns default application settings
 func GetDefaultSettings() *Settings {
 	return &Settings{
-		LLM: LLMSettings{
-			Backend:   "ollama",
-			Model:     "gpt-oss:latest",
-			BaseURL:   "http://localhost:11434",
-			Thinking:  true,
-			MaxTokens: 0, // 0 = use model-specific defaults
-		},
+		LLM: GetDefaultLLMSettingsForBackend(DefaultBackend),
 		Agent: AgentSettings{
 			MaxIterations: DefaultAgentMaxIterations,
 			LogLevel:      "info",
@@ -452,17 +448,12 @@ func GetDefaultSettings() *Settings {
 	}
 }
 
+// DefaultBackend is the backend used when none is configured.
+const DefaultBackend = "openai"
+
 // GetDefaultLLMSettingsForBackend returns default LLM settings for a specific backend
 func GetDefaultLLMSettingsForBackend(backend string) LLMSettings {
 	switch backend {
-	case "ollama":
-		return LLMSettings{
-			Backend:   "ollama",
-			Model:     "gpt-oss:latest",
-			BaseURL:   "http://localhost:11434",
-			Thinking:  true,
-			MaxTokens: 0,
-		}
 	case "anthropic", "claude":
 		return LLMSettings{
 			Backend:   "anthropic",
@@ -470,15 +461,6 @@ func GetDefaultLLMSettingsForBackend(backend string) LLMSettings {
 			BaseURL:   "",
 			Thinking:  true,
 			MaxTokens: 0,
-		}
-	case "openai":
-		return LLMSettings{
-			Backend:   "openai",
-			Model:     "gpt-5.4-mini",
-			BaseURL:   "",
-			Thinking:  true,
-			MaxTokens: 0,
-			Effort:    "low", // preserves prior hardcoded default for GPT-5 reasoning
 		}
 	case "gemini":
 		return LLMSettings{
@@ -494,9 +476,21 @@ func GetDefaultLLMSettingsForBackend(backend string) LLMSettings {
 		return LLMSettings{
 			Backend: backend,
 		}
+	case "", DefaultBackend:
+		// openai — the default backend, and the fallback for an unset one.
+		return LLMSettings{
+			Backend:   DefaultBackend,
+			Model:     "gpt-5.6-luna",
+			BaseURL:   "",
+			Thinking:  true,
+			MaxTokens: 0,
+			Effort:    "low", // preserves the prior hardcoded default for GPT-5 reasoning
+		}
 	default:
-		// Default to ollama settings for unknown backends
-		return GetDefaultLLMSettingsForBackend("ollama")
+		// An unrecognized backend keeps its name so ValidateSettings rejects it,
+		// rather than being silently coerced into a working one (which would let
+		// e.g. `-b ollama` quietly run openai instead).
+		return LLMSettings{Backend: backend}
 	}
 }
 
@@ -519,7 +513,7 @@ func applyDefaults(settings *Settings) {
 	// An app-server backend owns its own model (via its own config), so it must
 	// not inherit a chat-model default. The base Settings is seeded from
 	// GetDefaultSettings before the file is unmarshaled, so an omitted model
-	// surfaces here as the ollama default — clear that leak (an explicit model
+	// surfaces here as the default chat model — clear that leak (an explicit model
 	// is kept).
 	if isAgentServerBackend(settings.LLM.Backend) {
 		if settings.LLM.Model == defaults.LLM.Model {
@@ -527,9 +521,6 @@ func applyDefaults(settings *Settings) {
 		}
 	} else if settings.LLM.Model == "" {
 		settings.LLM.Model = defaults.LLM.Model
-	}
-	if settings.LLM.BaseURL == "" && settings.LLM.Backend == "ollama" {
-		settings.LLM.BaseURL = defaults.LLM.BaseURL
 	}
 
 	// Apply MCP defaults (no config_path needed anymore)
@@ -547,9 +538,11 @@ func applyDefaults(settings *Settings) {
 func ValidateSettings(settings *Settings) error {
 	// Validate LLM settings
 	switch settings.LLM.Backend {
-	case "ollama", "anthropic", "openai", "gemini", "codex", "kessel":
+	case "openai", "anthropic", "claude", "gemini", "codex", "kessel":
 	default:
-		return fmt.Errorf("unsupported LLM backend: %s (must be 'ollama', 'anthropic', 'openai', 'gemini', 'codex', or 'kessel')", settings.LLM.Backend)
+		return fmt.Errorf(
+			"unsupported LLM backend: %s (must be 'openai', 'anthropic', 'gemini', 'codex', or 'kessel')",
+			settings.LLM.Backend)
 	}
 
 	// An app-server backend manages its own model and auth, so an empty model is
@@ -559,7 +552,10 @@ func ValidateSettings(settings *Settings) error {
 	}
 
 	if !IsValidEffort(settings.LLM.Effort) {
-		return fmt.Errorf("invalid effort %q (must be empty or one of %v; actual support is model-dependent, e.g. gpt-5.4 accepts none/low/medium/high/xhigh but not minimal)", settings.LLM.Effort, ValidEfforts)
+		return fmt.Errorf(
+			"invalid effort %q (must be empty or one of %v; actual support is model-dependent, "+
+				"e.g. gpt-5.6-luna accepts none/low/medium/high/xhigh but not minimal)",
+			settings.LLM.Effort, ValidEfforts)
 	}
 
 	if settings.LLM.Backend == "anthropic" {

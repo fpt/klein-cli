@@ -15,7 +15,7 @@ This document provides detailed information for developers working on KLEIN CLI.
                        ┌─────────────────┐    ┌─────────────────┐
                        │   internal/     │    │  pkg/llmclient/ │
                        │   tool/         │    │   client/       │
-                       │   simple_tool_  │    │   ollama.go     │
+                       │   simple_tool_  │    │   openai.go     │
                        │   manager.go    │    │   anthropic.go  │
                        └─────────────────┘    └─────────────────┘
 ```
@@ -27,7 +27,7 @@ This document provides detailed information for developers working on KLEIN CLI.
 - **ClientWithTool**: Automatic wrapper that detects and handles native vs text-based tool calling
 - **Event System**: Event-driven architecture separating business logic from presentation
 - **Tool Approval System**: Interactive approval workflow for destructive file operations
-- **LLM Clients**: Pluggable backend support (Ollama, Anthropic, OpenAI, Gemini) with capability-based design
+- **LLM Clients**: Pluggable backend support (OpenAI, Anthropic, Gemini) with capability-based design
 - **Client Factory**: LLM client creation and configuration using dependency injection
 - **Tool Manager**: Handles tool registration and execution with security controls
 - **Message State**: Manages conversation history and context with repository pattern
@@ -100,7 +100,7 @@ KLEIN does not implement a local response cache. Instead, it provides hooks and 
 
 Current status:
 - OpenAI (Responses API): token usage wired (input/output/total tokens) where the SDK exposes `responses.ResponseUsage`. Session/caching hints are stored for later use when the SDK surfaces prompt caching controls.
-- Anthropic/Gemini/Ollama: token usage and session/caching support will be added when their SDKs provide the required fields and toggles.
+- Anthropic/Gemini: token usage and session/caching support will be added when their SDKs provide the required fields and toggles.
 
 Reference for provider-side caching:
 - OpenAI Prompt Caching: https://platform.openai.com/docs/guides/prompt-caching
@@ -432,9 +432,8 @@ KLEIN CLI uses native tool calling for all supported models:
 - **API-level tool definitions** with structured tool_use/tool_result blocks
 - **Efficient and reliable** tool execution
 - **Automatic capability detection** via dynamic testing for unknown models
-- **Unified interface** across all LLM backends (Ollama, Anthropic, OpenAI, Gemini)
+- **Unified interface** across all LLM backends (OpenAI, Anthropic, Gemini)
 
-The system automatically tests unknown Ollama models for tool calling capability and warns users if a model lacks this support, ensuring you always know what functionality is available.
 
 ## Development
 
@@ -504,25 +503,21 @@ klein-cli/
 ├── pkg/client/             # Client factory and implementations
 │   ├── anthropic/             # Anthropic client implementation
 │   ├── gemini/                # Google Gemini client implementation  
-│   ├── ollama/                # Ollama client implementation
 │   └── openai/                # OpenAI client implementation
 └── pkg/message/            # Message handling and types
 ```
 
 ### Available Models
 
-**Ollama Models:**
-- `gpt-oss:latest` - **Recommended** - Best balanced model with native tool calling
-
 **Anthropic Models:**
 - `claude-opus-4-7` - Most capable model for complex reasoning and agentic coding
 - `claude-sonnet-4-6` - Best combination of speed and intelligence (default)
 - `claude-haiku-4-5` - Fastest model with near-frontier intelligence
 
-**OpenAI Models:**
-- `gpt-5.4` - Full model (vision, tool calling, structured output)
-- `gpt-5.4-mini` - Smaller, faster (default)
-- `gpt-5.4-nano` - Lightest weight
+**OpenAI Models:** (the gpt-5.6 line — the only OpenAI models klein adopts)
+- `gpt-5.6-luna` - **Default**
+- `gpt-5.6-sol`
+- `gpt-5.6-terra`
 
 **Google Gemini Models:**
 - `gemini-2.5-flash-lite` - **Recommended** - Latest, fastest, most efficient
@@ -688,14 +683,14 @@ cd testsuite
 
 # Examples:
 ./runner.sh planning anthropic    # Test planning with Anthropic
-./runner.sh code ollama           # Test code skill with Ollama
+./runner.sh code openai           # Test code skill with OpenAI
 ./runner.sh respond openai        # Test respond skill with OpenAI
 ```
 
 **Integration Test Categories:**
 - **Planning Capability**: Tests the ability to break down complex tasks
 - **Skill Execution**: Tests CODE and RESPOND skill workflows
-- **Backend Compatibility**: Tests all LLM backends (Ollama, Anthropic, OpenAI, Gemini)
+- **Backend Compatibility**: Tests all LLM backends (OpenAI, Anthropic, Gemini)
 - **Tool Integration**: Tests tool calling across different skills
 - **Configuration Management**: Tests settings.json and MCP configuration
 
@@ -722,7 +717,6 @@ make deps          # Download dependencies
 - **Module**: `github.com/fpt/klein-cli`
 - **Go Version**: 1.24.4
 - **Key Dependencies**: 
-  - `github.com/ollama/ollama v0.11.10`
   - `github.com/anthropics/anthropic-sdk-go v1.5.0`
   - `github.com/openai/openai-go/v2 v2.0.2`
   - `google.golang.org/genai v1.19.0`
@@ -732,7 +726,6 @@ make deps          # Download dependencies
 ## Reference
 
 - **Anthropic SDK**: https://pkg.go.dev/github.com/anthropics/anthropic-sdk-go
-- **Ollama API**: https://pkg.go.dev/github.com/ollama/ollama/api
 - **OpenAI SDK**: https://pkg.go.dev/github.com/openai/openai-go/v2
 - **Google Generative AI**: https://pkg.go.dev/google.golang.org/genai
 - **MCP Protocol**: https://github.com/mark3labs/mcp-go

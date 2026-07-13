@@ -24,7 +24,7 @@ Every entry point ultimately builds the same stack. From the bottom up:
 │ Tools (domain.ToolManager)                                   │  filesystem, bash, memory,
 │   CompositeToolManager → DeferredToolManager (ToolSearch)    │  schedule, web, MCP, …
 ├──────────────────────────────────────────────────────────────┤
-│ Backend (domain.LLM)      anthropic · openai · gemini · ollama│  chat, tool-calling, thinking
+│ Backend (domain.LLM)      openai · anthropic · gemini         │  chat, tool-calling, thinking
 └──────────────────────────────────────────────────────────────┘
    (plus codex & kessel — whole-agent backends routed above domain.LLM; see §7)
 ```

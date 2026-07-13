@@ -4,81 +4,73 @@ import (
 	"testing"
 )
 
+// TestGetOpenAIModel pins the adoption policy: only the gpt-5.6 line
+// (sol/terra/luna) is accepted. Everything else — including older gpt-5.x and
+// gpt-4 — falls back to the default (luna).
 func TestGetOpenAIModel(t *testing.T) {
+	t.Parallel()
 	testCases := []struct {
 		input    string
 		expected string
 	}{
-		{"gpt-5.4", "gpt-5.4"},
-		{"gpt-5.4-mini", "gpt-5.4-mini"},
-		{"gpt-5.4-nano", "gpt-5.4-nano"},
-		{"gpt-5.4-nano-2026-03-17", "gpt-5.4-nano-2026-03-17"}, // dated variant
-		{"gpt-5.5", "gpt-5.5"},                                 // newer 5.x release
-		{"gpt-5.6-sol", "gpt-5.6-sol"},                         // 5.6 "Sol" codename — exact suffixes unknown, whole family passes through
-		{"gpt-5.6-terra", "gpt-5.6-terra"},                     // 5.6 "Terra" codename — exact suffixes unknown, whole family passes through
-		{"gpt-5.6-luna", "gpt-5.6-luna"},                       // 5.6 "Luna" codename — exact suffixes unknown, whole family passes through
-		{"gpt-5", "gpt-5"},                                     // base gpt-5
-		{"gpt-5-mini", "gpt-5-mini"},                           // gpt-5 family → passes through
-		{"unknown-model", "gpt-5.4-mini"},                      // non-gpt-5 → default fallback
-		{"gpt-4o", "gpt-5.4-mini"},                             // non-gpt-5 → default fallback
+		{ModelLuna, ModelLuna},
+		{ModelSol, ModelSol},
+		{ModelTerra, ModelTerra},
+		{ModelLuna + "-2026-05-01", ModelLuna + "-2026-05-01"}, // dated variant of an adopted model
+		// Not adopted → default fallback.
+		{"gpt-5.4", defaultModel},
+		{"gpt-5.4-mini", defaultModel},
+		{"gpt-5.4-nano", defaultModel},
+		{"gpt-5.5", defaultModel},
+		{"gpt-5", defaultModel},
+		{"gpt-4o", defaultModel},
+		{"unknown-model", defaultModel},
+		{"", defaultModel},
 	}
 
 	for _, tc := range testCases {
-		result := getOpenAIModel(tc.input)
-		if result != tc.expected {
+		if result := getOpenAIModel(tc.input); result != tc.expected {
 			t.Errorf("getOpenAIModel(%q) = %q, expected %q", tc.input, result, tc.expected)
 		}
 	}
 }
 
-func TestGetModelCapabilities(t *testing.T) {
-	testCases := []struct {
-		model                string
-		expectedVision       bool
-		expectedToolCalling  bool
-		expectedStructured   bool
-		expectedSystemPrompt bool
-		expectedThinking     bool
-		expectedMaxTokens    int
-	}{
-		{"gpt-5.4", true, true, true, true, true, 32768},
-		{"gpt-5.4-mini", true, true, true, true, true, 32768},
-		{"gpt-5.4-nano", true, true, true, true, true, 16384},
-		{"gpt-5.4-nano-2026-03-17", true, true, true, true, true, 16384}, // dated variant
-		{"gpt-5.5", true, true, true, true, true, 32768},                 // newer 5.x release → standard profile
-		{"gpt-5.6-sol", true, true, true, true, true, 32768},             // 5.6 "Sol" codename → standard profile
-		{"gpt-5.6-terra", true, true, true, true, true, 32768},           // 5.6 "Terra" codename → standard profile
-		{"gpt-5.6-luna", true, true, true, true, true, 32768},            // 5.6 "Luna" codename → standard profile
-		{"gpt-5-nano", true, true, true, true, true, 16384},              // any *nano* name → smaller-output profile
-		{"unknown-model", true, true, true, true, true, 32768},           // non-gpt-5 → default profile
+func TestDefaultModelIsLuna(t *testing.T) {
+	t.Parallel()
+	if defaultModel != ModelLuna {
+		t.Errorf("defaultModel = %q, want %q", defaultModel, ModelLuna)
 	}
+}
 
-	for _, tc := range testCases {
-		caps := getModelCapabilities(tc.model)
+// TestGetModelCapabilities: the adopted models share one capability profile.
+func TestGetModelCapabilities(t *testing.T) {
+	t.Parallel()
+	for _, model := range SupportedModels {
+		caps := getModelCapabilities(model)
 
-		if caps.SupportsVision != tc.expectedVision {
-			t.Errorf("Model %s vision: got %v, expected %v", tc.model, caps.SupportsVision, tc.expectedVision)
+		if !caps.SupportsVision {
+			t.Errorf("Model %s: expected vision support", model)
 		}
-		if caps.SupportsToolCalling != tc.expectedToolCalling {
-			t.Errorf("Model %s tool calling: got %v, expected %v", tc.model, caps.SupportsToolCalling, tc.expectedToolCalling)
+		if !caps.SupportsToolCalling {
+			t.Errorf("Model %s: expected tool calling support", model)
 		}
-		if caps.SupportsStructured != tc.expectedStructured {
-			t.Errorf("Model %s structured: got %v, expected %v", tc.model, caps.SupportsStructured, tc.expectedStructured)
+		if !caps.SupportsStructured {
+			t.Errorf("Model %s: expected structured output support", model)
 		}
-		if caps.SupportsSystemPrompt != tc.expectedSystemPrompt {
-			t.Errorf("Model %s system prompt: got %v, expected %v", tc.model, caps.SupportsSystemPrompt, tc.expectedSystemPrompt)
+		if !caps.SupportsSystemPrompt {
+			t.Errorf("Model %s: expected system prompt support", model)
 		}
-		if caps.SupportsThinking != tc.expectedThinking {
-			t.Errorf("Model %s thinking: got %v, expected %v", tc.model, caps.SupportsThinking, tc.expectedThinking)
+		if !caps.SupportsThinking {
+			t.Errorf("Model %s: expected reasoning-effort support", model)
 		}
-		if caps.MaxTokens != tc.expectedMaxTokens {
-			t.Errorf("Model %s max tokens: got %v, expected %v", tc.model, caps.MaxTokens, tc.expectedMaxTokens)
+		if caps.MaxTokens != 32768 {
+			t.Errorf("Model %s max tokens: got %d, expected 32768", model, caps.MaxTokens)
 		}
 	}
 }
 
 func TestNewOpenAIClient_NoAPIKey(t *testing.T) {
-	_, err := NewOpenAIClient("gpt-5.4-mini", 0, "")
+	_, err := NewOpenAIClient(ModelLuna, 0, "")
 	if err == nil {
 		t.Skip("OPENAI_API_KEY is set in environment, skipping test")
 	}
@@ -90,7 +82,8 @@ func TestNewOpenAIClient_NoAPIKey(t *testing.T) {
 }
 
 func TestIsToolCapable(t *testing.T) {
-	core := &OpenAICore{model: "gpt-5.4-mini"}
+	t.Parallel()
+	core := &OpenAICore{model: ModelLuna}
 	client := NewOpenAIClientFromCore(core)
 
 	concreteClient, ok := client.(*OpenAIClient)
@@ -98,6 +91,18 @@ func TestIsToolCapable(t *testing.T) {
 		t.Fatal("Expected *OpenAIClient type")
 	}
 	if !concreteClient.IsToolCapable() {
-		t.Error("Expected gpt-5.4-mini to support tool calling")
+		t.Errorf("Expected %s to support tool calling", ModelLuna)
+	}
+}
+
+func TestSupportsVision(t *testing.T) {
+	t.Parallel()
+	core := &OpenAICore{model: ModelLuna}
+	client, ok := NewOpenAIClientFromCore(core).(*OpenAIClient)
+	if !ok {
+		t.Fatal("Expected *OpenAIClient type")
+	}
+	if !client.SupportsVision() {
+		t.Errorf("Expected %s to support vision", ModelLuna)
 	}
 }

@@ -34,6 +34,8 @@ func newMemoryAgent(t *testing.T) (*Agent, *memorydb.Manager) {
 		Out:               io.Discard,
 		FsRepo:            infra.NewOSFilesystemRepository(),
 		IsInteractiveMode: false,
+		// Inject a stub so the agent constructs without a provider API key.
+		LLMClient: &stubLLM{},
 	})
 	if err != nil {
 		t.Fatalf("NewAgentWithOptions: %v", err)
@@ -98,6 +100,8 @@ func TestMemoryCommandDisabled(t *testing.T) {
 		Out:               io.Discard,
 		FsRepo:            infra.NewOSFilesystemRepository(),
 		IsInteractiveMode: false,
+		// Inject a stub so the agent constructs without a provider API key.
+		LLMClient: &stubLLM{},
 	})
 	if err != nil {
 		t.Fatalf("NewAgentWithOptions: %v", err)

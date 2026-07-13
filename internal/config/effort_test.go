@@ -29,7 +29,7 @@ func TestOpenAIDefaultEffort(t *testing.T) {
 
 func TestValidateSettingsRejectsBadEffort(t *testing.T) {
 	s := GetDefaultSettings()
-	s.LLM.Backend = "ollama"
+	s.LLM.Backend = testBackend
 	s.LLM.Effort = "turbo"
 	if err := ValidateSettings(s); err == nil {
 		t.Error("ValidateSettings accepted invalid effort \"turbo\", want error")

@@ -12,9 +12,9 @@ import (
 var agentBackends = []string{"codex", "kessel"}
 
 // TestLoadAgentBackendModelNotLeaked confirms a settings file with no model does
-// not inherit the ollama chat-model default (the base Settings is seeded from
+// not inherit the default chat model (the base Settings is seeded from
 // defaults before unmarshal, so an omitted model must be cleared — these
-// backends reject a chat model like gpt-oss).
+// backends reject a chat model like gpt-5.6-luna).
 func TestLoadAgentBackendModelNotLeaked(t *testing.T) {
 	t.Parallel()
 	for _, backend := range agentBackends {
@@ -48,7 +48,9 @@ func TestLoadAgentBackendModelExplicitKept(t *testing.T) {
 			t.Parallel()
 			dir := t.TempDir()
 			p := filepath.Join(dir, "settings.json")
-			body := `{"llm":{"backend":"` + backend + `","model":"gpt-5.4"}}`
+			// Deliberately NOT the default model: the leak-clearing heuristic keys off
+			// equality with the default, so an explicit model must differ to be testable.
+			body := `{"llm":{"backend":"` + backend + `","model":"gpt-5.6-sol"}}`
 			if err := os.WriteFile(p, []byte(body), 0o644); err != nil {
 				t.Fatal(err)
 			}
@@ -56,7 +58,7 @@ func TestLoadAgentBackendModelExplicitKept(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if s.LLM.Model != "gpt-5.4" {
+			if s.LLM.Model != "gpt-5.6-sol" {
 				t.Errorf("explicit %s model dropped: got %q", backend, s.LLM.Model)
 			}
 		})

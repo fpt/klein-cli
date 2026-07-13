@@ -73,8 +73,8 @@ func main() {
 	}
 
 	// Define command line flags
-	var backend = flag.String("b", "", "LLM backend (ollama, anthropic, openai, gemini, codex, or kessel)")
-	var backendLong = flag.String("backend", "", "LLM backend (ollama, anthropic, openai, gemini, codex, or kessel)")
+	backend := flag.String("b", "", "LLM backend (openai, anthropic, gemini, codex, or kessel)")
+	backendLong := flag.String("backend", "", "LLM backend (openai, anthropic, gemini, codex, or kessel)")
 	var model = flag.String("m", "", "Model name to use")
 	var modelLong = flag.String("model", "", "Model name to use")
 	var effort = flag.String("effort", "", "Reasoning effort for reasoning-capable models (none|minimal|low|medium|high|xhigh; primarily OpenAI)")

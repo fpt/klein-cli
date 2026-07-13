@@ -78,7 +78,7 @@ The MVP is functional with the following components:
 **Memory search:**
 - As MEMORY.md grows, injecting all of it into every prompt becomes expensive
 - Add semantic search over memory entries — only inject relevant context per message
-- Could use embeddings (local via Ollama or API) to find relevant memory fragments
+- Could use embeddings (via an API) to find relevant memory fragments
 - The `!memory search <query>` command could expose this to the user
 
 **Daily note automation:**
@@ -98,7 +98,7 @@ The MVP is functional with the following components:
 **Image support:**
 - `InboundMessage.Images` field exists but is not populated
 - Extract image attachments from Discord messages, download them, pass as base64 to the agent
-- Requires vision-capable models (Claude, GPT-4o, Gemini)
+- Requires vision-capable models (GPT-5.6, Claude, Gemini)
 - Could also send generated images/charts back via Discord file uploads
 
 **Discord threads:**
@@ -118,7 +118,7 @@ The MVP is functional with the following components:
 
 **Voice channel integration:**
 - Join a Discord voice channel, transcribe speech, send to agent, TTS the response
-- Requires an STT/TTS pipeline — could use Whisper (local via Ollama) + a TTS service
+- Requires an STT/TTS pipeline — could use Whisper + a TTS service
 
 ### Phase 4: Tool Approval via Messaging
 

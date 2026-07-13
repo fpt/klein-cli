@@ -2,7 +2,7 @@
 
 # Simple single test runner
 # Usage: CLI=path/to/klein ./runner.sh <testcase> <backend>
-# Example: CLI=output/klein ./runner.sh fibonacci_test ollama_gbnf
+# Example: CLI=output/klein ./runner.sh fibonacci_test openai
 
 set -e  # Exit on any error
 
@@ -55,12 +55,12 @@ if [ $# -eq 0 ]; then
     done
     echo ""
     echo "Usage: CLI=path/to/klein ./runner.sh <testcase> <backend>"
-    echo "   or: CLI=path/to/klein ./runner.sh <testcase>  # runs with ollama"
+    echo "   or: CLI=path/to/klein ./runner.sh <testcase>  # runs with openai"
     exit 0
 fi
 
 testcase_name="$1"
-backend_name="${2:-ollama}"  # Default to ollama
+backend_name="${2:-openai}"  # Default to openai
 
 # Validate testcase
 testcase_dir="${script_dir}/testcases/${testcase_name}"

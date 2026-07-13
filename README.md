@@ -9,7 +9,7 @@ The name KLEIN is inspired by the Klein bottle, a topological surface with no di
 ## Features
 
 - **Interactive Mode**: REPL-style interface for continuous interaction with conversation memory
-- **Multiple LLM Backends**: Support for Ollama (gpt-oss), Anthropic Claude, OpenAI GPT, and Google Gemini
+- **Multiple LLM Backends**: OpenAI GPT, Anthropic Claude, Google Gemini, plus the codex/kessel whole-agent backends
 - **Simplified ReAct Pattern**: Streamlined reasoning and acting with single-action loops for simplicity
 - **Integrated Tools**: File operations, grep search, bash tools, todo tools, and simple web tools
 - **Secure File Access**: Files are accessible only in working directory. Also, applies Read-before-Write semantics for content updates.
@@ -30,10 +30,8 @@ go install github.com/fpt/klein-cli/klein@latest
 
 ### Prerequisites
 
-**For Ollama (default):**
-- Install Ollama: https://ollama.ai/
-- Pull a model: `ollama pull gpt-oss:latest`
-- Set `OLLAMA_HOST` and `OLLAMA_PORT` environment variable if needed.
+**For OpenAI (default):**
+- Set `OPENAI_API_KEY` environment variable
 
 **For Anthropic Claude:**
 - Set `ANTHROPIC_API_KEY` environment variable
@@ -100,17 +98,16 @@ klein "Create an HTTP server with a health check endpoint"
 
 # Use different backends
 klein -b anthropic "Analyze this codebase"
-klein -b openai -m gpt-5.4-mini "Create a console program which calculates fibonacci number in Golang."
+klein -b openai -m gpt-5.6-luna "Create a console program which calculates fibonacci number in Golang."
 
-# Offline use
-klein -b ollama -m gpt-oss:latest "Write a simple main.go that prints 'Hello, world!'. Use write tool."
+# Pick a backend explicitly
+klein -b anthropic "Write a simple main.go that prints 'Hello, world!'. Use write tool."
 ```
 
 ## Supported Models
 
 - **Anthropic**: `claude-opus-4-7`, `claude-sonnet-4-6`, `claude-haiku-4-5`
-- **OpenAI**: `gpt-5.4`, `gpt-5.4-mini`, `gpt-5.4-nano`
-- **Ollama**: `gpt-oss:latest`
+- **OpenAI**: `gpt-5.6-luna` (default), `gpt-5.6-sol`, `gpt-5.6-terra`
 - **Google Gemini**: `gemini-2.5`, `gemini-2.5-flash`
 
 ## Tool Approval System
@@ -430,12 +427,6 @@ You can reference files in prompts using @filename. KLEIN expands @filename into
 - Keep your API keys secure and rotate them regularly
 - Be cautious when sharing configurations, logs, or screenshots that might contain sensitive information
 - Review AI-generated code before using it in production systems
-
-### Model Capability Warnings
-klein automatically tests unknown Ollama models for tool-calling capability:
-- ✅ **Known compatible models** (like `gpt-oss:latest`) work without testing
-- ⚠️ **Unknown models** are tested automatically with clear warnings about limitations
-- 🚫 **Non-tool-capable models** will have limited functionality (no file operations, web search, etc.)
 
 ### Disclaimer
 

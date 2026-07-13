@@ -1,16 +1,27 @@
 package openai
 
 import (
+	"slices"
 	"strings"
 
 	"github.com/openai/openai-go/v3/shared"
 )
 
-// defaultModel is used when an unknown model name is supplied.
-const defaultModel = shared.ChatModelGPT5_4Mini
+// The only OpenAI models klein adopts (the gpt-5.6 line).
+const (
+	ModelLuna  = shared.ChatModelGPT5_6Luna
+	ModelSol   = shared.ChatModelGPT5_6Sol
+	ModelTerra = shared.ChatModelGPT5_6Terra
+)
 
-// getOpenAIModel maps user-supplied model names to actual OpenAI model identifiers.
-// Unknown names fall back to the default.
+// SupportedModels lists every OpenAI model klein accepts.
+var SupportedModels = []string{ModelLuna, ModelSol, ModelTerra}
+
+// defaultModel is used when an unknown/unsupported model name is supplied.
+const defaultModel = ModelLuna
+
+// getOpenAIModel maps a user-supplied model name to the model actually used.
+// Unsupported names fall back to the default.
 func getOpenAIModel(model string) string {
 	if isValidOpenAIModel(model) {
 		return model
@@ -18,14 +29,17 @@ func getOpenAIModel(model string) string {
 	return defaultModel
 }
 
-// isValidOpenAIModel checks if model belongs to the GPT-5 family using prefix
-// matching, so every gpt-5.x release (gpt-5, gpt-5.4, gpt-5.5, gpt-5.6, …),
-// their -mini/-nano variants, and dated variants (e.g.
-// "gpt-5.5-mini-2026-03-17") are accepted automatically without a code change.
-// The whole family shares one capability profile (reasoning models), so this
-// is scoped to gpt-5 rather than all gpt- models.
+// isValidOpenAIModel reports whether model is one klein adopts: one of
+// SupportedModels, or a dated variant of one (e.g. "gpt-5.6-luna-2026-05-01").
+// Anything else — including older gpt-5.x and gpt-4 families — is rejected and
+// falls back to the default.
 func isValidOpenAIModel(model string) bool {
-	return strings.HasPrefix(model, "gpt-5")
+	if slices.Contains(SupportedModels, model) {
+		return true
+	}
+	return slices.ContainsFunc(SupportedModels, func(m string) bool {
+		return strings.HasPrefix(model, m+"-")
+	})
 }
 
 // ModelCapabilities describes the feature set of an OpenAI model.
@@ -42,8 +56,8 @@ type ModelCapabilities struct {
 	SupportsSystemPrompt bool
 }
 
-// capGPT5 is the capability profile for all GPT-5.x variants.
-var capGPT5 = ModelCapabilities{
+// capGPT56 is the capability profile shared by the adopted gpt-5.6 models.
+var capGPT56 = ModelCapabilities{
 	SupportsVision:       true,
 	SupportsToolCalling:  true,
 	SupportsStructured:   true,
@@ -53,25 +67,9 @@ var capGPT5 = ModelCapabilities{
 	SupportsSystemPrompt: true,
 }
 
-// capGPT5Nano has slightly lower output limits.
-var capGPT5Nano = ModelCapabilities{
-	SupportsVision:       true,
-	SupportsToolCalling:  true,
-	SupportsStructured:   true,
-	SupportsThinking:     true,
-	MaxTokens:            16384,
-	MaxContextWindow:     128000,
-	SupportsSystemPrompt: true,
-}
-
-// getModelCapabilities returns the capability profile for a model. Any GPT-5
-// "nano" variant (gpt-5.4-nano, gpt-5.5-nano, …) gets the smaller-output
-// profile; everything else uses the standard GPT-5 profile.
-func getModelCapabilities(model string) ModelCapabilities {
-	switch {
-	case strings.Contains(model, "nano"):
-		return capGPT5Nano
-	default:
-		return capGPT5
-	}
+// getModelCapabilities returns the capability profile for a model. All adopted
+// models share one profile (they are the same generation); an unsupported name
+// has already been mapped to the default by getOpenAIModel.
+func getModelCapabilities(_ string) ModelCapabilities {
+	return capGPT56
 }

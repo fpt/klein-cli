@@ -972,10 +972,10 @@ type ResponseToolCall struct {
 	Arguments string
 }
 
-// SupportsVision implements VisionLLM interface
+// SupportsVision implements VisionLLM interface. Every adopted model is
+// vision-capable, so this follows the model's capability profile.
 func (c *OpenAIClient) SupportsVision() bool {
-	// GPT-4V models support vision
-	return strings.Contains(c.model, "gpt-4") && (strings.Contains(c.model, "vision") || strings.Contains(c.model, "gpt-4o"))
+	return getModelCapabilities(c.model).SupportsVision
 }
 
 // detectTruncation checks if the API silently truncated input and logs a warning.

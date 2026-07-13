@@ -145,7 +145,6 @@ Severity tiers:
   Route through the secure filesystem manager; extract one helper.
 - [ ] Gateway `!skill` accepts unvalidated names.
 - [ ] REPL status counts `"👤 You:"` substrings instead of asking state.
-- [ ] OpenAI default model `gpt-5.4-mini` vs docs' `gpt-4o`; stale CLAUDE.md.
 - [ ] `pkg/` imports `internal/` — the public/private split is cosmetic.
 - [ ] Three overlapping memory systems (agent prompt, gateway injection, memory
   tools) — consolidate on the system-prompt + tools approach.

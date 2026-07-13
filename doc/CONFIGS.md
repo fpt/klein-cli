@@ -24,7 +24,7 @@ go run klein/main.go [flags] [prompt]
 
 | Flag | Type | Default | Description |
 |------|------|---------|-------------|
-| `-b`, `--backend` | string | `""` | LLM backend: `ollama`, `anthropic`, `openai`, `gemini` |
+| `-b`, `--backend` | string | `""` | LLM backend: `openai`, `anthropic`, `gemini`, `codex`, `kessel` |
 | `-m`, `--model` | string | `""` | Model name (overrides settings file) |
 | `-s`, `--skill` | string | `"code"` | Skill to invoke |
 | `--workdir` | string | `"."` | Working directory for all file operations |
@@ -77,9 +77,9 @@ The `claw` object configures the `klein claw` gateway; see
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
-| `backend` | string | `"ollama"` | Backend: `ollama`, `anthropic`, `openai`, `gemini`, `codex`, `kessel` |
+| `backend` | string | `"openai"` | Backend: `openai`, `anthropic`, `gemini`, `codex`, `kessel` |
 | `model` | string | *(backend-specific)* | Model name |
-| `base_url` | string | *(backend-specific)* | API base URL (Ollama and OpenAI/Azure only) |
+| `base_url` | string | *(backend-specific)* | API base URL (OpenAI/Azure-compatible only) |
 | `thinking` | bool | `true` | Enable thinking mode when model supports it |
 | `max_tokens` | int | `0` | Max response tokens; `0` = model default |
 
@@ -87,9 +87,8 @@ The `claw` object configures the `klein claw` gateway; see
 
 | Backend | Default model | Default base_url |
 |---------|--------------|-----------------|
-| `ollama` | `gpt-oss:latest` | `http://localhost:11434` |
 | `anthropic` | `claude-sonnet-4-6` | *(Anthropic API)* |
-| `openai` | `gpt-5.4-mini` | *(OpenAI API)* |
+| `openai` | `gpt-5.6-luna` | *(OpenAI API)* |
 | `gemini` | `gemini-2.5-flash-lite` | *(Google API)* |
 | `codex` | *(codex-owned)* | *(codex app-server)* |
 | `kessel` | *(kessel-owned)* | *(kessel app-server)* |
@@ -117,7 +116,7 @@ needs a codex build with `dynamicTools`/`experimentalApi` support.
 
 ```json
 {
-  "llm": { "backend": "codex", "model": "gpt-5.4", "effort": "medium" },
+  "llm": { "backend": "codex", "model": "gpt-5.6-luna", "effort": "medium" },
   "codex": { "sandbox_mode": "workspace-write" }
 }
 ```
@@ -593,7 +592,6 @@ Run it with `klein claw` (embedded agent) — no separate server process needed.
 | `ANTHROPIC_API_KEY` | If `backend=anthropic` | Anthropic API key |
 | `OPENAI_API_KEY` | If `backend=openai` | OpenAI API key |
 | `GEMINI_API_KEY` | If `backend=gemini` | Google Gemini API key |
-| `OLLAMA_HOST` | No | Ollama server (default: `http://localhost:11434`) |
 | `DISCORD_TOKEN` | If Discord enabled | Discord bot token (alternative to `discord.token` in config) |
 
 ---
@@ -646,4 +644,4 @@ Example: `/Users/you/dev/my-app` → `my-app-a1b2c3d4/`
 | Limit tools for a skill | `allowed-tools` in `SKILL.md` frontmatter |
 | Add a safe bash command | `bash.whitelisted_commands` in settings JSON |
 | Increase iteration limit | `agent.max_iterations` in settings JSON |
-| Use a custom Ollama server | `OLLAMA_HOST` env var or `llm.base_url` in settings JSON |
+| Use an OpenAI-compatible endpoint | `llm.base_url` in settings JSON |

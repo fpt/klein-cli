@@ -24,7 +24,7 @@ make build && \
 BACKENDS=openai \
 CLI=./output/klein \
 [TESTS=fibonacci,coding] \
-[BACKENDS=ollama_gpt_oss_20b,anthropic] \
+[BACKENDS=openai,anthropic] \
 ./testsuite/matrix_runner.sh
 ```
 
@@ -98,7 +98,7 @@ Present:
 
 ## Available Backends
 
-List with `ls testsuite/backends/` or read `doc/OLLAMA_MODELS.md` for capability notes.
+List with `ls testsuite/backends/`.
 Cloud backends (anthropic, openai, gemini) require the corresponding `*_API_KEY` env var.
 
 $ARGUMENTS

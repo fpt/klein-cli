@@ -42,9 +42,9 @@ func TestPluginsWireUpEndToEnd(t *testing.T) {
 	logger := pkgLogger.NewLogger(pkgLogger.LogLevelError)
 	fsRepo := infra.NewOSFilesystemRepository()
 
-	// RegisterPlugins doesn't need a real LLM; the factory builds a default client
-	// from settings (no network at construction). No AgentBackend, so no external
-	// process; cleanup is a noop.
+	// RegisterPlugins doesn't need a real LLM; a stub keeps the test hermetic
+	// (building from settings would need a provider API key). No AgentBackend,
+	// so no external process; cleanup is a noop.
 	a, cleanup, err := NewAgentWithOptions(context.Background(), AgentOptions{
 		Settings:           settings,
 		WorkingDir:         workDir,
@@ -54,6 +54,8 @@ func TestPluginsWireUpEndToEnd(t *testing.T) {
 		FsRepo:             fsRepo,
 		SkipSessionRestore: true,
 		IsInteractiveMode:  false,
+		// Inject a stub so the agent constructs without a provider API key.
+		LLMClient: &stubLLM{},
 	})
 	if err != nil {
 		t.Fatalf("NewAgentWithOptions: %v", err)

@@ -109,11 +109,56 @@ is_backend_available() {
                 return 1
             fi
             ;;
+        kessel*)
+            # kessel is a whole-agent backend spawning kessel-cli. Its model comes
+            # from kessel.config (a kessel config YAML) or its own environment, so
+            # there is no klein-side API key to check — just the binary. Honour an
+            # explicit kessel_path in the backend file before falling back to PATH.
+            kessel_bin=$(jq -r '.kessel.kessel_path // "kessel-cli"' \
+                "${script_dir}/backends/${backend_name}.json" 2>/dev/null || echo kessel-cli)
+            if command -v "$kessel_bin" >/dev/null 2>&1 || [ -x "$kessel_bin" ]; then
+                return 0
+            else
+                log_both "${YELLOW}⚠️  Skipping $backend_name: kessel binary '$kessel_bin' not found${NC}"
+                return 1
+            fi
+            ;;
         *)
             log_both "${YELLOW}⚠️  Unknown backend $backend_name, assuming available${NC}"
             return 0
             ;;
     esac
+}
+
+# Tools that only exist inside klein's own ReAct loop: plan mode and sub-agent
+# spawning. A whole-agent backend (codex/kessel) runs its own loop and is never
+# handed these, so a testcase that requires one cannot pass there — it is not
+# applicable rather than a failure. (Web/PDF/etc. tools are intentionally NOT
+# listed: those testcases can still succeed via the backend's own capabilities.)
+KLEIN_LOOP_ONLY_TOOLS="EnterPlanMode ExitPlanMode spawn_agent Task"
+
+# is_whole_agent_backend <backend> — true when the backend delegates the whole
+# turn to an external app-server (codex/kessel) rather than klein's ReAct loop.
+is_whole_agent_backend() {
+    case "$(jq -r '.llm.backend // ""' "${script_dir}/backends/${1}.json" 2>/dev/null)" in
+        codex|kessel) return 0 ;;
+        *) return 1 ;;
+    esac
+}
+
+# testcase_applies <testcase> <backend> — false when the testcase requires a
+# klein-loop-only tool that the (whole-agent) backend cannot provide.
+testcase_applies() {
+    local cfg req tool
+    is_whole_agent_backend "$2" || return 0
+    cfg="${script_dir}/testcases/${1}/config.json"
+    [ -f "$cfg" ] || return 0
+    for req in $(jq -r '.allowed_tools[]? // empty' "$cfg" 2>/dev/null); do
+        for tool in $KLEIN_LOOP_ONLY_TOOLS; do
+            [ "$req" = "$tool" ] && return 1
+        done
+    done
+    return 0
 }
 
 # Collect testcases (apply TESTS filter)
@@ -163,10 +208,18 @@ result_entries=""
 total_tests=0
 passed_tests=0
 failed_tests=0
+skipped_tests=0
 
 for backend_name in $available_backends; do
     backend_file="${script_dir}/backends/${backend_name}.json"
     for testcase_name in $testcase_names; do
+        if ! testcase_applies "$testcase_name" "$backend_name"; then
+            log_both "${YELLOW}⊘ SKIP: $testcase_name × $backend_name (needs a klein-loop-only tool; N/A for a whole-agent backend)${NC}"
+            skipped_tests=$((skipped_tests + 1))
+            result_entries="$result_entries ${backend_name}:${testcase_name}:SKIP"
+            log_both ""
+            continue
+        fi
         total_tests=$((total_tests + 1))
         log_both "${CYAN}Running: $testcase_name × $backend_name${NC}"
 
@@ -227,6 +280,9 @@ for b in $available_backends; do
             elif [ "$entry" = "${b}:${t}:FAIL" ]; then
                 result="❌"
                 break
+            elif [ "$entry" = "${b}:${t}:SKIP" ]; then
+                result="—"
+                break
             fi
         done
         row="$row$(printf "%-${col_w}s" "$result")"
@@ -237,7 +293,9 @@ log_both ""
 
 # ── Final counts ───────────────────────────────────────────────────────────────
 log_both "${BLUE}📊 Summary:${NC}"
-log_both "Total: $total_tests  ${GREEN}Passed: $passed_tests${NC}  ${RED}Failed: $failed_tests${NC}"
+skip_note=""
+[ $skipped_tests -gt 0 ] && skip_note="  ${YELLOW}Skipped (N/A): $skipped_tests${NC}"
+log_both "Total: $total_tests  ${GREEN}Passed: $passed_tests${NC}  ${RED}Failed: $failed_tests${NC}${skip_note}"
 [ $total_tests -gt 0 ] && log_both "Success rate: $(( (passed_tests * 100) / total_tests ))%"
 log_both "Completed: $(date)"
 log_both "Results saved to: $result_file"

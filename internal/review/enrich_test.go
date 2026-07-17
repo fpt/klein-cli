@@ -73,6 +73,37 @@ func TestEnricherRender(t *testing.T) {
 	mustNotContain(t, out, "ctx| line 6", "ctx| line 16")
 }
 
+func TestEnricherRender_ByteBudget(t *testing.T) {
+	t.Parallel()
+	bigDiff := func(path string, n int) string {
+		var sb strings.Builder
+		fmt.Fprintf(&sb, "--- a/%s\n+++ b/%s\n@@ -0,0 +1,%d @@\n", path, path, n)
+		for i := 1; i <= n; i++ {
+			fmt.Fprintf(&sb, "+line %d in %s\n", i, path)
+		}
+		return sb.String()
+	}
+	diff := bigDiff("a.txt", 200) + bigDiff("b.txt", 200) // each ~5 KB rendered
+	files := mustParse(t, diff)
+	ranges := CommentableRanges(files)
+
+	// Empty workdir → no enrichment; the hunk bodies alone blow a 1500-byte
+	// budget, so the render is cut at a line boundary with a visible marker.
+	out := NewEnricher(infra.NewOSFilesystemRepository(), t.TempDir(), 0).
+		WithMaxBytes(1500).Render(context.Background(), files, ranges)
+	if len(out) > 1600 {
+		t.Errorf("rendered %d bytes, expected near the 1500 budget", len(out))
+	}
+	mustContain(t, out, "diff truncated to bound prompt size")
+	mustNotContain(t, out, "line 200 in b.txt")
+
+	// Unbounded render includes everything.
+	full := NewEnricher(infra.NewOSFilesystemRepository(), t.TempDir(), 0).
+		Render(context.Background(), files, ranges)
+	mustContain(t, full, "line 200 in b.txt")
+	mustNotContain(t, full, "diff truncated")
+}
+
 func TestEnricherRender_UnreadableFile(t *testing.T) {
 	t.Parallel()
 	diff := `--- a/missing.txt

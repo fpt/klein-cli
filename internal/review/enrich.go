@@ -15,11 +15,19 @@ type Enricher struct {
 	fsRepo     repository.FilesystemRepository
 	workingDir string
 	context    int // lines of extra context around each hunk
+	maxBytes   int // budget for the whole rendered diff; 0 = unbounded
 }
 
 // NewEnricher creates an Enricher reading files relative to workingDir.
 func NewEnricher(fsRepo repository.FilesystemRepository, workingDir string, contextLines int) *Enricher {
 	return &Enricher{fsRepo: fsRepo, workingDir: workingDir, context: contextLines}
+}
+
+// WithMaxBytes bounds the total size of the rendered diff (see Render). A value
+// <= 0 leaves it unbounded. Returns the receiver for chaining.
+func (e *Enricher) WithMaxBytes(n int) *Enricher {
+	e.maxBytes = n
+	return e
 }
 
 // Render produces the annotated review view of all file diffs. Layout per file:
@@ -32,7 +40,9 @@ func NewEnricher(fsRepo repository.FilesystemRepository, workingDir string, cont
 //	          -  | removed line (no new-side number)
 //
 // New-side line numbers appear in brackets only for commentable lines, so the
-// model cannot mistake enrichment context for valid comment targets.
+// model cannot mistake enrichment context for valid comment targets. When a
+// byte budget is set (WithMaxBytes) the result is truncated at a line boundary
+// with a visible marker, so a huge PR can't produce an unbounded prompt.
 func (e *Enricher) Render(ctx context.Context, files []FileDiff, ranges Ranges) string {
 	var b strings.Builder
 	for _, f := range files {
@@ -65,7 +75,26 @@ func (e *Enricher) Render(ctx context.Context, files []FileDiff, ranges Ranges) 
 		}
 		b.WriteString("\n")
 	}
-	return strings.TrimRight(b.String(), "\n") + "\n"
+
+	out := strings.TrimRight(b.String(), "\n") + "\n"
+	if e.maxBytes > 0 && len(out) > e.maxBytes {
+		out = truncateAtLine(out, e.maxBytes) +
+			"... [diff truncated to bound prompt size — later changes are not shown]\n"
+	}
+	return out
+}
+
+// truncateAtLine returns the longest prefix of s that is at most n bytes and
+// ends on a line boundary (so a comment target is never a half-line).
+func truncateAtLine(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	cut := s[:n]
+	if nl := strings.LastIndexByte(cut, '\n'); nl >= 0 {
+		return cut[:nl+1]
+	}
+	return cut + "\n"
 }
 
 // readFileLines reads the new-side file content for context expansion.

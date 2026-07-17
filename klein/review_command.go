@@ -64,6 +64,7 @@ type reviewOptions struct {
 	maxTurns         int
 	maxBudget        int
 	maxComments      int
+	maxDiffBytes     int
 	includeGenerated bool
 	verbose          bool
 }
@@ -88,6 +89,8 @@ func parseReviewFlags(args []string) (opts reviewOptions, code int, ok bool) {
 		"Review generated files too (default: skip '// Code generated ... DO NOT EDIT.' files)")
 	maxComments := fs.Int("max-comments", 15,
 		"Cap on inline comments; excess are trimmed lowest-severity-first (0 = unlimited)")
+	maxDiffBytes := fs.Int("max-diff-bytes", 500_000,
+		"Budget for the enriched diff; it is truncated at a line boundary past this size (0 = unbounded)")
 	verbose := fs.Bool("v", false, "Enable verbose (debug) logging")
 	fs.Usage = func() {
 		fmt.Fprint(os.Stderr, reviewUsage)
@@ -114,6 +117,7 @@ func parseReviewFlags(args []string) (opts reviewOptions, code int, ok bool) {
 		maxTurns:         *maxTurns,
 		maxBudget:        *maxBudget,
 		maxComments:      *maxComments,
+		maxDiffBytes:     *maxDiffBytes,
 		includeGenerated: *includeGenerated,
 		verbose:          *verbose,
 	}, 0, true
@@ -213,7 +217,7 @@ func prepareReviewPrompt(
 	if err != nil {
 		return p, fmt.Errorf("parse diff: %w", err)
 	}
-	enricher := review.NewEnricher(fsRepo, opts.workdir, opts.contextLines)
+	enricher := review.NewEnricher(fsRepo, opts.workdir, opts.contextLines).WithMaxBytes(opts.maxDiffBytes)
 
 	// Skip machine-generated files (protoc, sqlc, …) unless asked to include
 	// them: they are noise to review and their marker says DO NOT EDIT.

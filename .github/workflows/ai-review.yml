@@ -1,5 +1,10 @@
 # Reference user of .github/actions/ai-review: AI-reviews this repo's own PRs.
-# Note: secrets are unavailable on PRs from forks, so the job is skipped there.
+#
+# Trust model: this uses `on: pull_request` (NOT pull_request_target) and the
+# job is gated to same-repository branches below, so the API-key secret is
+# only ever exposed to code from contributors who already have push access to
+# this repo's workflows. Fork PRs get no secrets and are skipped. Do not
+# switch this to pull_request_target while still checking out the PR head.
 name: AI Review
 
 on:

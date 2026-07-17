@@ -71,7 +71,14 @@ func (e *Enricher) Render(ctx context.Context, files []FileDiff, ranges Ranges) 
 // readFileLines reads the new-side file content for context expansion.
 // Returns nil when unreadable (deleted/binary/missing) — rendering then falls
 // back to the raw hunk without extra context.
+//
+// The path comes from the untrusted diff, so it must stay inside the
+// checkout: a crafted "../…" or absolute path could otherwise pull arbitrary
+// files from the host into the LLM prompt.
 func (e *Enricher) readFileLines(ctx context.Context, path string) []string {
+	if !filepath.IsLocal(path) {
+		return nil
+	}
 	data, err := e.fsRepo.ReadFile(ctx, filepath.Join(e.workingDir, path))
 	if err != nil {
 		return nil

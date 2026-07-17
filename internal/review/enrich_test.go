@@ -89,14 +89,40 @@ func TestEnricherRender_UnreadableFile(t *testing.T) {
 	mustNotContain(t, out, "ctx|")
 }
 
+func TestEnricherRender_PathTraversalBlocked(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	// A secret outside the "checkout" subdirectory must never be read.
+	if err := os.WriteFile(filepath.Join(dir, "secret.txt"), []byte("TOP-SECRET"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	checkout := filepath.Join(dir, "repo")
+	if err := os.MkdirAll(checkout, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	diff := `--- a/../secret.txt
++++ b/../secret.txt
+@@ -1 +1 @@
+-a
++b
+`
+	files := mustParse(t, diff)
+	e := NewEnricher(infra.NewOSFilesystemRepository(), checkout, 10)
+	out := e.Render(context.Background(), files, CommentableRanges(files))
+	mustNotContain(t, out, "TOP-SECRET")
+}
+
 func TestBuildPrompt(t *testing.T) {
 	t.Parallel()
-	p := BuildPrompt(Request{Title: "Fix bug", Body: "Details here"}, "DIFF-CONTENT")
+	p := BuildPrompt(Request{Title: "Fix bug", Body: "Details here"}, "DIFF-CONTENT", "")
 	mustContain(t, p,
 		"# PR Title\nFix bug", "# PR Description\nDetails here", "DIFF-CONTENT",
 		"AddInlineReview", "AddSummaryReview", "FinalizeReview",
+		"in this language: en",
 	)
 	// Empty body → no description section.
-	p2 := BuildPrompt(Request{Title: "T"}, "d")
+	p2 := BuildPrompt(Request{Title: "T"}, "d", "ja")
 	mustNotContain(t, p2, "# PR Description")
+	mustContain(t, p2, "in this language: ja")
 }

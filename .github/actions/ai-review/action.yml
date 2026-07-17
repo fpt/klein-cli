@@ -75,9 +75,14 @@ runs:
 
         # Sticky summary comment (authoritative marker home). Falls back to
         # review bodies for PRs reviewed before the sticky-comment scheme.
-        gh api "repos/$GITHUB_REPOSITORY/issues/$PR/comments" --paginate \
-          --jq '[.[] | select(.user.login == "github-actions[bot]")
-                     | select(.body | contains("<!-- klein-review-state"))] | last // empty' \
+        # NB: with --paginate a --jq filter runs once PER PAGE, so page-level
+        # `last` would emit one object per page; slurp all pages into a single
+        # array first (each page is a JSON array; `add` flattens them).
+        gh api "repos/$GITHUB_REPOSITORY/issues/$PR/comments" --paginate 2>/dev/null \
+          | jq -s 'add // []
+                   | [.[] | select(.user.login == "github-actions[bot]")
+                          | select(.body | contains("<!-- klein-review-state"))]
+                   | last // empty' \
           > /tmp/sticky.json || true
         STICKY_ID=""
         STATE=""
@@ -86,8 +91,8 @@ runs:
           STATE=$(jq -r .body /tmp/sticky.json \
             | grep -o '<!-- klein-review-state {[^}]*} -->' | tail -1 || true)
         else
-          STATE=$(gh api "repos/$GITHUB_REPOSITORY/pulls/$PR/reviews" --paginate \
-            --jq '[.[] | select(.user.login == "github-actions[bot]") | .body] | join("\n")' \
+          STATE=$(gh api "repos/$GITHUB_REPOSITORY/pulls/$PR/reviews" --paginate 2>/dev/null \
+            | jq -rs 'add // [] | .[] | select(.user.login == "github-actions[bot]") | .body' \
             | grep -o '<!-- klein-review-state {[^}]*} -->' | tail -1 || true)
         fi
         LAST_SHA=$(printf '%s' "$STATE" | sed -n 's/.*"head_sha":"\([0-9a-f]*\)".*/\1/p')

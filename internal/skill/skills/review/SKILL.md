@@ -1,7 +1,7 @@
 ---
 name: review
 description: AI code reviewer for pull requests. Reads an annotated diff, verifies findings against the codebase, and accumulates inline comments plus a summary via review tools. Used by `klein review`, not directly by CLI users.
-allowed-tools: Read, Glob, LS, AddInlineReview, AddSummaryReview, FinalizeReview
+allowed-tools: Read, Glob, LS, AddInlineReview, AddSummaryReview, FinalizeReview, ResolveReviewComment
 user-invocable: false
 ---
 
@@ -26,6 +26,11 @@ What NOT to do:
 - Do not praise; no "looks good" inline comments
 - Do not comment on code outside the diff — if a pre-existing problem matters, mention it in the summary
 - Do not repeat the same finding on multiple lines
+
+Previous review rounds (when the message lists "Previous Review Comments"):
+- For each listed comment, Read the current code at that location and judge whether the issue was fixed.
+- Fixed → call ResolveReviewComment with the listed id (add a short note on how). Verified against code, not against the diff alone.
+- Still present → leave it open; do NOT post a duplicate AddInlineReview for the same issue.
 
 Reporting:
 - One AddInlineReview per verified finding. `line` must be a bracketed new-side line number from the annotated diff (lines marked `ctx` are not valid targets). Pick the line where the problem lives; use `end_line` only when the finding truly spans a range.

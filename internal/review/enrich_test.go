@@ -125,4 +125,27 @@ func TestBuildPrompt(t *testing.T) {
 	p2 := BuildPrompt(Request{Title: "T"}, "d", "ja")
 	mustNotContain(t, p2, "# PR Description")
 	mustContain(t, p2, "in this language: ja")
+	// No previous comments → no resolution instructions.
+	mustNotContain(t, p, "Previous Review Comments", "ResolveReviewComment")
+}
+
+func TestBuildPrompt_IncrementalWithPreviousComments(t *testing.T) {
+	t.Parallel()
+	req := Request{
+		Title: "T",
+		Mode:  "incremental",
+		PreviousComments: []PreviousComment{
+			{ID: "PRRT_1", Path: "a.go", Line: 9, Body: "bad divisor\nsecond line"},
+		},
+	}
+	p := BuildPrompt(req, "DIFF", "")
+	mustContain(t, p,
+		"# Review Mode: incremental",
+		"ONLY the changes since the last review round",
+		"# Previous Review Comments",
+		"id=PRRT_1 a.go:9",
+		"bad divisor\n  second line", // multi-line body indented under its item
+		"ResolveReviewComment",
+		"do NOT re-post a duplicate",
+	)
 }

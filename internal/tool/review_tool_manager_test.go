@@ -56,7 +56,7 @@ func inline(path string, line int, extra message.ToolArgumentValues) message.Too
 
 func TestReviewToolManager_Flow(t *testing.T) {
 	t.Parallel()
-	m := NewReviewToolManager(rangeValidator)
+	m := NewReviewToolManager(rangeValidator, nil)
 
 	expectErr(t, callReview(t, m, "FinalizeReview", nil),
 		"no summary", "FinalizeReview before summary")
@@ -111,9 +111,34 @@ func verifyFlowResult(t *testing.T, got ReviewResult) {
 	}
 }
 
+func TestReviewToolManager_Resolve(t *testing.T) {
+	t.Parallel()
+	m := NewReviewToolManager(rangeValidator, []string{"T1", "T2"})
+
+	expectErr(t, callReview(t, m, "ResolveReviewComment", message.ToolArgumentValues{"id": "T9"}),
+		"unknown comment id", "unknown id")
+	expectOK(t, callReview(t, m, "ResolveReviewComment",
+		message.ToolArgumentValues{"id": "T1", "note": "fixed"}), "valid resolve")
+	expectErr(t, callReview(t, m, "ResolveReviewComment", message.ToolArgumentValues{"id": "T1"}),
+		"already marked resolved", "double resolve")
+
+	got := m.Result()
+	if len(got.Resolved) != 1 || got.Resolved[0].ID != "T1" || got.Resolved[0].Note != "fixed" {
+		t.Errorf("resolved: %+v", got.Resolved)
+	}
+}
+
+func TestReviewToolManager_ResolveToolAbsentWithoutPrevious(t *testing.T) {
+	t.Parallel()
+	m := NewReviewToolManager(rangeValidator, nil)
+	if _, ok := m.GetTools()["ResolveReviewComment"]; ok {
+		t.Error("ResolveReviewComment should not be registered without previous comments")
+	}
+}
+
 func TestReviewToolManager_SummaryReplacedAndDefaults(t *testing.T) {
 	t.Parallel()
-	m := NewReviewToolManager(rangeValidator)
+	m := NewReviewToolManager(rangeValidator, nil)
 	expectOK(t, callReview(t, m, "AddSummaryReview", message.ToolArgumentValues{"summary": "v1"}), "first summary")
 	res := callReview(t, m, "AddSummaryReview", message.ToolArgumentValues{"summary": "v2"})
 	if res.Error != "" || !strings.Contains(res.Text, "replaced") {

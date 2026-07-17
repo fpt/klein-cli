@@ -25,7 +25,10 @@ import (
 // exploration plus the review accumulation tools. Enforced via
 // SetAllowedToolsOverride (the skill's allowed-tools alone would leave other
 // tools reachable through deferred tool loading).
-var reviewAllowedTools = []string{"Read", "Glob", "LS", "AddInlineReview", "AddSummaryReview", "FinalizeReview"}
+var reviewAllowedTools = []string{
+	"Read", "Glob", "LS",
+	"AddInlineReview", "AddSummaryReview", "FinalizeReview", "ResolveReviewComment",
+}
 
 const reviewUsage = `Usage:
   klein review --input <request.json> [--output <result.json>] [flags]
@@ -165,24 +168,45 @@ func runReviewCommand(args []string) int {
 	return 0
 }
 
-// prepareReviewPrompt reads the request, parses the diff, and builds the
-// annotated review prompt. It returns the prompt, the commentable ranges
-// (for the tool validator), and the number of changed files.
+// preparedReview is the model-facing material derived from the request.
+type preparedReview struct {
+	prompt      string
+	ranges      review.Ranges // commentable ranges, always from the full PR diff
+	previousIDs []string
+	numFiles    int
+}
+
+// prepareReviewPrompt reads the request, parses the diff(s), and builds the
+// annotated review prompt. Commentable ranges come from full_diff when the
+// harness supplies one (incremental round) — GitHub validates comments
+// against the complete PR diff, not the increment being reviewed.
 func prepareReviewPrompt(
 	ctx context.Context, opts reviewOptions, fsRepo repository.FilesystemRepository,
-) (prompt string, ranges review.Ranges, numFiles int, err error) {
+) (preparedReview, error) {
+	var p preparedReview
 	req, err := readReviewRequest(opts.input)
 	if err != nil {
-		return "", nil, 0, err
+		return p, err
 	}
 	files, err := review.ParseUnifiedDiff(req.Diff)
 	if err != nil {
-		return "", nil, 0, fmt.Errorf("parse diff: %w", err)
+		return p, fmt.Errorf("parse diff: %w", err)
 	}
-	ranges = review.CommentableRanges(files)
+	p.ranges = review.CommentableRanges(files)
+	if strings.TrimSpace(req.FullDiff) != "" {
+		fullFiles, err := review.ParseUnifiedDiff(req.FullDiff)
+		if err != nil {
+			return p, fmt.Errorf("parse full_diff: %w", err)
+		}
+		p.ranges = review.CommentableRanges(fullFiles)
+	}
+	for _, c := range req.PreviousComments {
+		p.previousIDs = append(p.previousIDs, c.ID)
+	}
 	enricher := review.NewEnricher(fsRepo, opts.workdir, opts.contextLines)
-	prompt = review.BuildPrompt(req, enricher.Render(ctx, files, ranges), opts.language)
-	return prompt, ranges, len(files), nil
+	p.prompt = review.BuildPrompt(req, enricher.Render(ctx, files, p.ranges), opts.language)
+	p.numFiles = len(files)
+	return p, nil
 }
 
 // executeReview parses the request, runs the review agent with the sandboxed
@@ -198,11 +222,11 @@ func executeReview(
 	}
 
 	fsRepo := infra.NewOSFilesystemRepository()
-	prompt, ranges, numFiles, err := prepareReviewPrompt(ctx, opts, fsRepo)
+	prepared, err := prepareReviewPrompt(ctx, opts, fsRepo)
 	if err != nil {
 		return zero, err
 	}
-	reviewMgr := tool.NewReviewToolManager(ranges.Validate)
+	reviewMgr := tool.NewReviewToolManager(prepared.ranges.Validate, prepared.previousIDs)
 
 	llmClient, err := client.NewLLMClient(settings.LLM)
 	if err != nil {
@@ -228,8 +252,9 @@ func executeReview(
 	a.SetAllowedToolsOverride(reviewAllowedTools)
 
 	logger.Info("Starting review",
-		"files", numFiles, "backend", settings.LLM.Backend, "model", settings.LLM.Model)
-	response, err := a.Invoke(ctx, prompt, "review")
+		"files", prepared.numFiles, "previous_comments", len(prepared.previousIDs),
+		"backend", settings.LLM.Backend, "model", settings.LLM.Model)
+	response, err := a.Invoke(ctx, prepared.prompt, "review")
 	if err != nil {
 		return zero, fmt.Errorf("review run failed: %w", err)
 	}

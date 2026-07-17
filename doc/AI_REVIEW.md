@@ -64,12 +64,26 @@ Steps 1–2 and 8 live in `.github/actions/ai-review/action.yml`; steps 3–7 ar
 **Input** (`--input <file>`, `-` = stdin):
 
 ```json
-{ "title": "PR title", "body": "PR description", "diff": "<unified diff text>" }
+{
+  "title": "PR title",
+  "body": "PR description",
+  "diff": "<unified diff to review>",
+  "full_diff": "<complete PR diff>",        // optional; incremental rounds only
+  "mode": "full",                            // full (default) | incremental
+  "previous_comments": [                     // optional; unresolved earlier findings
+    { "id": "PRRT_…", "path": "a.go", "line": 9, "body": "…" }
+  ]
+}
 ```
 
 `diff` accepts both git format (`diff --git` + `---`/`+++` headers, rename /
-new / deleted markers) and plain unified diffs. Type: `review.Request`
-(`internal/review/prompt.go`).
+new / deleted markers) and plain unified diffs. On an incremental round the
+harness passes only the changes since the last reviewed commit as `diff` and
+the complete PR diff as `full_diff` — commentable-line validation always uses
+the full diff, because GitHub rejects comments outside it. `previous_comments`
+ids are opaque to klein (the harness uses GraphQL review-thread node ids);
+they only round-trip through `ResolveReviewComment` into the result.
+Type: `review.Request` (`internal/review/prompt.go`).
 
 **Output** (`--output <file>`, stdout when omitted; agent chatter goes to
 stderr so stdout stays parseable):
@@ -82,6 +96,9 @@ stderr so stdout stays parseable):
   "comments": [
     { "path": "internal/foo.go", "line": 42, "end_line": 44,
       "severity": "major", "body": "..." }
+  ],
+  "resolved": [                      // previous-round comments verified fixed
+    { "id": "PRRT_…", "note": "divisor restored" }
   ]
 }
 ```
@@ -216,6 +233,7 @@ construction — the subcommand passes `ranges.Validate`, keeping
 | `AddInlineReview` | Validates path+line via the injected validator; rejects duplicates (same path+range), bad severities (`critical/major/minor/nit`), and calls after finalize. Swapped `line`/`end_line` bounds are silently normalized rather than bounced. |
 | `AddSummaryReview` | Sets summary + verdict (`approve/comment/request_changes`, default `comment`); calling again *replaces* (never accumulates). Locked after finalize. |
 | `FinalizeReview` | Requires a summary first; idempotence errors on a second call; locks all further mutation. |
+| `ResolveReviewComment` | Marks a previous-round comment as verified-fixed (id must match the `previous_comments` input; duplicates rejected). Only registered when previous comments exist. The harness resolves the thread. |
 
 Every rejection returns a tool *error result* (not a Go error), phrased as an
 instruction the model can act on — this is the self-correction loop that
@@ -227,22 +245,53 @@ uses the agent's final text response as the summary and marks
 
 ## 8. The harness (`.github/actions/ai-review/`)
 
-A composite action, deliberately thin — `gh` + `jq` only:
+A composite action, deliberately thin — `git` (read-only), `gh`, and `jq`:
 
-1. `gh pr view --json title,body` + `gh pr diff` → request JSON
-2. `klein review --input … --output … --workdir "$GITHUB_WORKSPACE"`
+1. **Determine review scope.** The last reviewed commit is recovered from the
+   newest bot review whose body carries the state marker (§8.1). Modes:
+   - no marker → **full** review of `gh pr diff`
+   - marker found, `LAST_SHA` still exists and is an ancestor of head →
+     **incremental**: `git diff LAST_SHA..HEAD` is reviewed, the full PR diff
+     rides along as `full_diff` for validation
+   - marker found but the commit was rewritten (**force-push**: `git
+     merge-base --is-ancestor` fails or the object is gone) → **full** review
+   - head already reviewed, or the incremental diff is empty → **skip**
+   (Requires `fetch-depth: 0` on checkout.)
+2. **Collect previous comments.** GraphQL `reviewThreads` → unresolved threads
+   whose first comment is by `github-actions` → `previous_comments`
+   (`id` = thread node id, `line` falls back to `originalLine` for outdated
+   threads).
+3. `klein review --input … --output … --workdir "$GITHUB_WORKSPACE"`
    (the klein binary is provided by the calling workflow, input `klein-path`;
    backend selected via `backend` + the matching `*-api-key` input;
    output language via `language`, default `en`)
-3. jq maps the result to a Reviews-API payload — verdict →
+4. **Resolve fixed threads.** Each `resolved[].id` → GraphQL
+   `resolveReviewThread` mutation. Best-effort: a failed mutation logs a
+   warning and never blocks posting.
+5. **Post.** jq maps the result to a Reviews-API payload — verdict →
    `APPROVE`/`REQUEST_CHANGES`/`COMMENT`, severity prefixed into the comment
-   body (`**[major]** …`), `end_line > line` → `start_line`+`line` — and
-   posts it as **one** `POST /repos/…/pulls/N/reviews` call.
+   body (`**[major]** …`), `end_line > line` → `start_line`+`line` — appends
+   the state marker to the body, and posts **one**
+   `POST /repos/…/pulls/N/reviews` call.
 
 If that POST fails (e.g. repo settings forbid the Actions token from
 APPROVE/REQUEST_CHANGES, or an edge-case comment is still rejected), the
 action retries once with a summary-only `COMMENT` review, so the run always
 reports *something*.
+
+### 8.1 Review-state marker
+
+Round state lives in the PR itself — no external storage. Every posted
+summary ends with:
+
+```html
+<!-- klein-review-state {"head_sha":"<reviewed commit sha>"} -->
+```
+
+The next run scans the bot's reviews for the marker (newest wins) and
+compares against the current head. The marker is written by the *harness*
+(klein has no SHA knowledge — principle #1). Editing or deleting the comment
+simply causes the next run to fall back to a full review.
 
 The reference workflow `.github/workflows/ai-review.yml` reviews this repo's
 own PRs: checkout PR head → build klein from source → run the action.
@@ -261,6 +310,11 @@ rapid push supersedes the in-flight review.
 | Review with zero findings | Exit 0; summary-only review is posted |
 | Reviews API rejects the payload | Harness retries summary-only as `COMMENT` |
 | Fork PR | Workflow job skipped (no secret) |
+| Force-push rewrote the last reviewed commit | Full review (marker SHA missing or not an ancestor) |
+| State marker edited/deleted | Full review (no marker found) |
+| Head commit already reviewed / empty incremental diff | Run skipped with a notice |
+| `resolveReviewThread` mutation fails | Warning; review is still posted, thread stays open for the next round |
+| Model resolves an id not in `previous_comments` | Tool call bounced (unknown id) |
 
 ## 10. Testing
 

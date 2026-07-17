@@ -113,9 +113,16 @@ klein itself never runs `git` or `gh`:
 1. The harness fetches the PR title/description and diff, and checks out the PR head.
 2. `klein review` enriches each hunk with ±10 context lines read from the checkout,
    then reviews with a restricted toolset: `Read`, `Glob`, `LS`, plus
-   `AddInlineReview` / `AddSummaryReview` / `FinalizeReview` to accumulate the review.
+   `AddInlineReview` / `AddSummaryReview` / `FinalizeReview` / `ResolveReviewComment`
+   to accumulate the review.
    Inline comment lines are validated to fall within the diff's new-side hunk ranges.
 3. The harness posts the result as one PR review (inline comments + summary).
+
+Reviews are **stateful across rounds**: the reviewed commit is embedded in the
+summary as an HTML marker, later pushes get an incremental review of just the
+new changes (a force-push falls back to a full review), previous unresolved
+comments are fed back to the model, and threads it verifies as fixed are
+resolved on GitHub.
 
 ```bash
 # Input:  {"title": "...", "body": "...", "diff": "<unified diff>"}

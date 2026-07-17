@@ -19,6 +19,8 @@ const (
 	reviewArgComment  = "comment"
 	reviewArgSummary  = "summary"
 	reviewArgVerdict  = "verdict"
+	reviewArgID       = "id"
+	reviewArgNote     = "note"
 )
 
 // reviewVerdictDefault is used when the model never sets a verdict.
@@ -36,13 +38,22 @@ type ReviewComment struct {
 	EndLine  int    `json:"end_line,omitempty"`
 }
 
+// ResolvedComment marks a previous-round comment the model verified as fixed.
+// ID round-trips from the harness's previous_comments input (an opaque
+// review-thread id); the harness resolves the thread.
+type ResolvedComment struct {
+	ID   string `json:"id"`
+	Note string `json:"note,omitempty"`
+}
+
 // ReviewResult is the outcome of a review session, serialized by the
 // `klein review` subcommand for the harness to post.
 type ReviewResult struct {
-	Summary   string          `json:"summary"`
-	Verdict   string          `json:"verdict"`
-	Comments  []ReviewComment `json:"comments"`
-	Finalized bool            `json:"finalized"`
+	Summary   string            `json:"summary"`
+	Verdict   string            `json:"verdict"`
+	Comments  []ReviewComment   `json:"comments"`
+	Resolved  []ResolvedComment `json:"resolved,omitempty"`
+	Finalized bool              `json:"finalized"`
 }
 
 // LineValidator checks that an inline comment target [line, endLine] on path
@@ -58,22 +69,30 @@ var reviewVerdicts = map[string]bool{"approve": true, reviewVerdictDefault: true
 // tools that accumulate a code review in memory. It performs no I/O — the
 // `klein review` subcommand reads Result() after the agent run.
 type ReviewToolManager struct {
-	tools    map[message.ToolName]message.Tool
-	validate LineValidator
-	summary  string
-	verdict  string
-	comments []ReviewComment
+	tools       map[message.ToolName]message.Tool
+	validate    LineValidator
+	previousIDs map[string]bool
+	summary     string
+	verdict     string
+	comments    []ReviewComment
+	resolved    []ResolvedComment
 
 	mu        sync.Mutex
 	finalized bool
 }
 
-// NewReviewToolManager creates a review tool manager. validate must not be nil.
-func NewReviewToolManager(validate LineValidator) *ReviewToolManager {
+// NewReviewToolManager creates a review tool manager. validate must not be
+// nil. previousIDs are the ids of unresolved previous-round comments — the
+// ResolveReviewComment tool is only registered when there are any.
+func NewReviewToolManager(validate LineValidator, previousIDs []string) *ReviewToolManager {
 	m := &ReviewToolManager{
-		tools:    make(map[message.ToolName]message.Tool),
-		validate: validate,
-		verdict:  reviewVerdictDefault,
+		tools:       make(map[message.ToolName]message.Tool),
+		validate:    validate,
+		previousIDs: make(map[string]bool, len(previousIDs)),
+		verdict:     reviewVerdictDefault,
+	}
+	for _, id := range previousIDs {
+		m.previousIDs[id] = true
 	}
 	m.register()
 	return m
@@ -113,6 +132,43 @@ func (m *ReviewToolManager) register() {
 		"Mark the review complete. Call exactly once, after AddSummaryReview. Returns the final comment count.",
 		nil,
 		m.handleFinalize)
+
+	if len(m.previousIDs) > 0 {
+		m.RegisterTool("ResolveReviewComment",
+			"Mark a previous-round review comment as fixed, after verifying the fix in the current code. "+
+				"Use the id shown in the 'Previous Review Comments' section. The harness resolves the thread.",
+			[]message.ToolArgument{
+				{Name: reviewArgID, Required: true, Type: "string",
+					Description: "The id of the previous comment (exactly as listed in the prompt)"},
+				{Name: reviewArgNote, Required: false, Type: "string",
+					Description: "Short note on how it was fixed (e.g. 'guarded in commit …', 'divisor restored')"},
+			},
+			m.handleResolve)
+	}
+}
+
+func (m *ReviewToolManager) handleResolve(_ context.Context, args message.ToolArgumentValues) (message.ToolResult, error) {
+	id := stringArg(args, reviewArgID)
+	if id == "" {
+		return message.NewToolResultError("id is required"), nil
+	}
+	if !m.previousIDs[id] {
+		return message.NewToolResultError(fmt.Sprintf(
+			"unknown comment id %q — use an id exactly as listed in the 'Previous Review Comments' section", id)), nil
+	}
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.finalized {
+		return message.NewToolResultError("review already finalized; no further comments can be resolved"), nil
+	}
+	for _, r := range m.resolved {
+		if r.ID == id {
+			return message.NewToolResultError(fmt.Sprintf("comment %s is already marked resolved", id)), nil
+		}
+	}
+	m.resolved = append(m.resolved, ResolvedComment{ID: id, Note: strings.TrimSpace(stringArg(args, reviewArgNote))})
+	return message.NewToolResultText(fmt.Sprintf("Marked previous comment %s as resolved.", id)), nil
 }
 
 // parseInlineArgs validates AddInlineReview arguments and returns the comment
@@ -218,7 +274,12 @@ func (m *ReviewToolManager) Result() ReviewResult {
 	defer m.mu.Unlock()
 	comments := make([]ReviewComment, len(m.comments))
 	copy(comments, m.comments)
-	return ReviewResult{Summary: m.summary, Verdict: m.verdict, Finalized: m.finalized, Comments: comments}
+	resolved := make([]ResolvedComment, len(m.resolved))
+	copy(resolved, m.resolved)
+	return ReviewResult{
+		Summary: m.summary, Verdict: m.verdict, Finalized: m.finalized,
+		Comments: comments, Resolved: resolved,
+	}
 }
 
 // --- domain.ToolManager ---

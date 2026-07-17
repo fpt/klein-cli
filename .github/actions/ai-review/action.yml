@@ -31,6 +31,18 @@ inputs:
     description: Model override (empty = backend default)
     required: false
     default: ""
+  effort:
+    description: Reasoning effort for reasoning-capable models (none|minimal|low|medium|high|xhigh; empty = backend default)
+    required: false
+    default: ""
+  max-turns:
+    description: Maximum agent iterations for the review run (empty/0 = settings default)
+    required: false
+    default: ""
+  max-budget-tokens:
+    description: Cumulative token budget for the run; exceeding it stops the review keeping comments gathered so far (empty/0 = unlimited)
+    required: false
+    default: ""
   language:
     description: Language for the review output (code or name, e.g. en, ja, Japanese)
     required: false
@@ -244,23 +256,30 @@ runs:
       if: steps.scope.outputs.mode != 'skip'
       shell: bash
       env:
-        # Inputs land under INPUT_* names and are exported only when set, so an
-        # empty input never clobbers a key provided via the caller's job env.
+        # Inputs go through env (never interpolated into script text), and are
+        # applied only when set so an empty input never clobbers a key from the
+        # caller's job env or a backend default.
         INPUT_OPENAI_KEY: ${{ inputs.openai-api-key }}
         INPUT_ANTHROPIC_KEY: ${{ inputs.anthropic-api-key }}
         INPUT_GEMINI_KEY: ${{ inputs.gemini-api-key }}
+        BACKEND: ${{ inputs.backend }}
+        MODEL: ${{ inputs.model }}
+        EFFORT: ${{ inputs.effort }}
+        LANGUAGE: ${{ inputs.language }}
+        MAX_TURNS: ${{ inputs.max-turns }}
+        MAX_BUDGET: ${{ inputs.max-budget-tokens }}
+        KLEIN: ${{ inputs.klein-path }}
       run: |
         set -euo pipefail
         if [ -n "$INPUT_OPENAI_KEY" ]; then export OPENAI_API_KEY="$INPUT_OPENAI_KEY"; fi
         if [ -n "$INPUT_ANTHROPIC_KEY" ]; then export ANTHROPIC_API_KEY="$INPUT_ANTHROPIC_KEY"; fi
         if [ -n "$INPUT_GEMINI_KEY" ]; then export GEMINI_API_KEY="$INPUT_GEMINI_KEY"; fi
-        MODEL_ARGS=()
-        if [ -n "${{ inputs.model }}" ]; then
-          MODEL_ARGS=(-m "${{ inputs.model }}")
-        fi
-        "${{ inputs.klein-path }}" review \
-          -b "${{ inputs.backend }}" "${MODEL_ARGS[@]}" \
-          --language "${{ inputs.language }}" \
+        ARGS=(-b "$BACKEND" --language "$LANGUAGE")
+        if [ -n "$MODEL" ];      then ARGS+=(-m "$MODEL"); fi
+        if [ -n "$EFFORT" ];     then ARGS+=(--effort "$EFFORT"); fi
+        if [ -n "$MAX_TURNS" ];  then ARGS+=(--max-turns "$MAX_TURNS"); fi
+        if [ -n "$MAX_BUDGET" ]; then ARGS+=(--max-budget-tokens "$MAX_BUDGET"); fi
+        "$KLEIN" review "${ARGS[@]}" \
           --input /tmp/review-request.json \
           --output /tmp/review-result.json \
           --workdir "$GITHUB_WORKSPACE"

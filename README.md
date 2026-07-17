@@ -159,8 +159,12 @@ jobs:
     if: github.event.pull_request.head.repo.full_name == github.repository
     uses: fpt/klein-cli/.github/workflows/ai-review-reusable.yml@main
     with:
-      language: ja            # optional (default: en)
-      klein-version: v0.1.1   # optional (default: latest release)
+      language: ja                # optional (default: en)
+      model: gpt-5.6-luna         # optional (default: backend default)
+      effort: low                 # optional reasoning effort
+      max-turns: "20"             # optional agent iteration cap
+      max-budget-tokens: "200000" # optional token budget (partial review if exceeded)
+      klein-version: v0.1.1       # optional (default: latest release)
     secrets:
       openai-api-key: ${{ secrets.OPENAI_API_KEY }}
 ```

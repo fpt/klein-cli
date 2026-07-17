@@ -17,6 +17,7 @@ import (
 	"github.com/fpt/klein-cli/internal/review"
 	"github.com/fpt/klein-cli/internal/tool"
 	"github.com/fpt/klein-cli/pkg/agent/domain"
+	"github.com/fpt/klein-cli/pkg/agent/react"
 	client "github.com/fpt/klein-cli/pkg/client"
 	pkgLogger "github.com/fpt/klein-cli/pkg/logger"
 )
@@ -58,6 +59,8 @@ type reviewOptions struct {
 	settingsPath string
 	language     string
 	contextLines int
+	maxTurns     int
+	maxBudget    int
 	verbose      bool
 }
 
@@ -75,6 +78,8 @@ func parseReviewFlags(args []string) (opts reviewOptions, code int, ok bool) {
 	settingsPath := fs.String("settings", "", "Path to settings file")
 	language := fs.String("language", "en", "Language for the review output (code or name, e.g. en, ja, Japanese)")
 	contextLines := fs.Int("context", 10, "Extra context lines around each hunk in the annotated diff")
+	maxTurns := fs.Int("max-turns", 0, "Maximum agent iterations for the review run (0 = settings default)")
+	maxBudget := fs.Int("max-budget-tokens", 0, "Cumulative token budget for the run; exceeding it stops the review, keeping comments gathered so far (0 = unlimited)")
 	verbose := fs.Bool("v", false, "Enable verbose (debug) logging")
 	fs.Usage = func() {
 		fmt.Fprint(os.Stderr, reviewUsage)
@@ -98,6 +103,8 @@ func parseReviewFlags(args []string) (opts reviewOptions, code int, ok bool) {
 		settingsPath: *settingsPath,
 		language:     *language,
 		contextLines: *contextLines,
+		maxTurns:     *maxTurns,
+		maxBudget:    *maxBudget,
 		verbose:      *verbose,
 	}, 0, true
 }
@@ -125,6 +132,9 @@ func reviewSettings(opts reviewOptions) (*config.Settings, error) {
 	if settings.LLM.Backend == "codex" || settings.LLM.Backend == "kessel" {
 		return nil, fmt.Errorf(
 			"backend %q is not supported by klein review; use openai, anthropic, or gemini", settings.LLM.Backend)
+	}
+	if opts.maxTurns > 0 {
+		settings.Agent.MaxIterations = opts.maxTurns
 	}
 	return settings, nil
 }
@@ -250,17 +260,34 @@ func executeReview(
 	}
 	defer cleanup()
 	a.SetAllowedToolsOverride(reviewAllowedTools)
+	if opts.maxBudget > 0 {
+		a.SetTokenBudget(opts.maxBudget)
+	}
 
 	logger.Info("Starting review",
 		"files", prepared.numFiles, "previous_comments", len(prepared.previousIDs),
 		"backend", settings.LLM.Backend, "model", settings.LLM.Model)
 	response, err := a.Invoke(ctx, prepared.prompt, "review")
-	if err != nil {
+	budgetExceeded := errors.Is(err, react.ErrTokenBudgetExceeded)
+	if err != nil && !budgetExceeded {
 		return zero, fmt.Errorf("review run failed: %w", err)
 	}
 	printTokenUsage(a.GetLLMClient())
 
 	result := reviewMgr.Result()
+	if budgetExceeded {
+		// Salvage what was gathered before the cutoff; the harness still gets
+		// a postable result. finalized:false signals the truncation.
+		logger.Warn("Token budget exceeded — emitting partial review",
+			"budget", opts.maxBudget, "comments", len(result.Comments))
+		if result.Summary == "" {
+			result.Summary = fmt.Sprintf(
+				"⚠️ Review stopped early: the token budget (%d) was exhausted. Inline comments gathered before the cutoff are included; the review is incomplete.",
+				opts.maxBudget)
+		}
+		result.Finalized = false
+		return result, nil
+	}
 	if result.Summary == "" {
 		// The model never called AddSummaryReview — fall back to its final
 		// response so the harness still has something to post.

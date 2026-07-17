@@ -950,3 +950,47 @@ func TestReAct_compactionWithToolCalls(t *testing.T) {
 		}
 	})
 }
+
+// budgetMockLLM is a mockLLM that also reports token usage per call.
+type budgetMockLLM struct {
+	mockLLM
+	usage message.TokenUsage
+}
+
+func (m *budgetMockLLM) LastTokenUsage() (message.TokenUsage, bool) { return m.usage, true }
+
+func TestReAct_TokenBudgetExceeded(t *testing.T) {
+	llm := &budgetMockLLM{usage: message.TokenUsage{InputTokens: 500, OutputTokens: 100, TotalTokens: 600}}
+	// The model keeps calling tools forever; only the budget stops the run.
+	llm.chatFunc = func(ctx context.Context, messages []message.Message) (message.Message, error) {
+		return message.NewToolCallMessage(message.ToolName("test_tool"), message.ToolArgumentValues{}), nil
+	}
+	tm := &mockToolManager{
+		callToolFunc: func(ctx context.Context, name message.ToolName, args message.ToolArgumentValues) (message.ToolResult, error) {
+			return message.NewToolResultText("ok"), nil
+		},
+	}
+
+	r, _ := NewReAct(llm, tm, state.NewMessageState(), &mockSituation{}, 10)
+	r.SetTokenBudget(1000) // 600 after call 1 (< 1000, continue), 1200 after call 2 (>= 1000, stop)
+
+	_, err := r.Run(context.Background(), "review this")
+	if !errors.Is(err, ErrTokenBudgetExceeded) {
+		t.Fatalf("expected ErrTokenBudgetExceeded, got %v", err)
+	}
+	if r.usedTokens != 1200 {
+		t.Errorf("expected 1200 used tokens, got %d", r.usedTokens)
+	}
+}
+
+func TestReAct_TokenBudgetZeroIsUnlimited(t *testing.T) {
+	llm := &budgetMockLLM{usage: message.TokenUsage{TotalTokens: 100000}}
+	llm.chatFunc = func(ctx context.Context, messages []message.Message) (message.Message, error) {
+		return message.NewChatMessage(message.MessageTypeAssistant, "done"), nil
+	}
+	r, _ := NewReAct(llm, &mockToolManager{}, state.NewMessageState(), &mockSituation{}, 10)
+	// No SetTokenBudget call — huge usage must not error.
+	if _, err := r.Run(context.Background(), "hi"); err != nil {
+		t.Fatalf("unexpected error with unlimited budget: %v", err)
+	}
+}

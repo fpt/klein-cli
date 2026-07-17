@@ -378,21 +378,28 @@ runs:
         # the PR keeps showing a blocking change request with no open comments.
         # Best-effort: a failed dismissal is a warning, not a hard failure.
         if [ "$(jq -r '.verdict' /tmp/review-result.json)" != "request_changes" ]; then
-          gh api "repos/$GITHUB_REPOSITORY/pulls/$PR/reviews" --paginate 2>/dev/null \
-            | jq -rs 'add // [] | .[]
-                      | select(.user.login == "github-actions[bot]" and .state == "CHANGES_REQUESTED")
-                      | .id' \
-            | while read -r RID; do
-                [ -n "$RID" ] || continue
-                if gh api --method PUT \
-                    "repos/$GITHUB_REPOSITORY/pulls/$PR/reviews/$RID/dismissals" \
-                    -f message="Superseded: the latest AI review no longer requests changes." \
-                    -f event=DISMISS > /dev/null; then
-                  echo "Dismissed stale changes-requested review $RID"
-                else
-                  echo "::warning::Failed to dismiss review $RID"
-                fi
-              done
+          # Capture the listing in its own `if` so a failed/permission-denied
+          # list only warns — under pipefail a failing pipeline stage would
+          # otherwise abort the step before the minimal review is posted.
+          if REVIEWS_JSON=$(gh api "repos/$GITHUB_REPOSITORY/pulls/$PR/reviews" --paginate 2>/dev/null); then
+            printf '%s' "$REVIEWS_JSON" \
+              | jq -rs 'add // [] | .[]
+                        | select(.user.login == "github-actions[bot]" and .state == "CHANGES_REQUESTED")
+                        | .id' \
+              | while read -r RID; do
+                  [ -n "$RID" ] || continue
+                  if gh api --method PUT \
+                      "repos/$GITHUB_REPOSITORY/pulls/$PR/reviews/$RID/dismissals" \
+                      -f message="Superseded: the latest AI review no longer requests changes." \
+                      -f event=DISMISS > /dev/null; then
+                    echo "Dismissed stale changes-requested review $RID"
+                  else
+                    echo "::warning::Failed to dismiss review $RID"
+                  fi
+                done
+          else
+            echo "::warning::Could not list reviews to dismiss stale change requests"
+          fi
         fi
 
         # --- Minimal review carrying the inline comments. The sticky summary

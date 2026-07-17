@@ -49,7 +49,9 @@ func expectErr(t *testing.T, res message.ToolResult, substr, what string) {
 }
 
 func inline(path string, line int, extra message.ToolArgumentValues) message.ToolArgumentValues {
-	args := message.ToolArgumentValues{"path": path, "line": line, "comment": "finding", "severity": "minor"}
+	args := message.ToolArgumentValues{
+		"path": path, "line": line, "comment": "finding", "severity": "minor", "rationale": "verified in code",
+	}
 	maps.Copy(args, extra)
 	return args
 }
@@ -74,8 +76,11 @@ func TestReviewToolManager_Flow(t *testing.T) {
 		inline(allowedFile, 14, message.ToolArgumentValues{"severity": "blocker"})),
 		"invalid severity", "bad severity")
 	expectErr(t, callReview(t, m, "AddInlineReview",
-		message.ToolArgumentValues{"path": allowedFile, "line": 14, "comment": "x"}),
+		message.ToolArgumentValues{"path": allowedFile, "line": 14, "comment": "x", "rationale": "r"}),
 		"severity is required", "missing severity")
+	expectErr(t, callReview(t, m, "AddInlineReview",
+		message.ToolArgumentValues{"path": allowedFile, "line": 14, "comment": "x", "severity": "minor"}),
+		"rationale is required", "missing rationale")
 
 	// Multi-line with swapped bounds is normalized.
 	expectOK(t, callReview(t, m, "AddInlineReview",
@@ -111,6 +116,9 @@ func verifyFlowResult(t *testing.T, got ReviewResult) {
 	}
 	if got.Comments[1].Line != 15 || got.Comments[1].EndLine != 18 {
 		t.Errorf("swapped bounds not normalized: %+v", got.Comments[1])
+	}
+	if got.Comments[0].Rationale != "verified in code" {
+		t.Errorf("rationale not recorded: %+v", got.Comments[0])
 	}
 }
 

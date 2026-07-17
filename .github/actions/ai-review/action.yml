@@ -424,7 +424,10 @@ runs:
           comments: [ .comments[] | {
             path: .path,
             side: "RIGHT",
-            body: ((if (.severity // "") != "" then "**[" + .severity + "]** " else "" end) + .body)
+            body: ((if (.severity // "") != "" then "**[" + .severity + "]** " else "" end) + .body
+                   + (if (.rationale // "") != ""
+                      then "\n\n<details><summary>Rationale</summary>\n\n" + .rationale + "\n</details>"
+                      else "" end))
           } + (if (.end_line // .line) > .line
                then {start_line: .line, start_side: "RIGHT", line: .end_line}
                else {line: .line} end) ]

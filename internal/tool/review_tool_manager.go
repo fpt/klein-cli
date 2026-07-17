@@ -12,15 +12,16 @@ import (
 
 // Argument names shared by the review tools.
 const (
-	reviewArgPath     = "path"
-	reviewArgLine     = "line"
-	reviewArgEndLine  = "end_line"
-	reviewArgSeverity = "severity"
-	reviewArgComment  = "comment"
-	reviewArgSummary  = "summary"
-	reviewArgVerdict  = "verdict"
-	reviewArgID       = "id"
-	reviewArgNote     = "note"
+	reviewArgPath      = "path"
+	reviewArgLine      = "line"
+	reviewArgEndLine   = "end_line"
+	reviewArgSeverity  = "severity"
+	reviewArgComment   = "comment"
+	reviewArgRationale = "rationale"
+	reviewArgSummary   = "summary"
+	reviewArgVerdict   = "verdict"
+	reviewArgID        = "id"
+	reviewArgNote      = "note"
 )
 
 // reviewVerdictDefault is used when the model never sets a verdict.
@@ -34,8 +35,12 @@ type ReviewComment struct {
 	Path     string `json:"path"`
 	Severity string `json:"severity,omitempty"`
 	Body     string `json:"body"`
-	Line     int    `json:"line"`
-	EndLine  int    `json:"end_line,omitempty"`
+	// Rationale is why the finding is a problem and what was verified in the
+	// code to confirm it — kept separate from Body (problem + fix) so the
+	// harness can render it collapsed and it can be audited from the result.
+	Rationale string `json:"rationale,omitempty"`
+	Line      int    `json:"line"`
+	EndLine   int    `json:"end_line,omitempty"`
 }
 
 // ResolvedComment marks a previous-round comment the model verified as fixed.
@@ -126,7 +131,11 @@ func (m *ReviewToolManager) register() {
 			{Name: reviewArgSeverity, Required: true, Type: "string",
 				Description: "Classification of the finding: must (fix before merge), major (real bug/regression), minor (edge case, robustness), nits (small but worth fixing)"},
 			{Name: reviewArgComment, Required: true, Type: "string",
-				Description: "The review comment (markdown). State the problem and, when possible, a concrete fix."},
+				Description: "The review comment (markdown): the problem and a concrete fix. Keep the reasoning out — put it in rationale."},
+			{Name: reviewArgRationale, Required: true, Type: "string",
+				Description: "Why this is a problem and what you verified in the code to confirm it — e.g. " +
+					"'verified: server.go:42 passes nil when config is absent, so the removed check reintroduces a panic'. " +
+					"Recorded separately and shown collapsed, so hand-wavy reasoning is visible."},
 		},
 		m.handleAddInline)
 
@@ -188,13 +197,17 @@ func (m *ReviewToolManager) handleResolve(_ context.Context, args message.ToolAr
 // to record, or a non-empty error message for the model.
 func parseInlineArgs(args message.ToolArgumentValues) (ReviewComment, string) {
 	c := ReviewComment{
-		Path:    stringArg(args, reviewArgPath),
-		Body:    strings.TrimSpace(stringArg(args, reviewArgComment)),
-		Line:    intArg(args, reviewArgLine, 0),
-		EndLine: intArg(args, reviewArgEndLine, 0),
+		Path:      stringArg(args, reviewArgPath),
+		Body:      strings.TrimSpace(stringArg(args, reviewArgComment)),
+		Rationale: strings.TrimSpace(stringArg(args, reviewArgRationale)),
+		Line:      intArg(args, reviewArgLine, 0),
+		EndLine:   intArg(args, reviewArgEndLine, 0),
 	}
 	if c.Path == "" || c.Body == "" {
 		return c, "path and comment are required"
+	}
+	if c.Rationale == "" {
+		return c, "rationale is required: state why it's a problem and what you verified in the code"
 	}
 	if c.Line <= 0 {
 		return c, "line must be a positive new-side line number from the annotated diff"

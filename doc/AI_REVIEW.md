@@ -95,8 +95,10 @@ stderr so stdout stays parseable):
   "finalized": true,                 // FinalizeReview was called
   "comments": [
     { "path": "internal/foo.go", "line": 42, "end_line": 44,
-      "severity": "major", "body": "..." }   // severity required:
-  ],                                          // must | major | minor | nits
+      "severity": "major",                    // required: must|major|minor|nits
+      "body": "the problem + a concrete fix",
+      "rationale": "why + what was verified" } // required
+  ],
   "resolved": [                      // previous-round comments verified fixed
     { "id": "PRRT_…", "note": "divisor restored" }
   ]
@@ -268,7 +270,7 @@ construction — the subcommand passes `ranges.Validate`, keeping
 
 | Tool | Behavior |
 |---|---|
-| `AddInlineReview` | Validates path+line via the injected validator; rejects duplicates (same path+range), missing/bad severities (required: `must/major/minor/nits`), and calls after finalize. Swapped `line`/`end_line` bounds are silently normalized rather than bounced. |
+| `AddInlineReview` | Validates path+line via the injected validator; rejects duplicates (same path+range), missing/bad severities (required: `must/major/minor/nits`), a missing `rationale`, and calls after finalize. Swapped `line`/`end_line` bounds are silently normalized rather than bounced. **`rationale` is required and distinct from `body`**: `body` = the problem + concrete fix, `rationale` = why it's a problem and what was verified in the code — a forcing function at the tool-call site that gives the skill's verify step somewhere structured to land, and lets reviewers audit reasoning quality from the result JSON. The harness renders it as a collapsed `<details>` block so inline comments stay scannable. |
 | `AddSummaryReview` | Sets summary + verdict (`approve/comment/request_changes`, default `comment`); calling again *replaces* (never accumulates). Locked after finalize. |
 | `FinalizeReview` | Requires a summary first; idempotence errors on a second call; locks all further mutation. |
 | `ResolveReviewComment` | Marks a previous-round comment as verified-fixed (id must match the `previous_comments` input; duplicates rejected). Only registered when previous comments exist. The harness resolves the thread. |
@@ -321,10 +323,12 @@ A composite action, deliberately thin — `git` (read-only), `gh`, and `jq`:
      `total` = comments ever posted; `active` = unresolved previous comments
      − this round's resolutions + new comments.
    - **Minimal review** — inline comments (severity prefixed as
-     `**[must]** …`, `end_line > line` → `start_line`+`line`) plus the
-     verdict event (`APPROVE`/`REQUEST_CHANGES`/`COMMENT`), with a one-line
-     body pointing at the summary comment. Skipped entirely when there are
-     no inline comments and the verdict is neutral (`comment`).
+     `**[must]** …`, the `rationale` appended as a collapsed
+     `<details>Rationale</details>` block, `end_line > line` →
+     `start_line`+`line`) plus the verdict event
+     (`APPROVE`/`REQUEST_CHANGES`/`COMMENT`), with a one-line body pointing at
+     the summary comment. Skipped entirely when there are no inline comments
+     and the verdict is neutral (`comment`).
 6. **Dismiss stale change requests.** A `CHANGES_REQUESTED` review is *sticky*
    on GitHub — resolving its threads or posting later `COMMENT` reviews does
    **not** clear it; only a dismissal or an `APPROVE` (which the bot can't do)

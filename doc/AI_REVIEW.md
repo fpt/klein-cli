@@ -1,0 +1,287 @@
+# klein review — AI Code Review Design
+
+How `klein review` turns a pull-request diff into a validated set of inline
+review comments plus a summary, and how the GitHub Actions harness around it
+fetches the PR and posts the result. Read this before touching
+`internal/review/`, `internal/tool/review_tool_manager.go`, the `review`
+skill, or `.github/actions/ai-review/`.
+
+> Companion docs: [DESIGN.md](DESIGN.md) (the agent/tool/backend stack this
+> builds on, esp. §10 on the reason→verify→evaluate loop) and
+> [../CLAUDE.md](../CLAUDE.md) (build/run commands).
+
+---
+
+## 1. Design principles
+
+1. **klein never talks to GitHub.** No `git`, no `gh`, no tokens. The harness
+   (a GitHub Action, or anything else) fetches the PR and posts the review.
+   klein's whole interface is two JSON documents and a working directory.
+2. **Comments must land on postable lines.** The GitHub Reviews API rejects
+   comments outside the diff — and a single bad comment rejects the *entire*
+   review. So line validation is enforced *inside the tool call*, at the
+   moment the model tries to add a comment, where it can still self-correct.
+3. **Findings are accumulated through tools, not parsed from prose.** The
+   model calls `AddInlineReview` / `AddSummaryReview` / `FinalizeReview`;
+   the result is read from the tool manager's state after the run. There is
+   no fragile "extract JSON from the response" step.
+4. **The reviewer is sandboxed read-only.** The agent gets exactly
+   `Read, Glob, LS` plus the three review tools — enforced as a hard
+   whitelist, not just a skill preference (see §6).
+5. **Verify before reporting** — the review skill follows the repo-wide
+   reason→verify→evaluate loop (DESIGN.md §10): a suspicion from the diff must
+   be confirmed against the actual code via `Read` before it becomes a comment.
+
+## 2. Pipeline
+
+```
+┌────────────────────────── GitHub Actions (harness) ──────────────────────────┐
+│  1. checkout PR head          (actions/checkout, shallow OK)                 │
+│  2. gh pr view / gh pr diff → review-request.json                            │
+│                    │                                                         │
+│                    ▼                                                         │
+│  ┌──────────────────────── klein review (no git/gh) ─────────────────────┐   │
+│  │  3. parse unified diff        internal/review/diff.go                 │   │
+│  │  4. derive commentable ranges (new-side hunk spans)                   │   │
+│  │  5. enrich hunks ±N ctx lines internal/review/enrich.go  (file reads) │   │
+│  │  6. run review agent          skill=review, sandboxed tools           │   │
+│  │       AddInlineReview ──▶ validated against ranges, accumulated       │   │
+│  │       AddSummaryReview ──▶ summary + verdict                          │   │
+│  │       FinalizeReview  ──▶ locks the review                            │   │
+│  │  7. write review-result.json                                          │   │
+│  └────────────────────────────────────────────────────────────────────────┘  │
+│                    │                                                         │
+│                    ▼                                                         │
+│  8. jq → Reviews-API payload → gh api pulls/N/reviews  (one review)          │
+└──────────────────────────────────────────────────────────────────────────────┘
+```
+
+Steps 1–2 and 8 live in `.github/actions/ai-review/action.yml`; steps 3–7 are
+`klein review` (`klein/review_command.go`).
+
+## 3. I/O contract
+
+**Input** (`--input <file>`, `-` = stdin):
+
+```json
+{ "title": "PR title", "body": "PR description", "diff": "<unified diff text>" }
+```
+
+`diff` accepts both git format (`diff --git` + `---`/`+++` headers, rename /
+new / deleted markers) and plain unified diffs. Type: `review.Request`
+(`internal/review/prompt.go`).
+
+**Output** (`--output <file>`, stdout when omitted; agent chatter goes to
+stderr so stdout stays parseable):
+
+```json
+{
+  "summary": "markdown review body",
+  "verdict": "comment",              // approve | comment | request_changes
+  "finalized": true,                 // FinalizeReview was called
+  "comments": [
+    { "path": "internal/foo.go", "line": 42, "end_line": 44,
+      "severity": "major", "body": "..." }
+  ]
+}
+```
+
+Type: `tool.ReviewResult`. The snake_case keys are deliberate — the harness
+maps them straight onto the GitHub Reviews API with jq (`line`/`end_line` →
+`line`/`start_line`, `side: "RIGHT"`; verdict → review event). `line` and
+`end_line` are always **new-side** (RIGHT) line numbers; `end_line == line`
+for single-line comments.
+
+**Exit codes:** 0 = review produced (zero comments is still success),
+1 = error, 2 = flag error.
+
+## 4. Diff parsing and commentable ranges (`internal/review/diff.go`)
+
+`ParseUnifiedDiff` scans the diff line by line via a small `diffParser` state
+machine into `[]FileDiff{Path, OldPath, IsNew, IsDeleted, Hunks}`. Each hunk
+line carries both its old- and new-side number (0 on the side it doesn't
+exist), computed while scanning — this is the source of truth for all line
+math downstream.
+
+`CommentableRanges` reduces that to `Ranges: map[path][]LineRange` — the
+new-side span of every hunk (`NewStart … NewStart+NewLines-1`). Two special
+cases matter:
+
+- A **deleted file** is present in the map with an *empty* slice, so
+  validation can distinguish "not in the diff" (suggest the files that are)
+  from "in the diff but not inline-commentable" (tell the model to use the
+  summary instead).
+- A hunk with `NewLines == 0` (pure deletion) contributes no range.
+
+`Ranges.Validate(path, line, endLine)` is the single validation primitive.
+Its error messages are written for the *model*, not the user: they name the
+valid ranges (`commentable lines: 10-17, 31-34`) so a bounced tool call can
+be corrected on the next iteration.
+
+Why new-side-only: the harness posts every comment with `side: "RIGHT"`.
+Comments on removed lines (LEFT side) are deliberately out of scope — the
+model is instructed to attach a deletion-related finding to a nearby
+remaining line or the summary. This halves the validation surface and avoids
+the Reviews API's most error-prone corner.
+
+## 5. Enrichment (`internal/review/enrich.go`)
+
+The raw diff often lacks the context to judge correctness, and letting the
+model wander the repo for every hunk is slow. The `Enricher` pre-reads the
+changed files (via `repository.FilesystemRepository`, relative to
+`--workdir`, the PR-head checkout) and renders each hunk with up to
+`--context` (default 10) extra lines before and after:
+
+```
+## File: internal/foo.go
+Commentable lines (inline comments MUST target these): 10-17, 31-34
+@@ diff lines 10-17 @@
+      7  ctx| surrounding line          ← enrichment: NOT commentable
+[   10]    | unchanged line in diff     ← context line inside the hunk
+        -  | removed line               ← no new-side number
+[   12] +  | added line
+     18  ctx| surrounding line
+```
+
+The rendering encodes the validation rule visually: **only bracketed numbers
+are valid comment targets**. Enrichment lines are prefixed `ctx` and carry no
+brackets, so the model cannot copy an invalid number out of them. This
+redundancy (prompt says it, rendering shows it, the tool enforces it) is what
+makes comment placement reliable in practice.
+
+Fallbacks: unreadable files (deleted, binary, missing) render hunk-only with
+no `ctx` lines; deleted files render their raw hunks under a "no commentable
+lines" notice.
+
+Enrichment lives *inside* `klein review` (not the harness) because klein
+already has secure file access to the checkout and the logic is unit-testable
+Go; it is still pure file reading — principle #1 is untouched.
+
+## 6. The review agent run (`klein/review_command.go`)
+
+The subcommand builds the standard agent stack (DESIGN.md §1) with three
+deviations:
+
+- **Tool injection.** `ReviewToolManager` is passed through
+  `AgentOptions.MCPToolManagers["review"]` — the map key is only a label; the
+  composite flattens tools by name (same pattern as the serve-mode
+  memory/schedule managers).
+- **Hard sandbox.** A skill's `allowed-tools` only sets the *deferred core*;
+  every other registered tool would remain reachable via `ToolSearch`.
+  `a.SetAllowedToolsOverride(reviewAllowedTools)` switches to the hard
+  whitelist path — nothing outside
+  `Read, Glob, LS, AddInlineReview, AddSummaryReview, FinalizeReview`
+  exists for this run. (`Grep` is intentionally absent; `Glob`+`Read` have
+  been sufficient, and the enriched prompt removes most search needs.)
+- **Backend restriction.** Whole-agent backends (`codex`, `kessel`) run their
+  own toolset out-of-process and can't see the review tools, so they are
+  rejected at startup. Any direct `domain.LLM` backend (openai default,
+  anthropic, gemini) works.
+
+The run is one-shot (`IsInteractiveMode: false`): no session persistence,
+in-memory todos, and no approval prompts (the sandbox contains no
+approval-gated tool anyway). The PR metadata + enriched diff form the *user
+prompt* (`review.BuildPrompt`); the review policy lives in the skill.
+
+### The review skill (`internal/skill/skills/review/SKILL.md`)
+
+`user-invocable: false` (hidden from the Connect server's skill list; the
+subcommand invokes it by name). The prompt enforces, in order:
+
+1. reason → verify (`Read` the surrounding code) → evaluate honestly; drop
+   unconfirmed findings — never comment from the diff alone
+2. scope: correctness > security > API misuse > regressions; no style nits,
+   no praise comments, nothing outside the diff
+3. one `AddInlineReview` per verified finding, then exactly one
+   `AddSummaryReview` (choosing the verdict), then `FinalizeReview` — always,
+   even with zero comments
+
+When editing this prompt, preserve the reason→verify→evaluate structure —
+see DESIGN.md §10 for why this is a deliberate design property.
+
+## 7. Review tools (`internal/tool/review_tool_manager.go`)
+
+`ReviewToolManager` is a self-contained `domain.ToolManager` holding the
+review state in memory; the subcommand reads `Result()` after the run. It
+takes a `LineValidator func(path string, line, endLine int) error` at
+construction — the subcommand passes `ranges.Validate`, keeping
+`internal/tool` free of any dependency on `internal/review`.
+
+| Tool | Behavior |
+|---|---|
+| `AddInlineReview` | Validates path+line via the injected validator; rejects duplicates (same path+range), bad severities (`critical/major/minor/nit`), and calls after finalize. Swapped `line`/`end_line` bounds are silently normalized rather than bounced. |
+| `AddSummaryReview` | Sets summary + verdict (`approve/comment/request_changes`, default `comment`); calling again *replaces* (never accumulates). Locked after finalize. |
+| `FinalizeReview` | Requires a summary first; idempotence errors on a second call; locks all further mutation. |
+
+Every rejection returns a tool *error result* (not a Go error), phrased as an
+instruction the model can act on — this is the self-correction loop that
+keeps invalid comments out of the output without aborting the run.
+
+**Fallback:** if the model never calls `AddSummaryReview`, the subcommand
+uses the agent's final text response as the summary and marks
+`finalized: false`, so the harness always has something to post.
+
+## 8. The harness (`.github/actions/ai-review/`)
+
+A composite action, deliberately thin — `gh` + `jq` only:
+
+1. `gh pr view --json title,body` + `gh pr diff` → request JSON
+2. `klein review --input … --output … --workdir "$GITHUB_WORKSPACE"`
+   (the klein binary is provided by the calling workflow, input `klein-path`)
+3. jq maps the result to a Reviews-API payload — verdict →
+   `APPROVE`/`REQUEST_CHANGES`/`COMMENT`, severity prefixed into the comment
+   body (`**[major]** …`), `end_line > line` → `start_line`+`line` — and
+   posts it as **one** `POST /repos/…/pulls/N/reviews` call.
+
+If that POST fails (e.g. repo settings forbid the Actions token from
+APPROVE/REQUEST_CHANGES, or an edge-case comment is still rejected), the
+action retries once with a summary-only `COMMENT` review, so the run always
+reports *something*.
+
+The reference workflow `.github/workflows/ai-review.yml` reviews this repo's
+own PRs: checkout PR head → build klein from source → run the action.
+Requirements: the `OPENAI_API_KEY` repository secret and
+`permissions: pull-requests: write`. Fork PRs are skipped (secrets are not
+exposed to them). Concurrency is keyed per PR with `cancel-in-progress` so a
+rapid push supersedes the in-flight review.
+
+## 9. Failure modes
+
+| Failure | Behavior |
+|---|---|
+| Empty/unparseable diff | Exit 1 before any model call |
+| Model targets an invalid line | Tool call bounced with the valid ranges; finding is re-placed or dropped by the model |
+| Model never summarizes | Final response becomes the summary, `finalized: false` (logged as a warning) |
+| Review with zero findings | Exit 0; summary-only review is posted |
+| Reviews API rejects the payload | Harness retries summary-only as `COMMENT` |
+| Fork PR | Workflow job skipped (no secret) |
+
+## 10. Testing
+
+- `internal/review/diff_test.go` — parser (git/plain formats, new/deleted/
+  count-less hunks), new-side line numbering, range derivation and every
+  `Validate` rejection class
+- `internal/review/enrich_test.go` — context window math, bracketed vs `ctx`
+  rendering, unreadable-file fallback, prompt assembly
+- `internal/tool/review_tool_manager_test.go` — the full tool flow: dupes,
+  out-of-range, severity/verdict enums, swapped bounds, finalize locking,
+  summary replacement
+- Live smoke test (needs an API key): build klein, plant a bug in a scratch
+  checkout, feed a matching diff, and check the result JSON — see
+  README "AI Code Review" for the request-JSON shape. The jq payload mapping
+  can be exercised offline against a hand-written result JSON.
+
+## 11. Extension points
+
+- **Other forges / posting styles** — the contract is the two JSON documents;
+  write a different harness (GitLab, Gerrit, a local pre-push hook) without
+  touching klein.
+- **LEFT-side comments** — would need `Ranges` to carry old-side spans and a
+  `side` field through `ReviewComment` and the jq mapping. Deliberately
+  deferred (see §4).
+- **Review policy** — override the `review` skill via `.claude/skills/review/`
+  (project) or `~/.claude/skills/review/` (personal); the skill loader's
+  priority order applies. Keep the finishing sequence (summary → finalize)
+  intact — the subcommand depends on it.
+- **Severity/verdict taxonomy** — enums live in `review_tool_manager.go`; the
+  jq body-prefix mapping in the action must be kept in sync.

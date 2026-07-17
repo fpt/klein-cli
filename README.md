@@ -130,7 +130,7 @@ A ready-made harness lives in this repo: the composite action
 `.github/actions/ai-review` (fetches the PR, runs `klein review`, posts the
 review via `gh api`) and the reference workflow `.github/workflows/ai-review.yml`
 that reviews this repo's own PRs. To use it, set the `OPENAI_API_KEY` repository
-secret.
+secret. Design details: [doc/AI_REVIEW.md](doc/AI_REVIEW.md).
 
 ## Supported Models
 

@@ -178,6 +178,7 @@ This is a Go-based skill-driven coding agent that uses SKILL.md-configured skill
   - Review tools live in `internal/tool/review_tool_manager.go` (AddInlineReview/
     AddSummaryReview/FinalizeReview); the `review` skill in `internal/skill/skills/review/`;
     the GHA harness in `.github/actions/ai-review/` posts the result — klein never runs git/gh
+  - Design doc: `doc/AI_REVIEW.md`
 - `internal/mcp/` - MCP (Model Context Protocol) integration:
   - External tool server integration and management
 - `internal/connectrpc/` - Connect-gRPC server exposing the agent via HTTP/2:

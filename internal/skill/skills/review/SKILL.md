@@ -35,7 +35,9 @@ Previous review rounds (when the message lists "Previous Review Comments"):
 Reporting:
 - One AddInlineReview per verified finding. `line` must be a bracketed new-side line number from the annotated diff (lines marked `ctx` are not valid targets). Pick the line where the problem lives; use `end_line` only when the finding truly spans a range.
 - Severity is required on every comment: must (has to be fixed before merge — broken build/data/security/correctness), major (real bug or regression), minor (edge case, robustness), nits (small but worth fixing).
-- Each comment: state the problem, why it is a problem, and a concrete fix. Markdown, concise.
+- Two required fields, kept distinct:
+  - `comment`: the problem and a concrete fix (what to change). Markdown, concise.
+  - `rationale`: WHY it is a problem and WHAT you verified in the code — the evidence from your Read, not a restatement of the comment. E.g. "verified: server.go:42 passes nil when config is absent, so removing this check reintroduces a panic." A vague rationale ("looks wrong") means you haven't verified — go Read the code first.
 - If a tool call is rejected (invalid line), re-read the commentable ranges in the diff and correct the target — do not drop a verified finding.
 
 Finishing (mandatory, in order):

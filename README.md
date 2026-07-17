@@ -159,16 +159,27 @@ jobs:
     if: github.event.pull_request.head.repo.full_name == github.repository
     uses: fpt/klein-cli/.github/workflows/ai-review-reusable.yml@main
     with:
+      backend: openai             # optional: openai (default), anthropic, or gemini
       language: ja                # optional (default: en)
-      model: gpt-5.6-luna         # optional (default: backend default)
+      # model:                    # optional; if set it MUST match `backend` (default: the backend's own default)
       effort: low                 # optional reasoning effort
       max-turns: "20"             # optional agent iteration cap
       max-budget-tokens: "200000" # optional token budget (partial review if exceeded)
       max-comments: "15"          # optional inline-comment cap (excess trimmed by severity)
       klein-version: v0.1.1       # optional (default: latest release)
     secrets:
+      # Pass the key matching `backend` (any/all may be set):
       openai-api-key: ${{ secrets.OPENAI_API_KEY }}
+      # anthropic-api-key: ${{ secrets.ANTHROPIC_API_KEY }}
+      # gemini-api-key: ${{ secrets.GEMINI_API_KEY }}
 ```
+
+The review works with any of the three direct LLM backends — `openai`
+(default), `anthropic`, or `gemini` — via native tool calling; set `backend`
+and pass the matching key secret. Leave `model` unset to use that backend's
+default; if you do set `model`, it must be one that backend serves (an explicit
+model overrides the backend default). (The whole-agent `codex`/`kessel`
+backends are not supported for review.)
 
 Pin `@main` or a tag (GitHub Actions has no `@latest` ref). Release binaries
 (`klein_<os>_<arch>.tar.gz`) are attached by `.github/workflows/release.yml`

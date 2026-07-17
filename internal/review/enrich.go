@@ -76,16 +76,24 @@ func (e *Enricher) Render(ctx context.Context, files []FileDiff, ranges Ranges) 
 		b.WriteString("\n")
 	}
 
-	out := strings.TrimRight(b.String(), "\n") + "\n"
-	if e.maxBytes > 0 && len(out) > e.maxBytes {
-		// Reserve room for the marker so the total stays within the budget.
-		budget := max(e.maxBytes-len(truncationMarker), 0)
-		out = truncateAtLine(out, budget) + truncationMarker
-	}
-	return out
+	return e.applyByteBudget(strings.TrimRight(b.String(), "\n") + "\n")
 }
 
 const truncationMarker = "... [diff truncated to bound prompt size — later changes are not shown]\n"
+
+// applyByteBudget truncates out to at most e.maxBytes bytes (0 = unbounded),
+// always on a line boundary. When it fits, out is returned unchanged; when the
+// budget has room for the marker, the marker is appended within the budget;
+// when it doesn't, only the line-boundary prefix that fits is returned.
+func (e *Enricher) applyByteBudget(out string) string {
+	if e.maxBytes <= 0 || len(out) <= e.maxBytes {
+		return out
+	}
+	if e.maxBytes < len(truncationMarker) {
+		return truncateAtLine(out, e.maxBytes)
+	}
+	return truncateAtLine(out, e.maxBytes-len(truncationMarker)) + truncationMarker
+}
 
 // truncateAtLine returns the longest prefix of s that is at most n bytes and
 // ends on a line boundary. When no newline fits within n, it returns "" rather

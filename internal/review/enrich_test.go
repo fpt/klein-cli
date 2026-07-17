@@ -106,12 +106,21 @@ func TestEnricherRender_ByteBudget(t *testing.T) {
 	mustContain(t, full, "line 200 in b.txt")
 	mustNotContain(t, full, "diff truncated")
 
-	// Budget smaller than the first line: no line boundary fits, so no partial
-	// line is emitted — only the marker.
+	// Budget ≥ marker but < first line: only the marker is emitted, still within budget.
+	mb := len(truncationMarker) + 8
+	onlyMarker := NewEnricher(infra.NewOSFilesystemRepository(), t.TempDir(), 0).
+		WithMaxBytes(mb).Render(context.Background(), files, ranges)
+	if len(onlyMarker) > mb {
+		t.Errorf("marker-only render %d bytes exceeds budget %d", len(onlyMarker), mb)
+	}
+	mustContain(t, onlyMarker, "diff truncated to bound prompt size")
+
+	// Budget smaller than the marker itself: strictly bounded, no partial line
+	// (the marker won't fit, so it is dropped rather than overrun the budget).
 	tiny := NewEnricher(infra.NewOSFilesystemRepository(), t.TempDir(), 0).
 		WithMaxBytes(5).Render(context.Background(), files, ranges)
-	if tiny != truncationMarker {
-		t.Errorf("tiny budget should yield only the marker, got %q", tiny)
+	if len(tiny) > 5 {
+		t.Errorf("tiny budget exceeded: %d bytes for a 5-byte budget", len(tiny))
 	}
 }
 

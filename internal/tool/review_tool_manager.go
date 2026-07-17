@@ -48,12 +48,21 @@ type ResolvedComment struct {
 
 // ReviewResult is the outcome of a review session, serialized by the
 // `klein review` subcommand for the harness to post.
+//
+//nolint:tagliatelle // snake_case keys are the harness contract (mapped by jq)
 type ReviewResult struct {
-	Summary   string            `json:"summary"`
-	Verdict   string            `json:"verdict"`
-	Comments  []ReviewComment   `json:"comments"`
-	Resolved  []ResolvedComment `json:"resolved,omitempty"`
-	Finalized bool              `json:"finalized"`
+	Summary  string            `json:"summary"`
+	Verdict  string            `json:"verdict"`
+	Comments []ReviewComment   `json:"comments"`
+	Resolved []ResolvedComment `json:"resolved,omitempty"`
+	// Trimmed is the number of lower-severity comments dropped by the
+	// max-comments cap (they are not in Comments and were never posted).
+	Trimmed   int  `json:"trimmed_comments,omitempty"`
+	Finalized bool `json:"finalized"`
+	// ForceFullNext asks the harness to run the *next* review as a full
+	// review: more must-level findings existed than the cap could post, so an
+	// incremental round would miss the ones that were trimmed.
+	ForceFullNext bool `json:"force_full_next,omitempty"`
 }
 
 // LineValidator checks that an inline comment target [line, endLine] on path

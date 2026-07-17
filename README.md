@@ -164,6 +164,7 @@ jobs:
       effort: low                 # optional reasoning effort
       max-turns: "20"             # optional agent iteration cap
       max-budget-tokens: "200000" # optional token budget (partial review if exceeded)
+      max-comments: "15"          # optional inline-comment cap (excess trimmed by severity)
       klein-version: v0.1.1       # optional (default: latest release)
     secrets:
       openai-api-key: ${{ secrets.OPENAI_API_KEY }}

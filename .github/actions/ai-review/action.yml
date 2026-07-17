@@ -43,6 +43,10 @@ inputs:
     description: Cumulative token budget for the run; exceeding it stops the review keeping comments gathered so far (empty/0 = unlimited)
     required: false
     default: ""
+  max-comments:
+    description: Cap on inline comments posted; excess are trimmed lowest-severity-first (empty = 15, 0 = unlimited)
+    required: false
+    default: ""
   language:
     description: Language for the review output (code or name, e.g. en, ja, Japanese)
     required: false
@@ -149,6 +153,9 @@ runs:
         LAST_DIFF_SHA=$(printf '%s' "$STATE" | sed -n 's/.*"diff_sha":"\([0-9a-f]*\)".*/\1/p')
         LAST_TURN=$(printf '%s' "$STATE" | sed -n 's/.*"turn":\([0-9]*\).*/\1/p')
         LAST_TOTAL=$(printf '%s' "$STATE" | sed -n 's/.*"total":\([0-9]*\).*/\1/p')
+        # force_full is set by the previous round when must-level findings
+        # exceeded the comment cap: some were trimmed, so re-scan the whole PR.
+        LAST_FORCE_FULL=$(printf '%s' "$STATE" | sed -n 's/.*"force_full":\(true\).*/\1/p')
         LAST_TURN=${LAST_TURN:-0}
         LAST_TOTAL=${LAST_TOTAL:-0}
 
@@ -164,13 +171,19 @@ runs:
             # reviewed incrementally from this (rewritten) head. turn/total
             # are carried over unchanged — no review happened.
             if [ -n "$STICKY_ID" ]; then
-              NEW_MARKER="<!-- klein-review-state {\"head_sha\":\"$HEAD_SHA\",\"diff_sha\":\"$DIFF_SHA\",\"turn\":$LAST_TURN,\"total\":$LAST_TOTAL} -->"
+              # Carry turn/total AND force_full over unchanged — no review ran.
+              FF=""
+              if [ "$LAST_FORCE_FULL" = "true" ]; then FF=',"force_full":true'; fi
+              NEW_MARKER="<!-- klein-review-state {\"head_sha\":\"$HEAD_SHA\",\"diff_sha\":\"$DIFF_SHA\",\"turn\":$LAST_TURN,\"total\":$LAST_TOTAL$FF} -->"
               jq -r .body /tmp/sticky.json \
                 | sed "s|<!-- klein-review-state {[^}]*} -->|$NEW_MARKER|" > /tmp/sticky-body.txt
               gh api --method PATCH "repos/$GITHUB_REPOSITORY/issues/comments/$STICKY_ID" \
                 -F body=@/tmp/sticky-body.txt > /dev/null
               echo "Marker refreshed to $HEAD_SHA"
             fi
+          elif [ "$LAST_FORCE_FULL" = "true" ]; then
+            echo "::notice::Previous round trimmed must-level comments; running full review"
+            MODE=full
           elif git cat-file -e "$LAST_SHA^{commit}" 2>/dev/null \
               && git merge-base --is-ancestor "$LAST_SHA" "$HEAD_SHA" 2>/dev/null; then
             MODE=incremental
@@ -268,6 +281,7 @@ runs:
         LANGUAGE: ${{ inputs.language }}
         MAX_TURNS: ${{ inputs.max-turns }}
         MAX_BUDGET: ${{ inputs.max-budget-tokens }}
+        MAX_COMMENTS: ${{ inputs.max-comments }}
         KLEIN: ${{ inputs.klein-path }}
       run: |
         set -euo pipefail
@@ -275,10 +289,11 @@ runs:
         if [ -n "$INPUT_ANTHROPIC_KEY" ]; then export ANTHROPIC_API_KEY="$INPUT_ANTHROPIC_KEY"; fi
         if [ -n "$INPUT_GEMINI_KEY" ]; then export GEMINI_API_KEY="$INPUT_GEMINI_KEY"; fi
         ARGS=(-b "$BACKEND" --language "$LANGUAGE")
-        if [ -n "$MODEL" ];      then ARGS+=(-m "$MODEL"); fi
-        if [ -n "$EFFORT" ];     then ARGS+=(--effort "$EFFORT"); fi
-        if [ -n "$MAX_TURNS" ];  then ARGS+=(--max-turns "$MAX_TURNS"); fi
-        if [ -n "$MAX_BUDGET" ]; then ARGS+=(--max-budget-tokens "$MAX_BUDGET"); fi
+        if [ -n "$MODEL" ];        then ARGS+=(-m "$MODEL"); fi
+        if [ -n "$EFFORT" ];       then ARGS+=(--effort "$EFFORT"); fi
+        if [ -n "$MAX_TURNS" ];    then ARGS+=(--max-turns "$MAX_TURNS"); fi
+        if [ -n "$MAX_BUDGET" ];   then ARGS+=(--max-budget-tokens "$MAX_BUDGET"); fi
+        if [ -n "$MAX_COMMENTS" ]; then ARGS+=(--max-comments "$MAX_COMMENTS"); fi
         "$KLEIN" review "${ARGS[@]}" \
           --input /tmp/review-request.json \
           --output /tmp/review-result.json \
@@ -323,20 +338,28 @@ runs:
         # previous comments (minus this round's resolutions) plus new ones.
         N_NEW=$(jq '.comments | length' /tmp/review-result.json)
         N_RESOLVED=$(jq '(.resolved // []) | length' /tmp/review-result.json)
+        N_TRIMMED=$(jq '.trimmed_comments // 0' /tmp/review-result.json)
+        FORCE_FULL=$(jq -r '.force_full_next // false' /tmp/review-result.json)
         PREV_UNRESOLVED=$(jq length /tmp/previous-comments.json)
         TOTAL=$((PREV_TOTAL + N_NEW))
         ACTIVE=$((PREV_UNRESOLVED - N_RESOLVED + N_NEW))
 
+        # force_full is stored in the marker only when true; the next scope
+        # step reads it to run a full review after must-comments were trimmed.
         jq -r --arg mode "$MODE" --arg head "$HEAD_SHA" --arg diff "$DIFF_SHA" \
               --arg turn "$TURN" --arg total "$TOTAL" --arg active "$ACTIVE" \
-              --arg nnew "$N_NEW" --arg nresolved "$N_RESOLVED" '
+              --arg nnew "$N_NEW" --arg nresolved "$N_RESOLVED" \
+              --arg trimmed "$N_TRIMMED" --argjson ff "$FORCE_FULL" '
           "## 🤖 AI Review (klein) — turn " + $turn + "\n\n"
           + .summary
           + "\n\n---\n_turn " + $turn + " (" + $mode + " review of " + ($head[0:7]) + ") · "
           + "comments: total " + $total + ", active " + $active
-          + " (+" + $nnew + " new, −" + $nresolved + " resolved) · verdict: " + .verdict + "_"
+          + " (+" + $nnew + " new, −" + $nresolved + " resolved"
+          + (if ($trimmed | tonumber) > 0 then ", " + $trimmed + " trimmed" else "" end)
+          + ") · verdict: " + .verdict + "_"
           + "\n\n<!-- klein-review-state {\"head_sha\":\"" + $head + "\",\"diff_sha\":\"" + $diff
-          + "\",\"turn\":" + $turn + ",\"total\":" + $total + "} -->"
+          + "\",\"turn\":" + $turn + ",\"total\":" + $total
+          + (if $ff then ",\"force_full\":true" else "" end) + "} -->"
         ' /tmp/review-result.json > /tmp/summary-body.txt
 
         if [ -n "$STICKY_ID" ]; then

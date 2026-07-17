@@ -237,7 +237,11 @@ deviations:
 - **Backend restriction.** Whole-agent backends (`codex`, `kessel`) run their
   own toolset out-of-process and can't see the review tools, so they are
   rejected at startup. Any direct `domain.LLM` backend (openai default,
-  anthropic, gemini) works.
+  anthropic, gemini) works. Not supported for now, by decision: codex could
+  drive a review only if the review tools were wired as its `dynamicTools`, but
+  its sandbox/security model makes that complicated; kessel targets local GGUF
+  models, which don't fit a GHA runner. (Doesn't affect codex/kessel elsewhere
+  in klein — only `klein review`.)
 
 The run is one-shot (`IsInteractiveMode: false`): no session persistence,
 in-memory todos, and no approval prompts (the sandbox contains no

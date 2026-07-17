@@ -123,9 +123,12 @@ func parseReviewFlags(args []string) (opts reviewOptions, code int, ok bool) {
 	}, 0, true
 }
 
-// reviewSettings loads settings and applies the CLI overrides. Whole-agent
-// backends (codex/kessel) run their own toolset and cannot expose the review
-// tools, so they are rejected.
+// reviewSettings loads settings and applies the CLI overrides. The whole-agent
+// backends (codex/kessel) run their own toolset out-of-process and can't expose
+// the review tools, so klein review requires a direct LLM backend. Not
+// supported for now, by decision: codex could run a review only if its tools
+// were wired as dynamicTools, but its sandbox/security model makes that
+// complicated; kessel targets local GGUF models, which don't fit a GHA runner.
 func reviewSettings(opts reviewOptions) (*config.Settings, error) {
 	settings, err := config.LoadSettings(opts.settingsPath)
 	if err != nil {
@@ -145,7 +148,8 @@ func reviewSettings(opts reviewOptions) (*config.Settings, error) {
 	}
 	if settings.LLM.Backend == "codex" || settings.LLM.Backend == "kessel" {
 		return nil, fmt.Errorf(
-			"backend %q is not supported by klein review; use openai, anthropic, or gemini", settings.LLM.Backend)
+			"backend %q is not supported by klein review (it can't expose the review tools); use openai, anthropic, or gemini",
+			settings.LLM.Backend)
 	}
 	if opts.maxTurns > 0 {
 		settings.Agent.MaxIterations = opts.maxTurns

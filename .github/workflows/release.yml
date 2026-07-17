@@ -27,11 +27,20 @@ jobs:
           - { goos: darwin, goarch: amd64 }
           - { goos: darwin, goarch: arm64 }
     steps:
+      # Event data goes through env, never into script text — a tag name
+      # containing shell metacharacters must not become code on this runner.
       - name: Resolve tag
         id: tag
         shell: bash
+        env:
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+          DISPATCH_TAG: ${{ inputs.tag }}
         run: |
-          TAG="${{ github.event.release.tag_name || inputs.tag }}"
+          set -euo pipefail
+          TAG="${RELEASE_TAG:-$DISPATCH_TAG}"
+          if [ -z "$TAG" ]; then
+            echo "No tag resolved"; exit 1
+          fi
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"
 
       - uses: actions/checkout@v4
@@ -57,6 +66,8 @@ jobs:
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.tag.outputs.tag }}
         run: |
-          gh release upload "${{ steps.tag.outputs.tag }}" \
+          set -euo pipefail
+          gh release upload "$TAG" \
             "klein_${{ matrix.goos }}_${{ matrix.goarch }}.tar.gz" --clobber

@@ -47,10 +47,48 @@ inputs:
     description: Path to the klein binary
     required: false
     default: klein
+  klein-version:
+    description: >
+      When set, install klein from the fpt/klein-cli release of that tag
+      ("latest" = newest release, or e.g. "v0.1.1") instead of expecting a
+      pre-built binary at klein-path. Downloads the klein_<os>_<arch>.tar.gz
+      release asset; falls back to `go install` (requires Go on the runner)
+      if the asset is missing.
+    required: false
+    default: ""
 
 runs:
   using: composite
   steps:
+    # Self-install for external consumers. This repo's own workflow builds
+    # from source instead, to review unreleased changes.
+    - name: Install klein
+      if: inputs.klein-version != ''
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.github-token }}
+        VERSION: ${{ inputs.klein-version }}
+      run: |
+        set -euo pipefail
+        BIN_DIR="$RUNNER_TEMP/klein-bin"
+        mkdir -p "$BIN_DIR"
+        case "$(uname -m)" in
+          x86_64)          ARCH=amd64 ;;
+          aarch64 | arm64) ARCH=arm64 ;;
+          *) echo "Unsupported arch $(uname -m)"; exit 1 ;;
+        esac
+        OS=$(uname -s | tr '[:upper:]' '[:lower:]')   # linux | darwin
+        ASSET="klein_${OS}_${ARCH}.tar.gz"
+        TAG_ARGS=()
+        if [ "$VERSION" != latest ]; then TAG_ARGS=("$VERSION"); fi
+        if gh release download "${TAG_ARGS[@]}" -R fpt/klein-cli -p "$ASSET" -O "$RUNNER_TEMP/$ASSET"; then
+          tar -C "$BIN_DIR" -xzf "$RUNNER_TEMP/$ASSET"
+        else
+          echo "::notice::Release asset $ASSET not found for $VERSION; falling back to go install"
+          GOBIN="$BIN_DIR" go install "github.com/fpt/klein-cli/klein@$VERSION"
+        fi
+        echo "$BIN_DIR" >> "$GITHUB_PATH"
+        "$BIN_DIR/klein" -h > /dev/null && echo "klein installed: $VERSION ($OS/$ARCH)"
     # Decide full vs incremental vs skip. State comes from the sticky summary
     # comment's klein-review-state marker: the last reviewed head commit plus
     # a sha256 of the full PR diff at that time.

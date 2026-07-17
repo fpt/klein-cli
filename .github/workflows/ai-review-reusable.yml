@@ -1,0 +1,84 @@
+# Reusable AI-review workflow for OTHER repositories. Call it with:
+#
+#   name: AI Review
+#   on:
+#     pull_request:
+#       types: [opened, synchronize, reopened]
+#   permissions:
+#     contents: read
+#     pull-requests: write
+#   jobs:
+#     review:
+#       if: github.event.pull_request.head.repo.full_name == github.repository
+#       uses: fpt/klein-cli/.github/workflows/ai-review-reusable.yml@main
+#       with:
+#         language: ja            # optional
+#         klein-version: v0.1.1   # optional, default: latest release
+#       secrets:
+#         openai-api-key: ${{ secrets.OPENAI_API_KEY }}
+#
+# (Pin @main or a tag — GitHub Actions has no @latest ref. The klein binary
+# itself is installed from the released version via the Go module proxy.)
+name: AI Review (reusable)
+
+on:
+  workflow_call:
+    inputs:
+      backend:
+        description: klein LLM backend (openai, anthropic, gemini)
+        type: string
+        required: false
+        default: openai
+      model:
+        description: Model override (empty = backend default)
+        type: string
+        required: false
+        default: ""
+      language:
+        description: Language for the review output (e.g. en, ja)
+        type: string
+        required: false
+        default: en
+      klein-version:
+        description: klein release to install via `go install` (e.g. latest, v0.1.1)
+        type: string
+        required: false
+        default: latest
+    secrets:
+      openai-api-key:
+        required: false
+      anthropic-api-key:
+        required: false
+      gemini-api-key:
+        required: false
+
+jobs:
+  review:
+    runs-on: ubuntu-latest
+    concurrency:
+      group: ai-review-${{ github.event.pull_request.number }}
+      cancel-in-progress: true
+    steps:
+      - name: Checkout PR head
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          # Full history: the action detects force-pushes with merge-base and
+          # builds the incremental diff from the last reviewed commit.
+          fetch-depth: 0
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: stable
+
+      - name: AI review
+        uses: fpt/klein-cli/.github/actions/ai-review@main
+        with:
+          backend: ${{ inputs.backend }}
+          model: ${{ inputs.model }}
+          language: ${{ inputs.language }}
+          klein-version: ${{ inputs.klein-version }}
+          openai-api-key: ${{ secrets.openai-api-key }}
+          anthropic-api-key: ${{ secrets.anthropic-api-key }}
+          gemini-api-key: ${{ secrets.gemini-api-key }}

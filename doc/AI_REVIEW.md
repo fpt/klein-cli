@@ -352,7 +352,21 @@ rapid push supersedes the in-flight review.
   README "AI Code Review" for the request-JSON shape. The jq payload mapping
   can be exercised offline against a hand-written result JSON.
 
-## 11. Extension points
+## 11. Consuming from other repositories
+
+Other repos call the reusable workflow
+`.github/workflows/ai-review-reusable.yml` (`workflow_call`): it checks out
+the caller's PR head (`fetch-depth: 0`), sets up Go, and runs the composite
+action with `klein-version` set — the action then downloads the
+`klein_<os>_<arch>.tar.gz` asset from the fpt/klein-cli release (falling back
+to `go install` when no asset exists for that tag). Binaries are attached to
+releases by `.github/workflows/release.yml` (on `release: published`;
+`workflow_dispatch` backfills older tags). Callers pin `@main` or a tag —
+Actions has no `@latest` ref — and pass their own API-key secret; see the
+README for the caller snippet. This repo's own workflow deliberately keeps
+building from source so PRs exercise their unreleased review code.
+
+## 12. Extension points
 
 - **Other forges / posting styles** — the contract is the two JSON documents;
   write a different harness (GitLab, Gerrit, a local pre-push hook) without

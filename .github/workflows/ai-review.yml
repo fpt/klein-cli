@@ -1,0 +1,46 @@
+# Reference user of .github/actions/ai-review: AI-reviews this repo's own PRs.
+#
+# Trust model: this uses `on: pull_request` (NOT pull_request_target) and the
+# job is gated to same-repository branches below, so the API-key secret is
+# only ever exposed to code from contributors who already have push access to
+# this repo's workflows. Fork PRs get no secrets and are skipped. Do not
+# switch this to pull_request_target while still checking out the PR head.
+name: AI Review
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: read
+  pull-requests: write
+
+concurrency:
+  group: ai-review-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  review:
+    runs-on: ubuntu-latest
+    if: github.event.pull_request.head.repo.full_name == github.repository
+    steps:
+      - name: Checkout PR head
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          # Full history: the action detects force-pushes with merge-base and
+          # builds the incremental diff from the last reviewed commit.
+          fetch-depth: 0
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Build klein
+        run: go build -o /usr/local/bin/klein ./klein
+
+      - name: AI review
+        uses: ./.github/actions/ai-review
+        with:
+          openai-api-key: ${{ secrets.OPENAI_API_KEY }}

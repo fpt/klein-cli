@@ -21,6 +21,9 @@ go run klein/main.go claw                     # Start the gateway (embedded agen
 go run klein/main.go claw --settings other.json   # Isolated instance (own base_dir + Discord)
 go run klein/main.go claw repl                # Interactive CLI sharing claw's tools/backend (own session)
 
+# AI code review (harness-driven; klein never runs git/gh)
+go run klein/main.go review --input req.json --output result.json --workdir /path/to/pr-head
+
 # Build commands
 go build -o output/klein ./klein             # Build agent binary (includes `klein claw`)
 make build-all                               # Build all binaries
@@ -168,6 +171,14 @@ This is a Go-based skill-driven coding agent that uses SKILL.md-configured skill
 - `internal/skill/` - Skill definitions and loading:
   - `skills/*/SKILL.md` - Built-in skill definitions (YAML frontmatter + markdown)
   - Skill loading, parsing, and tool filtering logic
+- `internal/review/` - AI code review support (the `klein review` subcommand):
+  - `diff.go` - Unified diff parser + commentable new-side line ranges (validation)
+  - `enrich.go` - Annotated diff rendering with ±N context lines read from the checkout
+  - `prompt.go` - Review request JSON contract + user prompt builder
+  - Review tools live in `internal/tool/review_tool_manager.go` (AddInlineReview/
+    AddSummaryReview/FinalizeReview); the `review` skill in `internal/skill/skills/review/`;
+    the GHA harness in `.github/actions/ai-review/` posts the result — klein never runs git/gh
+  - Design doc: `doc/AI_REVIEW.md`
 - `internal/mcp/` - MCP (Model Context Protocol) integration:
   - External tool server integration and management
 - `internal/connectrpc/` - Connect-gRPC server exposing the agent via HTTP/2:

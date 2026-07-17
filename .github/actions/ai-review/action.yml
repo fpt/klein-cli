@@ -1,0 +1,235 @@
+name: AI Code Review (klein)
+description: >
+  Runs `klein review` over a pull request and posts the result as one PR review
+  (inline comments + summary). Reviews are stateful across rounds: the reviewed
+  commit is embedded in the summary as an HTML marker, later runs review only
+  the changes since then (force-push falls back to a full review), previous
+  unresolved comments are fed back to the model, and threads it verifies as
+  fixed are resolved. All GitHub interaction (gh/jq) happens here in the
+  harness — klein itself never runs git or gh.
+
+inputs:
+  openai-api-key:
+    description: API key for the openai backend (exported as OPENAI_API_KEY)
+    required: false
+    default: ""
+  anthropic-api-key:
+    description: API key for the anthropic backend (exported as ANTHROPIC_API_KEY)
+    required: false
+    default: ""
+  gemini-api-key:
+    description: API key for the gemini backend (exported as GEMINI_API_KEY)
+    required: false
+    default: ""
+  backend:
+    description: klein LLM backend (openai, anthropic, gemini)
+    required: false
+    default: openai
+  model:
+    description: Model override (empty = backend default)
+    required: false
+    default: ""
+  language:
+    description: Language for the review output (code or name, e.g. en, ja, Japanese)
+    required: false
+    default: en
+  github-token:
+    description: Token used to read the PR and post the review
+    required: false
+    default: ${{ github.token }}
+  pr-number:
+    description: Pull request number (default = current event's PR)
+    required: false
+    default: ${{ github.event.pull_request.number }}
+  klein-path:
+    description: Path to the klein binary
+    required: false
+    default: klein
+
+runs:
+  using: composite
+  steps:
+    # Decide full vs incremental. The last reviewed commit is recovered from
+    # the newest bot review whose body carries the klein-review-state marker.
+    # Incremental needs LAST_SHA to still exist and be an ancestor of HEAD —
+    # a force-push breaks either condition and falls back to a full review.
+    - name: Determine review scope
+      id: scope
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.github-token }}
+        PR: ${{ inputs.pr-number }}
+      run: |
+        set -euo pipefail
+        HEAD_SHA=$(gh pr view "$PR" --repo "$GITHUB_REPOSITORY" --json headRefOid -q .headRefOid)
+
+        LAST_SHA=$(gh api "repos/$GITHUB_REPOSITORY/pulls/$PR/reviews" --paginate \
+          --jq '[.[] | select(.user.login == "github-actions[bot]") | .body] | join("\n")' \
+          | sed -n 's/.*<!-- klein-review-state {"head_sha":"\([0-9a-f]*\)"} -->.*/\1/p' \
+          | tail -1 || true)
+
+        MODE=full
+        if [ -n "$LAST_SHA" ]; then
+          if [ "$LAST_SHA" = "$HEAD_SHA" ]; then
+            echo "::notice::Head $HEAD_SHA already reviewed; skipping"
+            MODE=skip
+          elif git cat-file -e "$LAST_SHA^{commit}" 2>/dev/null \
+              && git merge-base --is-ancestor "$LAST_SHA" "$HEAD_SHA" 2>/dev/null; then
+            MODE=incremental
+          else
+            echo "::notice::Last reviewed commit $LAST_SHA rewritten (force-push); running full review"
+          fi
+        fi
+
+        if [ "$MODE" = incremental ]; then
+          git diff "$LAST_SHA".."$HEAD_SHA" > /tmp/pr-incremental.diff
+          if [ ! -s /tmp/pr-incremental.diff ]; then
+            echo "::notice::No changes since last review; skipping"
+            MODE=skip
+          fi
+        fi
+
+        echo "Review mode: $MODE (head=$HEAD_SHA last=${LAST_SHA:-none})"
+        {
+          echo "mode=$MODE"
+          echo "head_sha=$HEAD_SHA"
+        } >> "$GITHUB_OUTPUT"
+
+    # Unresolved inline threads from earlier bot reviews, as
+    # [{id, path, line, body}] — id is the GraphQL thread id used to resolve.
+    - name: Collect previous review comments
+      if: steps.scope.outputs.mode != 'skip'
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.github-token }}
+        PR: ${{ inputs.pr-number }}
+      run: |
+        set -euo pipefail
+        gh api graphql \
+          -f query='query($owner: String!, $repo: String!, $pr: Int!) {
+            repository(owner: $owner, name: $repo) {
+              pullRequest(number: $pr) {
+                reviewThreads(first: 100) {
+                  nodes {
+                    id isResolved path line originalLine
+                    comments(first: 1) { nodes { author { login } body } }
+                  }
+                }
+              }
+            }
+          }' \
+          -f owner="${GITHUB_REPOSITORY%/*}" -f repo="${GITHUB_REPOSITORY#*/}" -F pr="$PR" \
+          --jq '[.data.repository.pullRequest.reviewThreads.nodes[]
+                 | select(.isResolved | not)
+                 | select(.comments.nodes[0].author.login == "github-actions")
+                 | {id, path, line: (.line // .originalLine // 0), body: .comments.nodes[0].body}]' \
+          > /tmp/previous-comments.json
+        echo "Previous unresolved bot comments: $(jq length /tmp/previous-comments.json)"
+
+    - name: Build review request
+      if: steps.scope.outputs.mode != 'skip'
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.github-token }}
+        PR: ${{ inputs.pr-number }}
+        MODE: ${{ steps.scope.outputs.mode }}
+      run: |
+        set -euo pipefail
+        gh pr view "$PR" --repo "$GITHUB_REPOSITORY" --json title,body > /tmp/pr-meta.json
+        gh pr diff "$PR" --repo "$GITHUB_REPOSITORY" > /tmp/pr-full.diff
+
+        if [ "$MODE" = incremental ]; then
+          jq --rawfile diff /tmp/pr-incremental.diff --rawfile full /tmp/pr-full.diff \
+             --slurpfile prev /tmp/previous-comments.json \
+            '{title: .title, body: (.body // ""), diff: $diff, full_diff: $full,
+              mode: "incremental", previous_comments: $prev[0]}' \
+            /tmp/pr-meta.json > /tmp/review-request.json
+        else
+          jq --rawfile diff /tmp/pr-full.diff --slurpfile prev /tmp/previous-comments.json \
+            '{title: .title, body: (.body // ""), diff: $diff,
+              mode: "full", previous_comments: $prev[0]}' \
+            /tmp/pr-meta.json > /tmp/review-request.json
+        fi
+
+    - name: Run klein review
+      if: steps.scope.outputs.mode != 'skip'
+      shell: bash
+      env:
+        # Inputs land under INPUT_* names and are exported only when set, so an
+        # empty input never clobbers a key provided via the caller's job env.
+        INPUT_OPENAI_KEY: ${{ inputs.openai-api-key }}
+        INPUT_ANTHROPIC_KEY: ${{ inputs.anthropic-api-key }}
+        INPUT_GEMINI_KEY: ${{ inputs.gemini-api-key }}
+      run: |
+        set -euo pipefail
+        if [ -n "$INPUT_OPENAI_KEY" ]; then export OPENAI_API_KEY="$INPUT_OPENAI_KEY"; fi
+        if [ -n "$INPUT_ANTHROPIC_KEY" ]; then export ANTHROPIC_API_KEY="$INPUT_ANTHROPIC_KEY"; fi
+        if [ -n "$INPUT_GEMINI_KEY" ]; then export GEMINI_API_KEY="$INPUT_GEMINI_KEY"; fi
+        MODEL_ARGS=()
+        if [ -n "${{ inputs.model }}" ]; then
+          MODEL_ARGS=(-m "${{ inputs.model }}")
+        fi
+        "${{ inputs.klein-path }}" review \
+          -b "${{ inputs.backend }}" "${MODEL_ARGS[@]}" \
+          --language "${{ inputs.language }}" \
+          --input /tmp/review-request.json \
+          --output /tmp/review-result.json \
+          --workdir "$GITHUB_WORKSPACE"
+        jq . /tmp/review-result.json
+
+    - name: Post PR review
+      if: steps.scope.outputs.mode != 'skip'
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.github-token }}
+        PR: ${{ inputs.pr-number }}
+        MODE: ${{ steps.scope.outputs.mode }}
+        HEAD_SHA: ${{ steps.scope.outputs.head_sha }}
+      run: |
+        set -euo pipefail
+
+        # Resolve threads the model verified as fixed. Best-effort: a failed
+        # mutation must not block posting the review itself.
+        jq -r '.resolved[]?.id' /tmp/review-result.json | while read -r THREAD_ID; do
+          if gh api graphql \
+              -f query='mutation($id: ID!) {
+                resolveReviewThread(input: {threadId: $id}) { thread { id isResolved } }
+              }' \
+              -f id="$THREAD_ID" > /dev/null; then
+            echo "Resolved thread $THREAD_ID"
+          else
+            echo "::warning::Failed to resolve thread $THREAD_ID"
+          fi
+        done
+
+        # verdict → review event; GitHub may forbid APPROVE/REQUEST_CHANGES for
+        # the workflow token depending on repo settings, hence the fallback below.
+        EVENT=$(jq -r '{approve: "APPROVE", request_changes: "REQUEST_CHANGES"}[.verdict] // "COMMENT"' /tmp/review-result.json)
+
+        # The klein-review-state marker records the reviewed head commit; the
+        # next run parses it to decide full vs incremental.
+        jq --arg event "$EVENT" --arg mode "$MODE" --arg head "$HEAD_SHA" '{
+          body: (.summary
+                 + "\n\n---\n_AI review by klein (" + $mode + " review, "
+                 + (.comments | length | tostring) + " inline comment(s), "
+                 + ((.resolved // []) | length | tostring) + " resolved)_"
+                 + "\n\n<!-- klein-review-state {\"head_sha\":\"" + $head + "\"} -->"),
+          event: $event,
+          comments: [ .comments[] | {
+            path: .path,
+            side: "RIGHT",
+            body: ((if (.severity // "") != "" then "**[" + .severity + "]** " else "" end) + .body)
+          } + (if (.end_line // .line) > .line
+               then {start_line: .line, start_side: "RIGHT", line: .end_line}
+               else {line: .line} end) ]
+        }' /tmp/review-result.json > /tmp/review-payload.json
+
+        post() {
+          gh api "repos/$GITHUB_REPOSITORY/pulls/$PR/reviews" --method POST --input "$1"
+        }
+
+        if ! post /tmp/review-payload.json; then
+          echo "::warning::Posting the full review failed; retrying summary-only as COMMENT"
+          jq '{body: .body, event: "COMMENT"}' /tmp/review-payload.json > /tmp/review-summary-only.json
+          post /tmp/review-summary-only.json
+        fi

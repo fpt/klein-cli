@@ -104,6 +104,41 @@ klein -b openai -m gpt-5.6-luna "Create a console program which calculates fibon
 klein -b anthropic "Write a simple main.go that prints 'Hello, world!'. Use write tool."
 ```
 
+### AI Code Review (`klein review`)
+
+`klein review` runs an AI code review over a unified diff. It is designed to be
+driven by a harness (e.g. a GitHub Action) that handles all GitHub interaction —
+klein itself never runs `git` or `gh`:
+
+1. The harness fetches the PR title/description and diff, and checks out the PR head.
+2. `klein review` enriches each hunk with ±10 context lines read from the checkout,
+   then reviews with a restricted toolset: `Read`, `Glob`, `LS`, plus
+   `AddInlineReview` / `AddSummaryReview` / `FinalizeReview` / `ResolveReviewComment`
+   to accumulate the review.
+   Inline comment lines are validated to fall within the diff's new-side hunk ranges.
+3. The harness posts the result as one PR review (inline comments + summary).
+
+Reviews are **stateful across rounds**: the reviewed commit is embedded in the
+summary as an HTML marker, later pushes get an incremental review of just the
+new changes (a force-push falls back to a full review), previous unresolved
+comments are fed back to the model, and threads it verifies as fixed are
+resolved on GitHub.
+
+```bash
+# Input:  {"title": "...", "body": "...", "diff": "<unified diff>"}
+# Output: {"summary", "verdict", "finalized", "comments": [{"path", "line", "end_line", "severity", "body"}]}
+klein review --input review-request.json --output review-result.json --workdir /path/to/pr-head
+
+# Backend/model/context/language overrides (--language defaults to en)
+klein review -b openai -m gpt-5.6-luna --context 10 --language ja --input - < review-request.json
+```
+
+A ready-made harness lives in this repo: the composite action
+`.github/actions/ai-review` (fetches the PR, runs `klein review`, posts the
+review via `gh api`) and the reference workflow `.github/workflows/ai-review.yml`
+that reviews this repo's own PRs. To use it, set the `OPENAI_API_KEY` repository
+secret. Design details: [doc/AI_REVIEW.md](doc/AI_REVIEW.md).
+
 ## Supported Models
 
 - **Anthropic**: `claude-opus-4-7`, `claude-sonnet-4-6`, `claude-haiku-4-5`

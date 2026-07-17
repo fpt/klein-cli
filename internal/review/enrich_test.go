@@ -89,12 +89,15 @@ func TestEnricherRender_ByteBudget(t *testing.T) {
 
 	// Empty workdir → no enrichment; the hunk bodies alone blow a 1500-byte
 	// budget, so the render is cut at a line boundary with a visible marker.
+	// Marker space is reserved, so the total stays within the budget.
 	out := NewEnricher(infra.NewOSFilesystemRepository(), t.TempDir(), 0).
 		WithMaxBytes(1500).Render(context.Background(), files, ranges)
-	if len(out) > 1600 {
-		t.Errorf("rendered %d bytes, expected near the 1500 budget", len(out))
+	if len(out) > 1500 {
+		t.Errorf("rendered %d bytes, expected within the 1500 budget", len(out))
 	}
-	mustContain(t, out, "diff truncated to bound prompt size")
+	if !strings.HasSuffix(out, truncationMarker) {
+		t.Errorf("truncated output should end with the marker, got tail %q", out[max(0, len(out)-80):])
+	}
 	mustNotContain(t, out, "line 200 in b.txt")
 
 	// Unbounded render includes everything.
@@ -102,6 +105,28 @@ func TestEnricherRender_ByteBudget(t *testing.T) {
 		Render(context.Background(), files, ranges)
 	mustContain(t, full, "line 200 in b.txt")
 	mustNotContain(t, full, "diff truncated")
+
+	// Budget smaller than the first line: no line boundary fits, so no partial
+	// line is emitted — only the marker.
+	tiny := NewEnricher(infra.NewOSFilesystemRepository(), t.TempDir(), 0).
+		WithMaxBytes(5).Render(context.Background(), files, ranges)
+	if tiny != truncationMarker {
+		t.Errorf("tiny budget should yield only the marker, got %q", tiny)
+	}
+}
+
+func TestTruncateAtLine(t *testing.T) {
+	t.Parallel()
+	s := "aaa\nbbb\nccc\n"
+	if got := truncateAtLine(s, 100); got != s {
+		t.Errorf("under budget: got %q", got)
+	}
+	if got := truncateAtLine(s, 6); got != "aaa\n" {
+		t.Errorf("cut at line boundary: got %q", got)
+	}
+	if got := truncateAtLine("verylongsingleline\n", 5); got != "" {
+		t.Errorf("no newline within budget should yield empty, got %q", got)
+	}
 }
 
 func TestEnricherRender_UnreadableFile(t *testing.T) {

@@ -78,23 +78,27 @@ func (e *Enricher) Render(ctx context.Context, files []FileDiff, ranges Ranges) 
 
 	out := strings.TrimRight(b.String(), "\n") + "\n"
 	if e.maxBytes > 0 && len(out) > e.maxBytes {
-		out = truncateAtLine(out, e.maxBytes) +
-			"... [diff truncated to bound prompt size — later changes are not shown]\n"
+		// Reserve room for the marker so the total stays within the budget.
+		budget := max(e.maxBytes-len(truncationMarker), 0)
+		out = truncateAtLine(out, budget) + truncationMarker
 	}
 	return out
 }
 
+const truncationMarker = "... [diff truncated to bound prompt size — later changes are not shown]\n"
+
 // truncateAtLine returns the longest prefix of s that is at most n bytes and
-// ends on a line boundary (so a comment target is never a half-line).
+// ends on a line boundary. When no newline fits within n, it returns "" rather
+// than a partial line — the contract is that the result never ends mid-line
+// (which would also risk splitting a multi-byte rune).
 func truncateAtLine(s string, n int) string {
 	if len(s) <= n {
 		return s
 	}
-	cut := s[:n]
-	if nl := strings.LastIndexByte(cut, '\n'); nl >= 0 {
-		return cut[:nl+1]
+	if nl := strings.LastIndexByte(s[:n], '\n'); nl >= 0 {
+		return s[:nl+1]
 	}
-	return cut + "\n"
+	return ""
 }
 
 // readFileLines reads the new-side file content for context expansion.

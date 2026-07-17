@@ -61,7 +61,10 @@ type ReviewResult struct {
 // Injected by the subcommand so this package needs no diff knowledge.
 type LineValidator func(path string, line, endLine int) error
 
-var reviewSeverities = map[string]bool{"critical": true, "major": true, "minor": true, "nit": true}
+// reviewSeverities is the classification every inline comment must carry:
+// must (fix before merge), major (real bug/regression), minor (edge case,
+// robustness), nits (small but worth fixing).
+var reviewSeverities = map[string]bool{"must": true, "major": true, "minor": true, "nits": true}
 
 var reviewVerdicts = map[string]bool{"approve": true, reviewVerdictDefault: true, "request_changes": true}
 
@@ -110,8 +113,8 @@ func (m *ReviewToolManager) register() {
 				Description: "New-side line number the comment applies to (the last line for a multi-line comment)"},
 			{Name: reviewArgEndLine, Required: false, Type: "number",
 				Description: "For a multi-line comment: the last line of the range; 'line' is then the first. Omit for single-line."},
-			{Name: reviewArgSeverity, Required: false, Type: "string",
-				Description: "One of: critical, major, minor, nit"},
+			{Name: reviewArgSeverity, Required: true, Type: "string",
+				Description: "Classification of the finding: must (fix before merge), major (real bug/regression), minor (edge case, robustness), nits (small but worth fixing)"},
 			{Name: reviewArgComment, Required: true, Type: "string",
 				Description: "The review comment (markdown). State the problem and, when possible, a concrete fix."},
 		},
@@ -194,8 +197,11 @@ func parseInlineArgs(args message.ToolArgumentValues) (ReviewComment, string) {
 		c.Line, c.EndLine = c.EndLine, c.Line
 	}
 	c.Severity = strings.ToLower(stringArg(args, reviewArgSeverity))
-	if c.Severity != "" && !reviewSeverities[c.Severity] {
-		return c, fmt.Sprintf("invalid severity %q: use critical, major, minor, or nit", c.Severity)
+	if c.Severity == "" {
+		return c, "severity is required: must, major, minor, or nits"
+	}
+	if !reviewSeverities[c.Severity] {
+		return c, fmt.Sprintf("invalid severity %q: use must, major, minor, or nits", c.Severity)
 	}
 	return c, ""
 }

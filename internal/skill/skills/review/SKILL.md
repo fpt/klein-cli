@@ -34,7 +34,7 @@ Previous review rounds (when the message lists "Previous Review Comments"):
 
 Reporting:
 - One AddInlineReview per verified finding. `line` must be a bracketed new-side line number from the annotated diff (lines marked `ctx` are not valid targets). Pick the line where the problem lives; use `end_line` only when the finding truly spans a range.
-- Set severity: critical (breaks the build/data/security), major (real bug or regression), minor (edge case, robustness), nit (small but worth fixing).
+- Severity is required on every comment: must (has to be fixed before merge — broken build/data/security/correctness), major (real bug or regression), minor (edge case, robustness), nits (small but worth fixing).
 - Each comment: state the problem, why it is a problem, and a concrete fix. Markdown, concise.
 - If a tool call is rejected (invalid line), re-read the commentable ranges in the diff and correct the target — do not drop a verified finding.
 

@@ -118,11 +118,14 @@ klein itself never runs `git` or `gh`:
    Inline comment lines are validated to fall within the diff's new-side hunk ranges.
 3. The harness posts the result as one PR review (inline comments + summary).
 
-Reviews are **stateful across rounds**: the reviewed commit is embedded in the
-summary as an HTML marker, later pushes get an incremental review of just the
-new changes (a force-push falls back to a full review), previous unresolved
-comments are fed back to the model, and threads it verifies as fixed are
-resolved on GitHub.
+Reviews are **stateful across rounds**: the summary lives in one sticky PR
+comment that is updated each round (with turn / total / active-comment stats),
+state is embedded there as an HTML marker, later pushes get an incremental
+review of just the new changes, a push that doesn't change the PR diff (e.g. a
+web-UI "Rebase branch") is skipped, a real force-push falls back to a full
+review, previous unresolved comments are fed back to the model, and threads it
+verifies as fixed are resolved on GitHub. Every inline comment carries a
+required severity: `must` / `major` / `minor` / `nits`.
 
 ```bash
 # Input:  {"title": "...", "body": "...", "diff": "<unified diff>"}

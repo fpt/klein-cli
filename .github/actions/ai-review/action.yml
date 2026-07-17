@@ -9,6 +9,9 @@ description: >
   to a full review, previous unresolved comments are fed back to the model,
   and threads it verifies as fixed are resolved. All GitHub interaction
   (gh/jq) happens here in the harness — klein itself never runs git or gh.
+  The caller must check out the PR head with fetch-depth: 0; incremental
+  reviews need full history, and a shallow checkout silently degrades every
+  run to a full review.
 
 inputs:
   openai-api-key:

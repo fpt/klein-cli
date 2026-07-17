@@ -34,6 +34,21 @@ on:
         type: string
         required: false
         default: ""
+      effort:
+        description: Reasoning effort (none|minimal|low|medium|high|xhigh; empty = backend default)
+        type: string
+        required: false
+        default: ""
+      max-turns:
+        description: Maximum agent iterations (0/empty = default)
+        type: string
+        required: false
+        default: ""
+      max-budget-tokens:
+        description: Cumulative token budget; exceeding it stops the review keeping comments so far (0/empty = unlimited)
+        type: string
+        required: false
+        default: ""
       language:
         description: Language for the review output (e.g. en, ja)
         type: string
@@ -77,6 +92,9 @@ jobs:
         with:
           backend: ${{ inputs.backend }}
           model: ${{ inputs.model }}
+          effort: ${{ inputs.effort }}
+          max-turns: ${{ inputs.max-turns }}
+          max-budget-tokens: ${{ inputs.max-budget-tokens }}
           language: ${{ inputs.language }}
           klein-version: ${{ inputs.klein-version }}
           openai-api-key: ${{ secrets.openai-api-key }}

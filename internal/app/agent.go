@@ -60,6 +60,7 @@ type Agent struct {
 	sessionRules         *permission.RuleSet // in-memory allow/deny rules created during this session
 	permRules            *permission.RuleSet // persistent allow/deny rules from JSON files
 	allowedToolsOverride []string            // CLI override for skill's allowed-tools
+	tokenBudget          int                 // cumulative token cap per Invoke run (0 = unlimited)
 	externalEventHandler events.EventHandler // optional: forward events to external consumers (e.g., Connect server)
 	recentlyReadFiles    []string            // up to 5 most recently read unique file paths
 	memoryDir            string              // $HOME/.klein/projects/<hash>/memory/ (interactive mode only)
@@ -93,6 +94,13 @@ func (a *Agent) FilesystemRepository() repository.FilesystemRepository { return 
 // When non-empty, this list is used instead of the skill's own allowed-tools field.
 func (a *Agent) SetAllowedToolsOverride(tools []string) {
 	a.allowedToolsOverride = tools
+}
+
+// SetTokenBudget caps the cumulative token usage of each Invoke run; 0 = no
+// cap. When exceeded the run stops with react.ErrTokenBudgetExceeded — callers
+// can salvage state accumulated up to that point.
+func (a *Agent) SetTokenBudget(budget int) {
+	a.tokenBudget = budget
 }
 
 // SetCodexBackend enables a whole-agent backend (e.g. codex) for this agent.
@@ -737,6 +745,9 @@ func (a *Agent) Invoke(ctx context.Context, userInput string, skillName string, 
 	// Ensure the thinking-channel drainer goroutine is always reclaimed, even on
 	// error returns below; Close is idempotent and nil-safe.
 	defer reactClient.Close()
+	if a.tokenBudget > 0 {
+		reactClient.SetTokenBudget(a.tokenBudget)
+	}
 	if a.settings != nil {
 		reactClient.SetBashWhitelist(a.settings.Bash.WhitelistedCommands)
 	}

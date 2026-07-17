@@ -31,6 +31,11 @@ func allSubAgentDispatch(calls []*message.ToolCallMessage) bool {
 
 var ErrWaitingForApproval = errors.New("waiting for user approval for tool call")
 
+// ErrTokenBudgetExceeded is returned when the cumulative token usage of a run
+// crosses the budget set via SetTokenBudget. State up to that point is intact,
+// so callers can salvage partial results (e.g. review comments already added).
+var ErrTokenBudgetExceeded = errors.New("token budget exceeded")
+
 // ReAct is a simple ReAct implementation that uses LLM and tools
 // It handles tool calls and manages the message state
 //
@@ -48,6 +53,8 @@ type ReAct struct {
 	status           domain.AgentStatus
 	currentIteration int // current iteration count
 	pendingToolCall  message.Message
+	usedTokens       int // cumulative TotalTokens across LLM calls this run
+	tokenBudget      int // 0 = unlimited; exceeded → ErrTokenBudgetExceeded
 
 	// toolResultTransform is an optional hook applied to every tool result
 	// before it is stored in the conversation state. Intended for tool result
@@ -190,6 +197,23 @@ func (r *ReAct) annotateAndLogUsage(resp message.Message) {
 	}
 }
 
+// accumulateUsage adds the most recent call's TotalTokens to the run's
+// running total for the token budget. Called once per LLM response —
+// including tool-call responses, which annotateAndLogUsage skips for display
+// but which still consume tokens.
+func (r *ReAct) accumulateUsage() {
+	if usageProvider, ok := r.llmClient.(domain.TokenUsageProvider); ok {
+		if usage, ok2 := usageProvider.LastTokenUsage(); ok2 {
+			r.usedTokens += usage.TotalTokens
+		}
+	}
+}
+
+// SetTokenBudget caps the cumulative token usage (TotalTokens summed over all
+// LLM calls) of a run; 0 disables the cap. When the budget is crossed the loop
+// stops before the next LLM call and returns ErrTokenBudgetExceeded.
+func (r *ReAct) SetTokenBudget(budget int) { r.tokenBudget = budget }
+
 // Run processes input using the configured maxIterations.
 // Optional images are base64-encoded strings attached to the user message for vision-capable models.
 func (r *ReAct) Run(ctx context.Context, input string, images ...string) (message.Message, error) {
@@ -301,6 +325,13 @@ func (r *ReAct) runInternal(ctx context.Context) (message.Message, error) {
 			// Continue with normal execution
 		}
 
+		// Enforce the run-level token budget before spending on another call.
+		if r.tokenBudget > 0 && r.usedTokens >= r.tokenBudget {
+			reactLogger.InfoWithIntention(pkgLogger.IntentionCancel, "Token budget exceeded; stopping run",
+				"used", r.usedTokens, "budget", r.tokenBudget)
+			return nil, fmt.Errorf("used %d of %d budgeted tokens: %w", r.usedTokens, r.tokenBudget, ErrTokenBudgetExceeded)
+		}
+
 		// Remove any previous situation messages to avoid context contamination
 		if removedCount := r.state.RemoveMessagesBySource(message.MessageSourceSituation); removedCount > 0 {
 			reactLogger.DebugWithIntention(pkgLogger.IntentionDebug, "Removed previous situation messages", "count", removedCount)
@@ -351,6 +382,8 @@ func (r *ReAct) runInternal(ctx context.Context) (message.Message, error) {
 		fmt.Print("\r                    \r") // Clear the "Thinking..." line
 		// Annotate and log token usage when available
 		r.annotateAndLogUsage(resp)
+		// Accumulate usage for the run-level token budget (every LLM call).
+		r.accumulateUsage()
 
 		// Check tool call if it requires user's approval (file writing operations and bash commands)
 		if toolCall, ok := resp.(*message.ToolCallMessage); ok && !r.skipApproval {

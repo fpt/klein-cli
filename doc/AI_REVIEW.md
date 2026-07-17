@@ -116,6 +116,16 @@ for single-line comments.
 `Japanese`) — injected into the prompt; comments and summary are written in
 that language. The composite action exposes it as the `language` input.
 
+**Model / effort / limits** (all optional, all surfaced as action inputs):
+`-b/--backend`, `-m/--model`, `--effort` (reasoning effort for capable
+models), `--max-turns` (agent iteration cap; overrides the settings default),
+and `--max-budget-tokens` (cumulative token cap for the run). When the budget
+is exceeded the run stops before the next model call and emits a **partial**
+result — comments gathered so far plus a "stopped early" summary and
+`finalized:false` — exiting 0 so the harness still posts something. The cap is
+enforced in the ReAct loop (`SetTokenBudget` → `ErrTokenBudgetExceeded`);
+`klein review` recognizes that error and salvages state rather than failing.
+
 ## 4. Diff parsing and commentable ranges (`internal/review/diff.go`)
 
 `ParseUnifiedDiff` scans the diff line by line via a small `diffParser` state

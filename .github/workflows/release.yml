@@ -1,0 +1,62 @@
+# Attaches cross-compiled klein binaries to a GitHub release. Runs when a
+# release is published; workflow_dispatch(tag) backfills an existing release.
+# Asset naming (consumed by .github/actions/ai-review): klein_<os>_<arch>.tar.gz
+name: Release binaries
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing release tag to attach binaries to (e.g. v0.1.1)
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  build-upload:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - { goos: linux, goarch: amd64 }
+          - { goos: linux, goarch: arm64 }
+          - { goos: darwin, goarch: amd64 }
+          - { goos: darwin, goarch: arm64 }
+    steps:
+      - name: Resolve tag
+        id: tag
+        shell: bash
+        run: |
+          TAG="${{ github.event.release.tag_name || inputs.tag }}"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ steps.tag.outputs.tag }}
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Build and package
+        shell: bash
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+          CGO_ENABLED: "0"
+        run: |
+          set -euo pipefail
+          go build -trimpath -ldflags="-s -w" -o dist/klein ./klein
+          tar -C dist -czf "klein_${GOOS}_${GOARCH}.tar.gz" klein
+
+      - name: Upload release asset
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release upload "${{ steps.tag.outputs.tag }}" \
+            "klein_${{ matrix.goos }}_${{ matrix.goarch }}.tar.gz" --clobber

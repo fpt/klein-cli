@@ -142,6 +142,34 @@ review via `gh api`) and the reference workflow `.github/workflows/ai-review.yml
 that reviews this repo's own PRs. To use it, set the `OPENAI_API_KEY` repository
 secret. Design details: [doc/AI_REVIEW.md](doc/AI_REVIEW.md).
 
+**Using it from another repository** — call the reusable workflow; klein is
+installed from the release binaries automatically:
+
+```yaml
+# .github/workflows/ai-review.yml (in your repo)
+name: AI Review
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+permissions:
+  contents: read
+  pull-requests: write
+jobs:
+  review:
+    if: github.event.pull_request.head.repo.full_name == github.repository
+    uses: fpt/klein-cli/.github/workflows/ai-review-reusable.yml@main
+    with:
+      language: ja            # optional (default: en)
+      klein-version: v0.1.1   # optional (default: latest release)
+    secrets:
+      openai-api-key: ${{ secrets.OPENAI_API_KEY }}
+```
+
+Pin `@main` or a tag (GitHub Actions has no `@latest` ref). Release binaries
+(`klein_<os>_<arch>.tar.gz`) are attached by `.github/workflows/release.yml`
+when a release is published; if an asset is missing the action falls back to
+`go install`.
+
 ## Supported Models
 
 - **Anthropic**: `claude-opus-4-7`, `claude-sonnet-4-6`, `claude-haiku-4-5`

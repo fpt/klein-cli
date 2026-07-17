@@ -95,6 +95,10 @@ for single-line comments.
 **Exit codes:** 0 = review produced (zero comments is still success),
 1 = error, 2 = flag error.
 
+**Output language:** `--language <code-or-name>` (default `en`; e.g. `ja`,
+`Japanese`) — injected into the prompt; comments and summary are written in
+that language. The composite action exposes it as the `language` input.
+
 ## 4. Diff parsing and commentable ranges (`internal/review/diff.go`)
 
 `ParseUnifiedDiff` scans the diff line by line via a small `diffParser` state
@@ -227,7 +231,9 @@ A composite action, deliberately thin — `gh` + `jq` only:
 
 1. `gh pr view --json title,body` + `gh pr diff` → request JSON
 2. `klein review --input … --output … --workdir "$GITHUB_WORKSPACE"`
-   (the klein binary is provided by the calling workflow, input `klein-path`)
+   (the klein binary is provided by the calling workflow, input `klein-path`;
+   backend selected via `backend` + the matching `*-api-key` input;
+   output language via `language`, default `en`)
 3. jq maps the result to a Reviews-API payload — verdict →
    `APPROVE`/`REQUEST_CHANGES`/`COMMENT`, severity prefixed into the comment
    body (`**[major]** …`), `end_line > line` → `start_line`+`line` — and

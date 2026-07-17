@@ -6,8 +6,17 @@ description: >
 
 inputs:
   openai-api-key:
-    description: API key for the LLM backend (exported as OPENAI_API_KEY)
-    required: true
+    description: API key for the openai backend (exported as OPENAI_API_KEY)
+    required: false
+    default: ""
+  anthropic-api-key:
+    description: API key for the anthropic backend (exported as ANTHROPIC_API_KEY)
+    required: false
+    default: ""
+  gemini-api-key:
+    description: API key for the gemini backend (exported as GEMINI_API_KEY)
+    required: false
+    default: ""
   backend:
     description: klein LLM backend (openai, anthropic, gemini)
     required: false
@@ -16,6 +25,10 @@ inputs:
     description: Model override (empty = backend default)
     required: false
     default: ""
+  language:
+    description: Language for the review output (code or name, e.g. en, ja, Japanese)
+    required: false
+    default: en
   github-token:
     description: Token used to read the PR and post the review
     required: false
@@ -47,17 +60,23 @@ runs:
     - name: Run klein review
       shell: bash
       env:
-        # For the anthropic/gemini backends, set ANTHROPIC_API_KEY/GEMINI_API_KEY
-        # in the calling workflow's env instead.
-        OPENAI_API_KEY: ${{ inputs.openai-api-key }}
+        # Inputs land under INPUT_* names and are exported only when set, so an
+        # empty input never clobbers a key provided via the caller's job env.
+        INPUT_OPENAI_KEY: ${{ inputs.openai-api-key }}
+        INPUT_ANTHROPIC_KEY: ${{ inputs.anthropic-api-key }}
+        INPUT_GEMINI_KEY: ${{ inputs.gemini-api-key }}
       run: |
         set -euo pipefail
+        if [ -n "$INPUT_OPENAI_KEY" ]; then export OPENAI_API_KEY="$INPUT_OPENAI_KEY"; fi
+        if [ -n "$INPUT_ANTHROPIC_KEY" ]; then export ANTHROPIC_API_KEY="$INPUT_ANTHROPIC_KEY"; fi
+        if [ -n "$INPUT_GEMINI_KEY" ]; then export GEMINI_API_KEY="$INPUT_GEMINI_KEY"; fi
         MODEL_ARGS=()
         if [ -n "${{ inputs.model }}" ]; then
           MODEL_ARGS=(-m "${{ inputs.model }}")
         fi
         "${{ inputs.klein-path }}" review \
           -b "${{ inputs.backend }}" "${MODEL_ARGS[@]}" \
+          --language "${{ inputs.language }}" \
           --input /tmp/review-request.json \
           --output /tmp/review-result.json \
           --workdir "$GITHUB_WORKSPACE"

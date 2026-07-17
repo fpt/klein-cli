@@ -53,6 +53,7 @@ type reviewOptions struct {
 	model        string
 	effort       string
 	settingsPath string
+	language     string
 	contextLines int
 	verbose      bool
 }
@@ -69,6 +70,7 @@ func parseReviewFlags(args []string) (opts reviewOptions, code int, ok bool) {
 	modelLong := fs.String("model", "", "Model name to use")
 	effort := fs.String("effort", "", "Reasoning effort (none|minimal|low|medium|high|xhigh)")
 	settingsPath := fs.String("settings", "", "Path to settings file")
+	language := fs.String("language", "en", "Language for the review output (code or name, e.g. en, ja, Japanese)")
 	contextLines := fs.Int("context", 10, "Extra context lines around each hunk in the annotated diff")
 	verbose := fs.Bool("v", false, "Enable verbose (debug) logging")
 	fs.Usage = func() {
@@ -91,6 +93,7 @@ func parseReviewFlags(args []string) (opts reviewOptions, code int, ok bool) {
 		model:        resolveStringFlag(*model, *modelLong),
 		effort:       *effort,
 		settingsPath: *settingsPath,
+		language:     *language,
 		contextLines: *contextLines,
 		verbose:      *verbose,
 	}, 0, true
@@ -178,7 +181,7 @@ func prepareReviewPrompt(
 	}
 	ranges = review.CommentableRanges(files)
 	enricher := review.NewEnricher(fsRepo, opts.workdir, opts.contextLines)
-	prompt = review.BuildPrompt(req, enricher.Render(ctx, files, ranges))
+	prompt = review.BuildPrompt(req, enricher.Render(ctx, files, ranges), opts.language)
 	return prompt, ranges, len(files), nil
 }
 

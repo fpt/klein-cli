@@ -122,8 +122,8 @@ klein itself never runs `git` or `gh`:
 # Output: {"summary", "verdict", "finalized", "comments": [{"path", "line", "end_line", "severity", "body"}]}
 klein review --input review-request.json --output review-result.json --workdir /path/to/pr-head
 
-# Backend/model/context overrides
-klein review -b openai -m gpt-5.6-luna --context 10 --input - < review-request.json
+# Backend/model/context/language overrides (--language defaults to en)
+klein review -b openai -m gpt-5.6-luna --context 10 --language ja --input - < review-request.json
 ```
 
 A ready-made harness lives in this repo: the composite action

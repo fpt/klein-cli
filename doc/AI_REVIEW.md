@@ -95,8 +95,8 @@ stderr so stdout stays parseable):
   "finalized": true,                 // FinalizeReview was called
   "comments": [
     { "path": "internal/foo.go", "line": 42, "end_line": 44,
-      "severity": "major", "body": "..." }
-  ],
+      "severity": "major", "body": "..." }   // severity required:
+  ],                                          // must | major | minor | nits
   "resolved": [                      // previous-round comments verified fixed
     { "id": "PRRT_…", "note": "divisor restored" }
   ]
@@ -230,7 +230,7 @@ construction — the subcommand passes `ranges.Validate`, keeping
 
 | Tool | Behavior |
 |---|---|
-| `AddInlineReview` | Validates path+line via the injected validator; rejects duplicates (same path+range), bad severities (`critical/major/minor/nit`), and calls after finalize. Swapped `line`/`end_line` bounds are silently normalized rather than bounced. |
+| `AddInlineReview` | Validates path+line via the injected validator; rejects duplicates (same path+range), missing/bad severities (required: `must/major/minor/nits`), and calls after finalize. Swapped `line`/`end_line` bounds are silently normalized rather than bounced. |
 | `AddSummaryReview` | Sets summary + verdict (`approve/comment/request_changes`, default `comment`); calling again *replaces* (never accumulates). Locked after finalize. |
 | `FinalizeReview` | Requires a summary first; idempotence errors on a second call; locks all further mutation. |
 | `ResolveReviewComment` | Marks a previous-round comment as verified-fixed (id must match the `previous_comments` input; duplicates rejected). Only registered when previous comments exist. The harness resolves the thread. |
@@ -247,14 +247,21 @@ uses the agent's final text response as the summary and marks
 
 A composite action, deliberately thin — `git` (read-only), `gh`, and `jq`:
 
-1. **Determine review scope.** The last reviewed commit is recovered from the
-   newest bot review whose body carries the state marker (§8.1). Modes:
+1. **Determine review scope.** State is recovered from the sticky summary
+   comment's marker (§8.1; falls back to scanning old-style review bodies).
+   Modes:
    - no marker → **full** review of `gh pr diff`
-   - marker found, `LAST_SHA` still exists and is an ancestor of head →
+   - current full-diff hash equals the marker's `diff_sha` → **skip**: only
+     history was rewritten, the content is identical. This is what a web-UI
+     "Rebase branch" / "Update branch" push (committer `GitHub web flow`)
+     produces — hashing the diff catches it robustly without committer
+     sniffing, and also covers any other no-op force-push. The marker's
+     `head_sha` is refreshed in place so the *next* content push still gets
+     an incremental review.
+   - marker's `head_sha` still exists and is an ancestor of head →
      **incremental**: `git diff LAST_SHA..HEAD` is reviewed, the full PR diff
      rides along as `full_diff` for validation
-   - marker found but the commit was rewritten (**force-push**: `git
-     merge-base --is-ancestor` fails or the object is gone) → **full** review
+   - commit rewritten with real content changes (**force-push**) → **full**
    - head already reviewed, or the incremental diff is empty → **skip**
    (Requires `fetch-depth: 0` on checkout.)
 2. **Collect previous comments.** GraphQL `reviewThreads` → unresolved threads
@@ -268,30 +275,42 @@ A composite action, deliberately thin — `git` (read-only), `gh`, and `jq`:
 4. **Resolve fixed threads.** Each `resolved[].id` → GraphQL
    `resolveReviewThread` mutation. Best-effort: a failed mutation logs a
    warning and never blocks posting.
-5. **Post.** jq maps the result to a Reviews-API payload — verdict →
-   `APPROVE`/`REQUEST_CHANGES`/`COMMENT`, severity prefixed into the comment
-   body (`**[major]** …`), `end_line > line` → `start_line`+`line` — appends
-   the state marker to the body, and posts **one**
-   `POST /repos/…/pulls/N/reviews` call.
+5. **Post.** Two artifacts:
+   - **Sticky summary comment** — one PR issue comment created on round 1 and
+     PATCHed in place on every later round (no summary spam). Carries the
+     summary, a stats footer (`turn N (mode review of sha) · comments: total
+     T, active A (+new, −resolved) · verdict`), and the state marker.
+     `total` = comments ever posted; `active` = unresolved previous comments
+     − this round's resolutions + new comments.
+   - **Minimal review** — inline comments (severity prefixed as
+     `**[must]** …`, `end_line > line` → `start_line`+`line`) plus the
+     verdict event (`APPROVE`/`REQUEST_CHANGES`/`COMMENT`), with a one-line
+     body pointing at the summary comment. Skipped entirely when there are
+     no inline comments and the verdict is neutral (`comment`).
 
-If that POST fails (e.g. repo settings forbid the Actions token from
+If the review POST fails (e.g. repo settings forbid the Actions token from
 APPROVE/REQUEST_CHANGES, or an edge-case comment is still rejected), the
-action retries once with a summary-only `COMMENT` review, so the run always
-reports *something*.
+action retries once without inline comments, so the run always reports
+*something* — and the summary comment was already updated regardless.
 
 ### 8.1 Review-state marker
 
-Round state lives in the PR itself — no external storage. Every posted
-summary ends with:
+Round state lives in the PR itself — no external storage. The sticky summary
+comment ends with:
 
 ```html
-<!-- klein-review-state {"head_sha":"<reviewed commit sha>"} -->
+<!-- klein-review-state {"head_sha":"<sha>","diff_sha":"<sha256 of full PR diff>","turn":3,"total":5} -->
 ```
 
-The next run scans the bot's reviews for the marker (newest wins) and
-compares against the current head. The marker is written by the *harness*
-(klein has no SHA knowledge — principle #1). Editing or deleting the comment
-simply causes the next run to fall back to a full review.
+- `head_sha` — last reviewed head commit (incremental base)
+- `diff_sha` — sha256 of the full PR diff at review time (no-op-rebase skip)
+- `turn` — review round counter (skipped runs don't increment)
+- `total` — cumulative inline comments posted across all rounds
+
+The marker is written by the *harness* (klein has no SHA knowledge —
+principle #1). Editing or deleting the comment simply causes the next run to
+fall back to a full review with reset counters. Markers written by the older
+review-body scheme (only `head_sha`) are still parsed as a fallback.
 
 The reference workflow `.github/workflows/ai-review.yml` reviews this repo's
 own PRs: checkout PR head → build klein from source → run the action.
@@ -311,8 +330,10 @@ rapid push supersedes the in-flight review.
 | Reviews API rejects the payload | Harness retries summary-only as `COMMENT` |
 | Fork PR | Workflow job skipped (no secret) |
 | Force-push rewrote the last reviewed commit | Full review (marker SHA missing or not an ancestor) |
-| State marker edited/deleted | Full review (no marker found) |
+| Web-UI rebase / update-branch (content unchanged) | Skipped — diff hash matches; marker head refreshed in place |
+| State marker edited/deleted | Full review (no marker found; turn/total counters reset) |
 | Head commit already reviewed / empty incremental diff | Run skipped with a notice |
+| Sticky comment deleted between rounds | Recreated on the next round (legacy review-body markers still parsed) |
 | `resolveReviewThread` mutation fails | Warning; review is still posted, thread stays open for the next round |
 | Model resolves an id not in `previous_comments` | Tool call bounced (unknown id) |
 

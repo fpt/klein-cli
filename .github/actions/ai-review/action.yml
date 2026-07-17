@@ -1,12 +1,14 @@
 name: AI Code Review (klein)
 description: >
-  Runs `klein review` over a pull request and posts the result as one PR review
-  (inline comments + summary). Reviews are stateful across rounds: the reviewed
-  commit is embedded in the summary as an HTML marker, later runs review only
-  the changes since then (force-push falls back to a full review), previous
-  unresolved comments are fed back to the model, and threads it verifies as
-  fixed are resolved. All GitHub interaction (gh/jq) happens here in the
-  harness — klein itself never runs git or gh.
+  Runs `klein review` over a pull request. The summary lives in ONE sticky PR
+  comment that is updated each round (inline comments + verdict are posted as
+  a minimal review). Reviews are stateful: the sticky comment embeds the
+  reviewed commit and a hash of the full PR diff; later runs review only the
+  changes since then, an unchanged diff hash (e.g. a web-UI "Rebase branch" /
+  "Update branch" push) skips the run entirely, a real force-push falls back
+  to a full review, previous unresolved comments are fed back to the model,
+  and threads it verifies as fixed are resolved. All GitHub interaction
+  (gh/jq) happens here in the harness — klein itself never runs git or gh.
 
 inputs:
   openai-api-key:
@@ -49,10 +51,16 @@ inputs:
 runs:
   using: composite
   steps:
-    # Decide full vs incremental. The last reviewed commit is recovered from
-    # the newest bot review whose body carries the klein-review-state marker.
-    # Incremental needs LAST_SHA to still exist and be an ancestor of HEAD —
-    # a force-push breaks either condition and falls back to a full review.
+    # Decide full vs incremental vs skip. State comes from the sticky summary
+    # comment's klein-review-state marker: the last reviewed head commit plus
+    # a sha256 of the full PR diff at that time.
+    #   - diff hash unchanged  → skip: the content is identical, only history
+    #     was rewritten (web-UI "Rebase branch" / "Update branch" pushes by
+    #     the 'GitHub web flow' committer, or any other no-op force-push).
+    #     The marker's head_sha is refreshed so the next real push still gets
+    #     an incremental review.
+    #   - last head an ancestor → incremental (git diff LAST..HEAD)
+    #   - otherwise             → full (real force-push, or no state yet)
     - name: Determine review scope
       id: scope
       shell: bash
@@ -62,17 +70,52 @@ runs:
       run: |
         set -euo pipefail
         HEAD_SHA=$(gh pr view "$PR" --repo "$GITHUB_REPOSITORY" --json headRefOid -q .headRefOid)
+        gh pr diff "$PR" --repo "$GITHUB_REPOSITORY" > /tmp/pr-full.diff
+        DIFF_SHA=$(sha256sum /tmp/pr-full.diff | cut -d' ' -f1)
 
-        LAST_SHA=$(gh api "repos/$GITHUB_REPOSITORY/pulls/$PR/reviews" --paginate \
-          --jq '[.[] | select(.user.login == "github-actions[bot]") | .body] | join("\n")' \
-          | sed -n 's/.*<!-- klein-review-state {"head_sha":"\([0-9a-f]*\)"} -->.*/\1/p' \
-          | tail -1 || true)
+        # Sticky summary comment (authoritative marker home). Falls back to
+        # review bodies for PRs reviewed before the sticky-comment scheme.
+        gh api "repos/$GITHUB_REPOSITORY/issues/$PR/comments" --paginate \
+          --jq '[.[] | select(.user.login == "github-actions[bot]")
+                     | select(.body | contains("<!-- klein-review-state"))] | last // empty' \
+          > /tmp/sticky.json || true
+        STICKY_ID=""
+        STATE=""
+        if [ -s /tmp/sticky.json ]; then
+          STICKY_ID=$(jq -r .id /tmp/sticky.json)
+          STATE=$(jq -r .body /tmp/sticky.json \
+            | grep -o '<!-- klein-review-state {[^}]*} -->' | tail -1 || true)
+        else
+          STATE=$(gh api "repos/$GITHUB_REPOSITORY/pulls/$PR/reviews" --paginate \
+            --jq '[.[] | select(.user.login == "github-actions[bot]") | .body] | join("\n")' \
+            | grep -o '<!-- klein-review-state {[^}]*} -->' | tail -1 || true)
+        fi
+        LAST_SHA=$(printf '%s' "$STATE" | sed -n 's/.*"head_sha":"\([0-9a-f]*\)".*/\1/p')
+        LAST_DIFF_SHA=$(printf '%s' "$STATE" | sed -n 's/.*"diff_sha":"\([0-9a-f]*\)".*/\1/p')
+        LAST_TURN=$(printf '%s' "$STATE" | sed -n 's/.*"turn":\([0-9]*\).*/\1/p')
+        LAST_TOTAL=$(printf '%s' "$STATE" | sed -n 's/.*"total":\([0-9]*\).*/\1/p')
+        LAST_TURN=${LAST_TURN:-0}
+        LAST_TOTAL=${LAST_TOTAL:-0}
 
         MODE=full
         if [ -n "$LAST_SHA" ]; then
           if [ "$LAST_SHA" = "$HEAD_SHA" ]; then
             echo "::notice::Head $HEAD_SHA already reviewed; skipping"
             MODE=skip
+          elif [ -n "$LAST_DIFF_SHA" ] && [ "$LAST_DIFF_SHA" = "$DIFF_SHA" ]; then
+            echo "::notice::PR diff unchanged since last review (rebase/update without content changes); skipping"
+            MODE=skip
+            # Refresh the marker's head_sha so the next content push can be
+            # reviewed incrementally from this (rewritten) head. turn/total
+            # are carried over unchanged — no review happened.
+            if [ -n "$STICKY_ID" ]; then
+              NEW_MARKER="<!-- klein-review-state {\"head_sha\":\"$HEAD_SHA\",\"diff_sha\":\"$DIFF_SHA\",\"turn\":$LAST_TURN,\"total\":$LAST_TOTAL} -->"
+              jq -r .body /tmp/sticky.json \
+                | sed "s|<!-- klein-review-state {[^}]*} -->|$NEW_MARKER|" > /tmp/sticky-body.txt
+              gh api --method PATCH "repos/$GITHUB_REPOSITORY/issues/comments/$STICKY_ID" \
+                -F body=@/tmp/sticky-body.txt > /dev/null
+              echo "Marker refreshed to $HEAD_SHA"
+            fi
           elif git cat-file -e "$LAST_SHA^{commit}" 2>/dev/null \
               && git merge-base --is-ancestor "$LAST_SHA" "$HEAD_SHA" 2>/dev/null; then
             MODE=incremental
@@ -89,10 +132,14 @@ runs:
           fi
         fi
 
-        echo "Review mode: $MODE (head=$HEAD_SHA last=${LAST_SHA:-none})"
+        echo "Review mode: $MODE (head=$HEAD_SHA last=${LAST_SHA:-none} turn=$((LAST_TURN + 1)))"
         {
           echo "mode=$MODE"
           echo "head_sha=$HEAD_SHA"
+          echo "diff_sha=$DIFF_SHA"
+          echo "sticky_id=$STICKY_ID"
+          echo "turn=$((LAST_TURN + 1))"
+          echo "prev_total=$LAST_TOTAL"
         } >> "$GITHUB_OUTPUT"
 
     # Unresolved inline threads from earlier bot reviews, as
@@ -136,7 +183,6 @@ runs:
       run: |
         set -euo pipefail
         gh pr view "$PR" --repo "$GITHUB_REPOSITORY" --json title,body > /tmp/pr-meta.json
-        gh pr diff "$PR" --repo "$GITHUB_REPOSITORY" > /tmp/pr-full.diff
 
         if [ "$MODE" = incremental ]; then
           jq --rawfile diff /tmp/pr-incremental.diff --rawfile full /tmp/pr-full.diff \
@@ -177,7 +223,9 @@ runs:
           --workdir "$GITHUB_WORKSPACE"
         jq . /tmp/review-result.json
 
-    - name: Post PR review
+    # Sticky summary comment (created once, updated every round) + a minimal
+    # review carrying only the inline comments and the verdict event.
+    - name: Post review result
       if: steps.scope.outputs.mode != 'skip'
       shell: bash
       env:
@@ -185,6 +233,10 @@ runs:
         PR: ${{ inputs.pr-number }}
         MODE: ${{ steps.scope.outputs.mode }}
         HEAD_SHA: ${{ steps.scope.outputs.head_sha }}
+        DIFF_SHA: ${{ steps.scope.outputs.diff_sha }}
+        STICKY_ID: ${{ steps.scope.outputs.sticky_id }}
+        TURN: ${{ steps.scope.outputs.turn }}
+        PREV_TOTAL: ${{ steps.scope.outputs.prev_total }}
       run: |
         set -euo pipefail
 
@@ -202,18 +254,49 @@ runs:
           fi
         done
 
-        # verdict → review event; GitHub may forbid APPROVE/REQUEST_CHANGES for
-        # the workflow token depending on repo settings, hence the fallback below.
-        EVENT=$(jq -r '{approve: "APPROVE", request_changes: "REQUEST_CHANGES"}[.verdict] // "COMMENT"' /tmp/review-result.json)
+        # --- Sticky summary comment: update in place, or create on round 1.
+        # The klein-review-state marker records the reviewed head commit, the
+        # full-diff hash, the turn number, and the cumulative comment count.
+        # Stats: total = all comments ever posted; active = still-unresolved
+        # previous comments (minus this round's resolutions) plus new ones.
+        N_NEW=$(jq '.comments | length' /tmp/review-result.json)
+        N_RESOLVED=$(jq '(.resolved // []) | length' /tmp/review-result.json)
+        PREV_UNRESOLVED=$(jq length /tmp/previous-comments.json)
+        TOTAL=$((PREV_TOTAL + N_NEW))
+        ACTIVE=$((PREV_UNRESOLVED - N_RESOLVED + N_NEW))
 
-        # The klein-review-state marker records the reviewed head commit; the
-        # next run parses it to decide full vs incremental.
-        jq --arg event "$EVENT" --arg mode "$MODE" --arg head "$HEAD_SHA" '{
-          body: (.summary
-                 + "\n\n---\n_AI review by klein (" + $mode + " review, "
-                 + (.comments | length | tostring) + " inline comment(s), "
-                 + ((.resolved // []) | length | tostring) + " resolved)_"
-                 + "\n\n<!-- klein-review-state {\"head_sha\":\"" + $head + "\"} -->"),
+        jq -r --arg mode "$MODE" --arg head "$HEAD_SHA" --arg diff "$DIFF_SHA" \
+              --arg turn "$TURN" --arg total "$TOTAL" --arg active "$ACTIVE" \
+              --arg nnew "$N_NEW" --arg nresolved "$N_RESOLVED" '
+          "## 🤖 AI Review (klein) — turn " + $turn + "\n\n"
+          + .summary
+          + "\n\n---\n_turn " + $turn + " (" + $mode + " review of " + ($head[0:7]) + ") · "
+          + "comments: total " + $total + ", active " + $active
+          + " (+" + $nnew + " new, −" + $nresolved + " resolved) · verdict: " + .verdict + "_"
+          + "\n\n<!-- klein-review-state {\"head_sha\":\"" + $head + "\",\"diff_sha\":\"" + $diff
+          + "\",\"turn\":" + $turn + ",\"total\":" + $total + "} -->"
+        ' /tmp/review-result.json > /tmp/summary-body.txt
+
+        if [ -n "$STICKY_ID" ]; then
+          gh api --method PATCH "repos/$GITHUB_REPOSITORY/issues/comments/$STICKY_ID" \
+            -F body=@/tmp/summary-body.txt > /dev/null
+          echo "Updated sticky summary comment $STICKY_ID"
+        else
+          gh api "repos/$GITHUB_REPOSITORY/issues/$PR/comments" \
+            -F body=@/tmp/summary-body.txt --jq .id
+        fi
+
+        # --- Minimal review: inline comments + verdict event only. Skipped
+        # when there is nothing to attach and no review state to set.
+        EVENT=$(jq -r '{approve: "APPROVE", request_changes: "REQUEST_CHANGES"}[.verdict] // "COMMENT"' /tmp/review-result.json)
+        N_COMMENTS=$(jq '.comments | length' /tmp/review-result.json)
+        if [ "$N_COMMENTS" -eq 0 ] && [ "$EVENT" = "COMMENT" ]; then
+          echo "No inline comments and neutral verdict — summary comment only"
+          exit 0
+        fi
+
+        jq --arg event "$EVENT" '{
+          body: "_klein AI review — details in the summary comment._",
           event: $event,
           comments: [ .comments[] | {
             path: .path,
@@ -229,7 +312,7 @@ runs:
         }
 
         if ! post /tmp/review-payload.json; then
-          echo "::warning::Posting the full review failed; retrying summary-only as COMMENT"
-          jq '{body: .body, event: "COMMENT"}' /tmp/review-payload.json > /tmp/review-summary-only.json
-          post /tmp/review-summary-only.json
+          echo "::warning::Posting the review failed; retrying without inline comments"
+          jq '{body: .body, event: "COMMENT"}' /tmp/review-payload.json > /tmp/review-minimal.json
+          post /tmp/review-minimal.json
         fi

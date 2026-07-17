@@ -161,7 +161,7 @@ jobs:
     with:
       backend: openai             # optional: openai (default), anthropic, or gemini
       language: ja                # optional (default: en)
-      model: gpt-5.6-luna         # optional (default: backend default)
+      # model:                    # optional; if set it MUST match `backend` (default: the backend's own default)
       effort: low                 # optional reasoning effort
       max-turns: "20"             # optional agent iteration cap
       max-budget-tokens: "200000" # optional token budget (partial review if exceeded)
@@ -176,8 +176,10 @@ jobs:
 
 The review works with any of the three direct LLM backends — `openai`
 (default), `anthropic`, or `gemini` — via native tool calling; set `backend`
-and pass the matching key secret. (The whole-agent `codex`/`kessel` backends
-are not supported for review.)
+and pass the matching key secret. Leave `model` unset to use that backend's
+default; if you do set `model`, it must be one that backend serves (an explicit
+model overrides the backend default). (The whole-agent `codex`/`kessel`
+backends are not supported for review.)
 
 Pin `@main` or a tag (GitHub Actions has no `@latest` ref). Release binaries
 (`klein_<os>_<arch>.tar.gz`) are attached by `.github/workflows/release.yml`

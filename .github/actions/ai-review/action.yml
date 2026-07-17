@@ -348,12 +348,16 @@ runs:
             -F body=@/tmp/summary-body.txt --jq .id
         fi
 
-        # --- Minimal review: inline comments + verdict event only. Skipped
-        # when there is nothing to attach and no review state to set.
-        EVENT=$(jq -r '{approve: "APPROVE", request_changes: "REQUEST_CHANGES"}[.verdict] // "COMMENT"' /tmp/review-result.json)
+        # --- Minimal review carrying the inline comments. The sticky summary
+        # already states the verdict, so a review is only worth posting when
+        # there are line-anchored comments — or the verdict is blocking
+        # (request_changes). APPROVE is never sent: the github-actions bot
+        # can't approve, and GitHub would downgrade it to an empty COMMENT
+        # review (noise). approve/comment therefore map to a COMMENT event.
+        EVENT=$(jq -r 'if .verdict == "request_changes" then "REQUEST_CHANGES" else "COMMENT" end' /tmp/review-result.json)
         N_COMMENTS=$(jq '.comments | length' /tmp/review-result.json)
         if [ "$N_COMMENTS" -eq 0 ] && [ "$EVENT" = "COMMENT" ]; then
-          echo "No inline comments and neutral verdict — summary comment only"
+          echo "No inline comments and non-blocking verdict — summary comment only"
           exit 0
         fi
 
@@ -373,8 +377,11 @@ runs:
           gh api "repos/$GITHUB_REPOSITORY/pulls/$PR/reviews" --method POST --input "$1"
         }
 
+        # On failure (e.g. the token can't REQUEST_CHANGES), retry once as a
+        # COMMENT event keeping the inline comments. The summary comment is
+        # already posted, so a further failure is only a warning.
         if ! post /tmp/review-payload.json; then
-          echo "::warning::Posting the review failed; retrying without inline comments"
-          jq '{body: .body, event: "COMMENT"}' /tmp/review-payload.json > /tmp/review-minimal.json
-          post /tmp/review-minimal.json
+          echo "::warning::Review post failed; retrying as a COMMENT event"
+          jq '.event = "COMMENT"' /tmp/review-payload.json > /tmp/review-retry.json
+          post /tmp/review-retry.json || echo "::warning::Review post failed; summary comment already posted"
         fi

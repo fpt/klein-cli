@@ -72,18 +72,43 @@ func (e *Enricher) Render(ctx context.Context, files []FileDiff, ranges Ranges) 
 // Returns nil when unreadable (deleted/binary/missing) — rendering then falls
 // back to the raw hunk without extra context.
 //
-// The path comes from the untrusted diff, so it must stay inside the
-// checkout: a crafted "../…" or absolute path could otherwise pull arbitrary
-// files from the host into the LLM prompt.
+// The path comes from the untrusted diff and the checkout may contain
+// attacker-authored symlinks, so containment is enforced twice: IsLocal
+// rejects lexical escapes ("../…", absolute), and the symlink-resolved path
+// must still be under the resolved working directory. Otherwise a crafted
+// diff could pull arbitrary host files into the LLM prompt.
 func (e *Enricher) readFileLines(ctx context.Context, path string) []string {
 	if !filepath.IsLocal(path) {
 		return nil
 	}
-	data, err := e.fsRepo.ReadFile(ctx, filepath.Join(e.workingDir, path))
+	full := filepath.Join(e.workingDir, path)
+	if !containedAfterSymlinks(e.workingDir, full) {
+		return nil
+	}
+	data, err := e.fsRepo.ReadFile(ctx, full)
 	if err != nil {
 		return nil
 	}
 	return strings.Split(string(data), "\n")
+}
+
+// containedAfterSymlinks reports whether full still resides under root once
+// every symlink in both is resolved. Resolution failures (missing file) count
+// as not contained — the caller treats that the same as unreadable.
+func containedAfterSymlinks(root, full string) bool {
+	resolvedRoot, err := filepath.EvalSymlinks(root)
+	if err != nil {
+		return false
+	}
+	resolvedFull, err := filepath.EvalSymlinks(full)
+	if err != nil {
+		return false
+	}
+	rel, err := filepath.Rel(resolvedRoot, resolvedFull)
+	if err != nil {
+		return false
+	}
+	return rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
 }
 
 // renderHunk renders one hunk with up to e.context extra lines before and

@@ -113,6 +113,48 @@ func TestEnricherRender_PathTraversalBlocked(t *testing.T) {
 	mustNotContain(t, out, "TOP-SECRET")
 }
 
+func TestEnricherRender_SymlinkTraversalBlocked(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "secret.txt"), []byte("TOP-SECRET"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	checkout := filepath.Join(dir, "repo")
+	if err := os.MkdirAll(checkout, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// A checkout-internal symlink pointing outside: "escape" -> parent dir.
+	// The lexical path "escape/secret.txt" passes IsLocal but must be blocked
+	// after symlink resolution.
+	if err := os.Symlink(dir, filepath.Join(checkout, "escape")); err != nil {
+		t.Fatal(err)
+	}
+
+	diff := `--- a/escape/secret.txt
++++ b/escape/secret.txt
+@@ -1 +1 @@
+-a
++b
+`
+	files := mustParse(t, diff)
+	e := NewEnricher(infra.NewOSFilesystemRepository(), checkout, 10)
+	out := e.Render(context.Background(), files, CommentableRanges(files))
+	mustNotContain(t, out, "TOP-SECRET")
+}
+
+func TestContainedAfterSymlinks_AllowsRegularFiles(t *testing.T) {
+	t.Parallel()
+	// Guard against over-blocking: a normal file under a (possibly
+	// symlinked, e.g. macOS /tmp) working directory must stay readable.
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "ok.txt"), []byte("fine"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if !containedAfterSymlinks(dir, filepath.Join(dir, "ok.txt")) {
+		t.Error("regular file inside workdir should be contained")
+	}
+}
+
 func TestBuildPrompt(t *testing.T) {
 	t.Parallel()
 	p := BuildPrompt(Request{Title: "Fix bug", Body: "Details here"}, "DIFF-CONTENT", "")

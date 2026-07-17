@@ -73,6 +73,71 @@ func TestEnricherRender(t *testing.T) {
 	mustNotContain(t, out, "ctx| line 6", "ctx| line 16")
 }
 
+func TestEnricherRender_ByteBudget(t *testing.T) {
+	t.Parallel()
+	bigDiff := func(path string, n int) string {
+		var sb strings.Builder
+		fmt.Fprintf(&sb, "--- a/%s\n+++ b/%s\n@@ -0,0 +1,%d @@\n", path, path, n)
+		for i := 1; i <= n; i++ {
+			fmt.Fprintf(&sb, "+line %d in %s\n", i, path)
+		}
+		return sb.String()
+	}
+	diff := bigDiff("a.txt", 200) + bigDiff("b.txt", 200) // each ~5 KB rendered
+	files := mustParse(t, diff)
+	ranges := CommentableRanges(files)
+
+	// Empty workdir → no enrichment; the hunk bodies alone blow a 1500-byte
+	// budget, so the render is cut at a line boundary with a visible marker.
+	// Marker space is reserved, so the total stays within the budget.
+	out := NewEnricher(infra.NewOSFilesystemRepository(), t.TempDir(), 0).
+		WithMaxBytes(1500).Render(context.Background(), files, ranges)
+	if len(out) > 1500 {
+		t.Errorf("rendered %d bytes, expected within the 1500 budget", len(out))
+	}
+	if !strings.HasSuffix(out, truncationMarker) {
+		t.Errorf("truncated output should end with the marker, got tail %q", out[max(0, len(out)-80):])
+	}
+	mustNotContain(t, out, "line 200 in b.txt")
+
+	// Unbounded render includes everything.
+	full := NewEnricher(infra.NewOSFilesystemRepository(), t.TempDir(), 0).
+		Render(context.Background(), files, ranges)
+	mustContain(t, full, "line 200 in b.txt")
+	mustNotContain(t, full, "diff truncated")
+
+	// Budget ≥ marker but < first line: only the marker is emitted, still within budget.
+	mb := len(truncationMarker) + 8
+	onlyMarker := NewEnricher(infra.NewOSFilesystemRepository(), t.TempDir(), 0).
+		WithMaxBytes(mb).Render(context.Background(), files, ranges)
+	if len(onlyMarker) > mb {
+		t.Errorf("marker-only render %d bytes exceeds budget %d", len(onlyMarker), mb)
+	}
+	mustContain(t, onlyMarker, "diff truncated to bound prompt size")
+
+	// Budget smaller than the marker itself: strictly bounded, no partial line
+	// (the marker won't fit, so it is dropped rather than overrun the budget).
+	tiny := NewEnricher(infra.NewOSFilesystemRepository(), t.TempDir(), 0).
+		WithMaxBytes(5).Render(context.Background(), files, ranges)
+	if len(tiny) > 5 {
+		t.Errorf("tiny budget exceeded: %d bytes for a 5-byte budget", len(tiny))
+	}
+}
+
+func TestTruncateAtLine(t *testing.T) {
+	t.Parallel()
+	s := "aaa\nbbb\nccc\n"
+	if got := truncateAtLine(s, 100); got != s {
+		t.Errorf("under budget: got %q", got)
+	}
+	if got := truncateAtLine(s, 6); got != "aaa\n" {
+		t.Errorf("cut at line boundary: got %q", got)
+	}
+	if got := truncateAtLine("verylongsingleline\n", 5); got != "" {
+		t.Errorf("no newline within budget should yield empty, got %q", got)
+	}
+}
+
 func TestEnricherRender_UnreadableFile(t *testing.T) {
 	t.Parallel()
 	diff := `--- a/missing.txt

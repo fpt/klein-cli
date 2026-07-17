@@ -15,11 +15,19 @@ type Enricher struct {
 	fsRepo     repository.FilesystemRepository
 	workingDir string
 	context    int // lines of extra context around each hunk
+	maxBytes   int // budget for the whole rendered diff; 0 = unbounded
 }
 
 // NewEnricher creates an Enricher reading files relative to workingDir.
 func NewEnricher(fsRepo repository.FilesystemRepository, workingDir string, contextLines int) *Enricher {
 	return &Enricher{fsRepo: fsRepo, workingDir: workingDir, context: contextLines}
+}
+
+// WithMaxBytes bounds the total size of the rendered diff (see Render). A value
+// <= 0 leaves it unbounded. Returns the receiver for chaining.
+func (e *Enricher) WithMaxBytes(n int) *Enricher {
+	e.maxBytes = n
+	return e
 }
 
 // Render produces the annotated review view of all file diffs. Layout per file:
@@ -32,7 +40,9 @@ func NewEnricher(fsRepo repository.FilesystemRepository, workingDir string, cont
 //	          -  | removed line (no new-side number)
 //
 // New-side line numbers appear in brackets only for commentable lines, so the
-// model cannot mistake enrichment context for valid comment targets.
+// model cannot mistake enrichment context for valid comment targets. When a
+// byte budget is set (WithMaxBytes) the result is truncated at a line boundary
+// with a visible marker, so a huge PR can't produce an unbounded prompt.
 func (e *Enricher) Render(ctx context.Context, files []FileDiff, ranges Ranges) string {
 	var b strings.Builder
 	for _, f := range files {
@@ -65,7 +75,38 @@ func (e *Enricher) Render(ctx context.Context, files []FileDiff, ranges Ranges) 
 		}
 		b.WriteString("\n")
 	}
-	return strings.TrimRight(b.String(), "\n") + "\n"
+
+	return e.applyByteBudget(strings.TrimRight(b.String(), "\n") + "\n")
+}
+
+const truncationMarker = "... [diff truncated to bound prompt size — later changes are not shown]\n"
+
+// applyByteBudget truncates out to at most e.maxBytes bytes (0 = unbounded),
+// always on a line boundary. When it fits, out is returned unchanged; when the
+// budget has room for the marker, the marker is appended within the budget;
+// when it doesn't, only the line-boundary prefix that fits is returned.
+func (e *Enricher) applyByteBudget(out string) string {
+	if e.maxBytes <= 0 || len(out) <= e.maxBytes {
+		return out
+	}
+	if e.maxBytes < len(truncationMarker) {
+		return truncateAtLine(out, e.maxBytes)
+	}
+	return truncateAtLine(out, e.maxBytes-len(truncationMarker)) + truncationMarker
+}
+
+// truncateAtLine returns the longest prefix of s that is at most n bytes and
+// ends on a line boundary. When no newline fits within n, it returns "" rather
+// than a partial line — the contract is that the result never ends mid-line
+// (which would also risk splitting a multi-byte rune).
+func truncateAtLine(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	if nl := strings.LastIndexByte(s[:n], '\n'); nl >= 0 {
+		return s[:nl+1]
+	}
+	return ""
 }
 
 // readFileLines reads the new-side file content for context expansion.

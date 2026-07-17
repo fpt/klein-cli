@@ -143,6 +143,17 @@ comments alone exceed the cap, some must-level findings couldn't be posted, so
 marker and the **next** review runs as a full review (not incremental) to
 re-surface the trimmed findings against the whole PR.
 
+**Prompt-size bound** (`--max-diff-bytes`, default 500 000; 0 = unbounded):
+`Enricher.Render` truncates the enriched diff at a line boundary once it
+exceeds the budget (reserving room for a visible marker, so the total stays
+within the budget — for a budget too small even for the marker, the marker is
+dropped rather than overrun). This bounds the *input* the model receives, so a huge PR
+can't hard-error the first model call with `context_length_exceeded` — a
+failure `--max-budget-tokens` can't prevent, since the budget is only checked
+*after* a call returns. Truncation is always on a line boundary (never a
+partial or half-rune line); Commentable ranges still derive from the full diff,
+so line validation stays correct — the budget only limits what is *shown*.
+
 ## 4. Diff parsing and commentable ranges (`internal/review/diff.go`)
 
 `ParseUnifiedDiff` scans the diff line by line via a small `diffParser` state

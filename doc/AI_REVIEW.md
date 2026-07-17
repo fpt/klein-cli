@@ -36,7 +36,7 @@ skill, or `.github/actions/ai-review/`.
 
 ```
 ┌────────────────────────── GitHub Actions (harness) ──────────────────────────┐
-│  1. checkout PR head          (actions/checkout, shallow OK)                 │
+│  1. checkout PR head          (actions/checkout, full depth)                 │
 │  2. gh pr view / gh pr diff → review-request.json                            │
 │                    │                                                         │
 │                    ▼                                                         │

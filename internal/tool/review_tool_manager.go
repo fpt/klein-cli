@@ -119,7 +119,8 @@ func (m *ReviewToolManager) register() {
 			{Name: reviewArgPath, Required: true, Type: "string",
 				Description: "File path exactly as shown in the diff (e.g. internal/foo.go)"},
 			{Name: reviewArgLine, Required: true, Type: "number",
-				Description: "New-side line number the comment applies to (the last line for a multi-line comment)"},
+				Description: "New-side line number the comment targets; for a multi-line comment this is the FIRST " +
+					"line of the range (end_line is the last)"},
 			{Name: reviewArgEndLine, Required: false, Type: "number",
 				Description: "For a multi-line comment: the last line of the range; 'line' is then the first. Omit for single-line."},
 			{Name: reviewArgSeverity, Required: true, Type: "string",

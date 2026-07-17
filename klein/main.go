@@ -71,6 +71,9 @@ func main() {
 	if len(os.Args) > 1 && os.Args[1] == "claw" {
 		os.Exit(runClawCommand(os.Args[2:]))
 	}
+	if len(os.Args) > 1 && os.Args[1] == "review" {
+		os.Exit(runReviewCommand(os.Args[2:]))
+	}
 
 	// Define command line flags
 	backend := flag.String("b", "", "LLM backend (openai, anthropic, gemini, codex, or kessel)")

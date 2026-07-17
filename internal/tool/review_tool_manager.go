@@ -1,0 +1,263 @@
+package tool
+
+import (
+	"context"
+	"fmt"
+	"strings"
+	"sync"
+
+	"github.com/fpt/klein-cli/pkg/agent/domain"
+	"github.com/fpt/klein-cli/pkg/message"
+)
+
+// Argument names shared by the review tools.
+const (
+	reviewArgPath     = "path"
+	reviewArgLine     = "line"
+	reviewArgEndLine  = "end_line"
+	reviewArgSeverity = "severity"
+	reviewArgComment  = "comment"
+	reviewArgSummary  = "summary"
+	reviewArgVerdict  = "verdict"
+)
+
+// reviewVerdictDefault is used when the model never sets a verdict.
+const reviewVerdictDefault = "comment"
+
+// ReviewComment is one accumulated inline review comment. Line/EndLine are
+// new-side (RIGHT) line numbers; EndLine equals Line for single-line comments.
+//
+//nolint:tagliatelle // snake_case keys are the harness contract (mapped to the GitHub reviews API by jq)
+type ReviewComment struct {
+	Path     string `json:"path"`
+	Severity string `json:"severity,omitempty"`
+	Body     string `json:"body"`
+	Line     int    `json:"line"`
+	EndLine  int    `json:"end_line,omitempty"`
+}
+
+// ReviewResult is the outcome of a review session, serialized by the
+// `klein review` subcommand for the harness to post.
+type ReviewResult struct {
+	Summary   string          `json:"summary"`
+	Verdict   string          `json:"verdict"`
+	Comments  []ReviewComment `json:"comments"`
+	Finalized bool            `json:"finalized"`
+}
+
+// LineValidator checks that an inline comment target [line, endLine] on path
+// falls within the diff's commentable ranges (endLine == line for single-line).
+// Injected by the subcommand so this package needs no diff knowledge.
+type LineValidator func(path string, line, endLine int) error
+
+var reviewSeverities = map[string]bool{"critical": true, "major": true, "minor": true, "nit": true}
+
+var reviewVerdicts = map[string]bool{"approve": true, reviewVerdictDefault: true, "request_changes": true}
+
+// ReviewToolManager provides AddInlineReview/AddSummaryReview/FinalizeReview
+// tools that accumulate a code review in memory. It performs no I/O — the
+// `klein review` subcommand reads Result() after the agent run.
+type ReviewToolManager struct {
+	tools    map[message.ToolName]message.Tool
+	validate LineValidator
+	summary  string
+	verdict  string
+	comments []ReviewComment
+
+	mu        sync.Mutex
+	finalized bool
+}
+
+// NewReviewToolManager creates a review tool manager. validate must not be nil.
+func NewReviewToolManager(validate LineValidator) *ReviewToolManager {
+	m := &ReviewToolManager{
+		tools:    make(map[message.ToolName]message.Tool),
+		validate: validate,
+		verdict:  reviewVerdictDefault,
+	}
+	m.register()
+	return m
+}
+
+func (m *ReviewToolManager) register() {
+	m.RegisterTool("AddInlineReview",
+		"Add one inline review comment on a specific line of the diff. "+
+			"The line MUST be a bracketed new-side line number shown in the annotated diff (a commentable line); "+
+			"lines marked 'ctx' are not valid targets. Call once per finding.",
+		[]message.ToolArgument{
+			{Name: reviewArgPath, Required: true, Type: "string",
+				Description: "File path exactly as shown in the diff (e.g. internal/foo.go)"},
+			{Name: reviewArgLine, Required: true, Type: "number",
+				Description: "New-side line number the comment applies to (the last line for a multi-line comment)"},
+			{Name: reviewArgEndLine, Required: false, Type: "number",
+				Description: "For a multi-line comment: the last line of the range; 'line' is then the first. Omit for single-line."},
+			{Name: reviewArgSeverity, Required: false, Type: "string",
+				Description: "One of: critical, major, minor, nit"},
+			{Name: reviewArgComment, Required: true, Type: "string",
+				Description: "The review comment (markdown). State the problem and, when possible, a concrete fix."},
+		},
+		m.handleAddInline)
+
+	m.RegisterTool("AddSummaryReview",
+		"Set the overall review summary (markdown) posted as the review body. "+
+			"Call once, after all inline comments; calling again replaces the previous summary.",
+		[]message.ToolArgument{
+			{Name: reviewArgSummary, Required: true, Type: "string",
+				Description: "Overall assessment of the change: what it does, strengths, key risks, and a wrap-up of the findings."},
+			{Name: reviewArgVerdict, Required: false, Type: "string",
+				Description: "One of: approve, comment (default), request_changes"},
+		},
+		m.handleAddSummary)
+
+	m.RegisterTool("FinalizeReview",
+		"Mark the review complete. Call exactly once, after AddSummaryReview. Returns the final comment count.",
+		nil,
+		m.handleFinalize)
+}
+
+// parseInlineArgs validates AddInlineReview arguments and returns the comment
+// to record, or a non-empty error message for the model.
+func parseInlineArgs(args message.ToolArgumentValues) (ReviewComment, string) {
+	c := ReviewComment{
+		Path:    stringArg(args, reviewArgPath),
+		Body:    strings.TrimSpace(stringArg(args, reviewArgComment)),
+		Line:    intArg(args, reviewArgLine, 0),
+		EndLine: intArg(args, reviewArgEndLine, 0),
+	}
+	if c.Path == "" || c.Body == "" {
+		return c, "path and comment are required"
+	}
+	if c.Line <= 0 {
+		return c, "line must be a positive new-side line number from the annotated diff"
+	}
+	if c.EndLine == 0 {
+		c.EndLine = c.Line
+	}
+	if c.EndLine < c.Line {
+		// Tolerate swapped bounds rather than bouncing the model.
+		c.Line, c.EndLine = c.EndLine, c.Line
+	}
+	c.Severity = strings.ToLower(stringArg(args, reviewArgSeverity))
+	if c.Severity != "" && !reviewSeverities[c.Severity] {
+		return c, fmt.Sprintf("invalid severity %q: use critical, major, minor, or nit", c.Severity)
+	}
+	return c, ""
+}
+
+func (m *ReviewToolManager) handleAddInline(_ context.Context, args message.ToolArgumentValues) (message.ToolResult, error) {
+	c, errMsg := parseInlineArgs(args)
+	if errMsg != "" {
+		return message.NewToolResultError(errMsg), nil
+	}
+	if err := m.validate(c.Path, c.Line, c.EndLine); err != nil {
+		return message.NewToolResultError(err.Error()), nil
+	}
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.finalized {
+		return message.NewToolResultError("review already finalized; no further comments can be added"), nil
+	}
+	for _, prev := range m.comments {
+		if prev.Path == c.Path && prev.Line == c.Line && prev.EndLine == c.EndLine {
+			return message.NewToolResultError(fmt.Sprintf(
+				"a comment on %s:%d already exists; do not repeat findings", c.Path, c.Line)), nil
+		}
+	}
+	m.comments = append(m.comments, c)
+	return message.NewToolResultText(fmt.Sprintf(
+		"Recorded inline comment #%d on %s:%d.", len(m.comments), c.Path, c.Line)), nil
+}
+
+func (m *ReviewToolManager) handleAddSummary(_ context.Context, args message.ToolArgumentValues) (message.ToolResult, error) {
+	summary := strings.TrimSpace(stringArg(args, reviewArgSummary))
+	if summary == "" {
+		return message.NewToolResultError("summary is required"), nil
+	}
+	verdict := strings.ToLower(stringArg(args, reviewArgVerdict))
+	if verdict != "" && !reviewVerdicts[verdict] {
+		return message.NewToolResultError(fmt.Sprintf(
+			"invalid verdict %q: use approve, comment, or request_changes", verdict)), nil
+	}
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.finalized {
+		return message.NewToolResultError("review already finalized; the summary can no longer be changed"), nil
+	}
+	replaced := m.summary != ""
+	m.summary = summary
+	if verdict != "" {
+		m.verdict = verdict
+	}
+	if replaced {
+		return message.NewToolResultText("Summary replaced. Call FinalizeReview to complete the review."), nil
+	}
+	return message.NewToolResultText("Summary recorded. Call FinalizeReview to complete the review."), nil
+}
+
+func (m *ReviewToolManager) handleFinalize(_ context.Context, _ message.ToolArgumentValues) (message.ToolResult, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.summary == "" {
+		return message.NewToolResultError("no summary set — call AddSummaryReview before FinalizeReview"), nil
+	}
+	if m.finalized {
+		return message.NewToolResultError("review already finalized"), nil
+	}
+	m.finalized = true
+	return message.NewToolResultText(fmt.Sprintf(
+		"Review finalized: %d inline comment(s), verdict %s. "+
+			"Reply with a one-line confirmation; the harness posts the review.",
+		len(m.comments), m.verdict)), nil
+}
+
+// Result returns the accumulated review.
+func (m *ReviewToolManager) Result() ReviewResult {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	comments := make([]ReviewComment, len(m.comments))
+	copy(comments, m.comments)
+	return ReviewResult{Summary: m.summary, Verdict: m.verdict, Finalized: m.finalized, Comments: comments}
+}
+
+// --- domain.ToolManager ---
+
+// GetTools returns all registered review tools.
+func (m *ReviewToolManager) GetTools() map[message.ToolName]message.Tool { return m.tools }
+
+// CallTool executes the named review tool.
+func (m *ReviewToolManager) CallTool(
+	ctx context.Context, name message.ToolName, args message.ToolArgumentValues,
+) (message.ToolResult, error) {
+	t, ok := m.tools[name]
+	if !ok {
+		return message.NewToolResultError(fmt.Sprintf("tool '%s' not found", name)), nil
+	}
+	return t.Handler()(ctx, args)
+}
+
+// RegisterTool registers a tool with the manager.
+func (m *ReviewToolManager) RegisterTool(
+	name message.ToolName, description message.ToolDescription, arguments []message.ToolArgument,
+	handler func(ctx context.Context, args message.ToolArgumentValues) (message.ToolResult, error),
+) {
+	m.tools[name] = &reviewTool{name: name, description: description, arguments: arguments, handler: handler}
+}
+
+type reviewTool struct {
+	handler     func(ctx context.Context, args message.ToolArgumentValues) (message.ToolResult, error)
+	name        message.ToolName
+	description message.ToolDescription
+	arguments   []message.ToolArgument
+}
+
+func (t *reviewTool) RawName() message.ToolName            { return t.name }
+func (t *reviewTool) Name() message.ToolName               { return t.name }
+func (t *reviewTool) Description() message.ToolDescription { return t.description }
+func (t *reviewTool) Arguments() []message.ToolArgument    { return t.arguments }
+func (t *reviewTool) Handler() func(ctx context.Context, args message.ToolArgumentValues) (message.ToolResult, error) {
+	return t.handler
+}
+
+var _ domain.ToolManager = (*ReviewToolManager)(nil)

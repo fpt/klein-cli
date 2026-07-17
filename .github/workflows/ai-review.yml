@@ -1,0 +1,38 @@
+# Reference user of .github/actions/ai-review: AI-reviews this repo's own PRs.
+# Note: secrets are unavailable on PRs from forks, so the job is skipped there.
+name: AI Review
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: read
+  pull-requests: write
+
+concurrency:
+  group: ai-review-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  review:
+    runs-on: ubuntu-latest
+    if: github.event.pull_request.head.repo.full_name == github.repository
+    steps:
+      - name: Checkout PR head
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Build klein
+        run: go build -o /usr/local/bin/klein ./klein
+
+      - name: AI review
+        uses: ./.github/actions/ai-review
+        with:
+          openai-api-key: ${{ secrets.OPENAI_API_KEY }}

@@ -104,6 +104,34 @@ klein -b openai -m gpt-5.6-luna "Create a console program which calculates fibon
 klein -b anthropic "Write a simple main.go that prints 'Hello, world!'. Use write tool."
 ```
 
+### AI Code Review (`klein review`)
+
+`klein review` runs an AI code review over a unified diff. It is designed to be
+driven by a harness (e.g. a GitHub Action) that handles all GitHub interaction —
+klein itself never runs `git` or `gh`:
+
+1. The harness fetches the PR title/description and diff, and checks out the PR head.
+2. `klein review` enriches each hunk with ±10 context lines read from the checkout,
+   then reviews with a restricted toolset: `Read`, `Glob`, `LS`, plus
+   `AddInlineReview` / `AddSummaryReview` / `FinalizeReview` to accumulate the review.
+   Inline comment lines are validated to fall within the diff's new-side hunk ranges.
+3. The harness posts the result as one PR review (inline comments + summary).
+
+```bash
+# Input:  {"title": "...", "body": "...", "diff": "<unified diff>"}
+# Output: {"summary", "verdict", "finalized", "comments": [{"path", "line", "end_line", "severity", "body"}]}
+klein review --input review-request.json --output review-result.json --workdir /path/to/pr-head
+
+# Backend/model/context overrides
+klein review -b openai -m gpt-5.6-luna --context 10 --input - < review-request.json
+```
+
+A ready-made harness lives in this repo: the composite action
+`.github/actions/ai-review` (fetches the PR, runs `klein review`, posts the
+review via `gh api`) and the reference workflow `.github/workflows/ai-review.yml`
+that reviews this repo's own PRs. To use it, set the `OPENAI_API_KEY` repository
+secret.
+
 ## Supported Models
 
 - **Anthropic**: `claude-opus-4-7`, `claude-sonnet-4-6`, `claude-haiku-4-5`

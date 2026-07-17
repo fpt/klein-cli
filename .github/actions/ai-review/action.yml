@@ -1,0 +1,98 @@
+name: AI Code Review (klein)
+description: >
+  Runs `klein review` over a pull request and posts the result as one PR review
+  (inline comments + summary). All GitHub interaction (gh/jq) happens here in
+  the harness — klein itself never runs git or gh.
+
+inputs:
+  openai-api-key:
+    description: API key for the LLM backend (exported as OPENAI_API_KEY)
+    required: true
+  backend:
+    description: klein LLM backend (openai, anthropic, gemini)
+    required: false
+    default: openai
+  model:
+    description: Model override (empty = backend default)
+    required: false
+    default: ""
+  github-token:
+    description: Token used to read the PR and post the review
+    required: false
+    default: ${{ github.token }}
+  pr-number:
+    description: Pull request number (default = current event's PR)
+    required: false
+    default: ${{ github.event.pull_request.number }}
+  klein-path:
+    description: Path to the klein binary
+    required: false
+    default: klein
+
+runs:
+  using: composite
+  steps:
+    - name: Build review request
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.github-token }}
+        PR: ${{ inputs.pr-number }}
+      run: |
+        set -euo pipefail
+        gh pr view "$PR" --repo "$GITHUB_REPOSITORY" --json title,body > /tmp/pr-meta.json
+        gh pr diff "$PR" --repo "$GITHUB_REPOSITORY" > /tmp/pr.diff
+        jq --rawfile diff /tmp/pr.diff '{title: .title, body: (.body // ""), diff: $diff}' \
+          /tmp/pr-meta.json > /tmp/review-request.json
+
+    - name: Run klein review
+      shell: bash
+      env:
+        # For the anthropic/gemini backends, set ANTHROPIC_API_KEY/GEMINI_API_KEY
+        # in the calling workflow's env instead.
+        OPENAI_API_KEY: ${{ inputs.openai-api-key }}
+      run: |
+        set -euo pipefail
+        MODEL_ARGS=()
+        if [ -n "${{ inputs.model }}" ]; then
+          MODEL_ARGS=(-m "${{ inputs.model }}")
+        fi
+        "${{ inputs.klein-path }}" review \
+          -b "${{ inputs.backend }}" "${MODEL_ARGS[@]}" \
+          --input /tmp/review-request.json \
+          --output /tmp/review-result.json \
+          --workdir "$GITHUB_WORKSPACE"
+        jq . /tmp/review-result.json
+
+    - name: Post PR review
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.github-token }}
+        PR: ${{ inputs.pr-number }}
+      run: |
+        set -euo pipefail
+
+        # verdict → review event; GitHub may forbid APPROVE/REQUEST_CHANGES for
+        # the workflow token depending on repo settings, hence the fallback below.
+        EVENT=$(jq -r '{approve: "APPROVE", request_changes: "REQUEST_CHANGES"}[.verdict] // "COMMENT"' /tmp/review-result.json)
+
+        jq --arg event "$EVENT" '{
+          body: (.summary + "\n\n---\n_AI review by klein (" + (.comments | length | tostring) + " inline comment(s))_"),
+          event: $event,
+          comments: [ .comments[] | {
+            path: .path,
+            side: "RIGHT",
+            body: ((if (.severity // "") != "" then "**[" + .severity + "]** " else "" end) + .body)
+          } + (if (.end_line // .line) > .line
+               then {start_line: .line, start_side: "RIGHT", line: .end_line}
+               else {line: .line} end) ]
+        }' /tmp/review-result.json > /tmp/review-payload.json
+
+        post() {
+          gh api "repos/$GITHUB_REPOSITORY/pulls/$PR/reviews" --method POST --input "$1"
+        }
+
+        if ! post /tmp/review-payload.json; then
+          echo "::warning::Posting the full review failed; retrying summary-only as COMMENT"
+          jq '{body: .body, event: "COMMENT"}' /tmp/review-payload.json > /tmp/review-summary-only.json
+          post /tmp/review-summary-only.json
+        fi

@@ -371,6 +371,30 @@ runs:
             -F body=@/tmp/summary-body.txt --jq .id
         fi
 
+        # --- Dismiss our own stale change requests. A CHANGES_REQUESTED review
+        # stays "sticky" until dismissed — resolving threads or posting COMMENT
+        # reviews does not clear it — so once a later round no longer requests
+        # changes, dismiss the bot's still-active CHANGES_REQUESTED review(s) or
+        # the PR keeps showing a blocking change request with no open comments.
+        # Best-effort: a failed dismissal is a warning, not a hard failure.
+        if [ "$(jq -r '.verdict' /tmp/review-result.json)" != "request_changes" ]; then
+          gh api "repos/$GITHUB_REPOSITORY/pulls/$PR/reviews" --paginate 2>/dev/null \
+            | jq -rs 'add // [] | .[]
+                      | select(.user.login == "github-actions[bot]" and .state == "CHANGES_REQUESTED")
+                      | .id' \
+            | while read -r RID; do
+                [ -n "$RID" ] || continue
+                if gh api --method PUT \
+                    "repos/$GITHUB_REPOSITORY/pulls/$PR/reviews/$RID/dismissals" \
+                    -f message="Superseded: the latest AI review no longer requests changes." \
+                    -f event=DISMISS > /dev/null; then
+                  echo "Dismissed stale changes-requested review $RID"
+                else
+                  echo "::warning::Failed to dismiss review $RID"
+                fi
+              done
+        fi
+
         # --- Minimal review carrying the inline comments. The sticky summary
         # already states the verdict, so a review is only worth posting when
         # there are line-anchored comments — or the verdict is blocking

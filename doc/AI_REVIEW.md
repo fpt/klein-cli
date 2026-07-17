@@ -325,6 +325,14 @@ A composite action, deliberately thin — `git` (read-only), `gh`, and `jq`:
      verdict event (`APPROVE`/`REQUEST_CHANGES`/`COMMENT`), with a one-line
      body pointing at the summary comment. Skipped entirely when there are
      no inline comments and the verdict is neutral (`comment`).
+6. **Dismiss stale change requests.** A `CHANGES_REQUESTED` review is *sticky*
+   on GitHub — resolving its threads or posting later `COMMENT` reviews does
+   **not** clear it; only a dismissal or an `APPROVE` (which the bot can't do)
+   does. So when a round's verdict is no longer `request_changes`, the action
+   dismisses the bot's still-active `CHANGES_REQUESTED` review(s) via the
+   review `dismissals` endpoint. Without this, a PR that was fixed after an
+   early blocking round keeps showing "changes requested" with no open
+   comments. Best-effort: a failed dismissal is a warning.
 
 If the review POST fails (e.g. repo settings forbid the Actions token from
 APPROVE/REQUEST_CHANGES, or an edge-case comment is still rejected), the

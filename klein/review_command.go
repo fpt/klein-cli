@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"sort"
 	"strings"
 
 	"github.com/fpt/klein-cli/internal/app"
@@ -62,6 +63,7 @@ type reviewOptions struct {
 	contextLines     int
 	maxTurns         int
 	maxBudget        int
+	maxComments      int
 	includeGenerated bool
 	verbose          bool
 }
@@ -84,6 +86,8 @@ func parseReviewFlags(args []string) (opts reviewOptions, code int, ok bool) {
 	maxBudget := fs.Int("max-budget-tokens", 0, "Cumulative token budget for the run; exceeding it stops the review, keeping comments gathered so far (0 = unlimited)")
 	includeGenerated := fs.Bool("include-generated", false,
 		"Review generated files too (default: skip '// Code generated ... DO NOT EDIT.' files)")
+	maxComments := fs.Int("max-comments", 15,
+		"Cap on inline comments; excess are trimmed lowest-severity-first (0 = unlimited)")
 	verbose := fs.Bool("v", false, "Enable verbose (debug) logging")
 	fs.Usage = func() {
 		fmt.Fprint(os.Stderr, reviewUsage)
@@ -109,6 +113,7 @@ func parseReviewFlags(args []string) (opts reviewOptions, code int, ok bool) {
 		contextLines:     *contextLines,
 		maxTurns:         *maxTurns,
 		maxBudget:        *maxBudget,
+		maxComments:      *maxComments,
 		includeGenerated: *includeGenerated,
 		verbose:          *verbose,
 	}, 0, true
@@ -311,7 +316,56 @@ func executeReview(
 	printTokenUsage(a.GetLLMClient())
 
 	result := finalizeReviewResult(reviewMgr.Result(), response, opts, budgetExceeded, logger)
-	return result, nil
+	return capComments(result, opts.maxComments, logger), nil
+}
+
+// severityRank orders comments for trimming: must first, then major, minor,
+// nits; anything unclassified sorts last.
+func severityRank(s string) int {
+	switch s {
+	case "must":
+		return 0
+	case "major":
+		return 1
+	case "minor":
+		return 2
+	case "nits":
+		return 3
+	default:
+		return 4
+	}
+}
+
+// capComments sorts comments by severity and trims to maxComments (0 =
+// unlimited), dropping the lowest-severity excess so it is never posted. When
+// must-level findings alone exceed the cap, ForceFullNext is set so the next
+// round re-scans the whole PR instead of only the increment.
+func capComments(result tool.ReviewResult, maxComments int, logger *pkgLogger.Logger) tool.ReviewResult {
+	if maxComments <= 0 || len(result.Comments) <= maxComments {
+		return result
+	}
+	mustCount := 0
+	for _, c := range result.Comments {
+		if c.Severity == "must" {
+			mustCount++
+		}
+	}
+	sort.SliceStable(result.Comments, func(i, j int) bool {
+		return severityRank(result.Comments[i].Severity) < severityRank(result.Comments[j].Severity)
+	})
+	result.Trimmed = len(result.Comments) - maxComments
+	result.Comments = result.Comments[:maxComments]
+	result.ForceFullNext = mustCount > maxComments
+	logger.Warn("Trimmed comments to cap",
+		"cap", maxComments, "trimmed", result.Trimmed, "must", mustCount, "force_full_next", result.ForceFullNext)
+
+	note := fmt.Sprintf("\n\n_%d lower-severity comment(s) were trimmed to respect the comment cap (%d)._",
+		result.Trimmed, maxComments)
+	if result.ForceFullNext {
+		note += " _More must-level findings exist than the cap allows; the next review will re-scan the full PR._"
+	}
+	result.Summary = strings.TrimRight(result.Summary, "\n") + note
+	return result
 }
 
 // finalizeReviewResult applies the salvage/fallback rules to the accumulated

@@ -49,6 +49,11 @@ on:
         type: string
         required: false
         default: ""
+      max-comments:
+        description: Cap on inline comments; excess trimmed lowest-severity-first (empty = 15, 0 = unlimited)
+        type: string
+        required: false
+        default: ""
       language:
         description: Language for the review output (e.g. en, ja)
         type: string
@@ -95,6 +100,7 @@ jobs:
           effort: ${{ inputs.effort }}
           max-turns: ${{ inputs.max-turns }}
           max-budget-tokens: ${{ inputs.max-budget-tokens }}
+          max-comments: ${{ inputs.max-comments }}
           language: ${{ inputs.language }}
           klein-version: ${{ inputs.klein-version }}
           openai-api-key: ${{ secrets.openai-api-key }}

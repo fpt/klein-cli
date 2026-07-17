@@ -134,6 +134,15 @@ result — comments gathered so far plus a "stopped early" summary and
 enforced in the ReAct loop (`SetTokenBudget` → `ErrTokenBudgetExceeded`);
 `klein review` recognizes that error and salvages state rather than failing.
 
+**Comment cap** (`--max-comments`, default 15; 0 = unlimited): after the run,
+`capComments` sorts the inline comments by severity (must > major > minor >
+nits) and keeps the top N — the excess is **trimmed and never posted**
+(`trimmed_comments` in the result; the summary gets a note). If the *must*
+comments alone exceed the cap, some must-level findings couldn't be posted, so
+`force_full_next` is set: the harness writes `"force_full":true` into the state
+marker and the **next** review runs as a full review (not incremental) to
+re-surface the trimmed findings against the whole PR.
+
 ## 4. Diff parsing and commentable ranges (`internal/review/diff.go`)
 
 `ParseUnifiedDiff` scans the diff line by line via a small `diffParser` state
@@ -317,13 +326,16 @@ Round state lives in the PR itself — no external storage. The sticky summary
 comment ends with:
 
 ```html
-<!-- klein-review-state {"head_sha":"<sha>","diff_sha":"<sha256 of full PR diff>","turn":3,"total":5} -->
+<!-- klein-review-state {"head_sha":"<sha>","diff_sha":"<sha256 of full PR diff>","turn":3,"total":5,"force_full":true} -->
 ```
 
 - `head_sha` — last reviewed head commit (incremental base)
 - `diff_sha` — sha256 of the full PR diff at review time (no-op-rebase skip)
 - `turn` — review round counter (skipped runs don't increment)
 - `total` — cumulative inline comments posted across all rounds
+- `force_full` — present only when the last round trimmed must-level comments;
+  the scope step upgrades the next incremental round to a full review, then it
+  clears (the full round re-surfaces everything)
 
 The marker is written by the *harness* (klein has no SHA knowledge —
 principle #1). Editing or deleting the comment simply causes the next run to
@@ -355,6 +367,8 @@ rapid push supersedes the in-flight review.
 | Sticky comment deleted between rounds | Recreated on the next round (legacy review-body markers still parsed) |
 | `resolveReviewThread` mutation fails | Warning; review is still posted, thread stays open for the next round |
 | Model resolves an id not in `previous_comments` | Tool call bounced (unknown id) |
+| More comments than the cap | Sorted by severity, lowest trimmed and not posted (`trimmed_comments`) |
+| More *must* comments than the cap | As above + `force_full` set → next round is a full review |
 
 ## 10. Testing
 

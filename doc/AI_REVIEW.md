@@ -116,6 +116,14 @@ for single-line comments.
 `Japanese`) — injected into the prompt; comments and summary are written in
 that language. The composite action exposes it as the `language` input.
 
+**Generated files** are skipped by default: any changed file whose new-side
+content carries Go's standard marker (a line matching
+`^// Code generated .* DO NOT EDIT\.$` before the package clause — protoc,
+sqlc, stringer, mockgen, …) is dropped before enrichment, so the model never
+sees it (`review.IsGenerated` / `Enricher.DropGenerated`). If every changed
+file is generated, the run short-circuits to an `approve` result naming the
+skipped files — no model call. `--include-generated` reviews them anyway.
+
 **Model / effort / limits** (all optional, all surfaced as action inputs):
 `-b/--backend`, `-m/--model`, `--effort` (reasoning effort for capable
 models), `--max-turns` (agent iteration cap; overrides the settings default),
@@ -334,6 +342,7 @@ rapid push supersedes the in-flight review.
 | Failure | Behavior |
 |---|---|
 | Empty/unparseable diff | Exit 1 before any model call |
+| All changed files are generated | Exit 0; `approve` result naming skipped files, no model call |
 | Model targets an invalid line | Tool call bounced with the valid ranges; finding is re-placed or dropped by the model |
 | Model never summarizes | Final response becomes the summary, `finalized: false` (logged as a warning) |
 | Review with zero findings | Exit 0; summary-only review is posted |

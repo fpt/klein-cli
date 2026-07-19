@@ -3,7 +3,7 @@
 #   name: AI Review
 #   on:
 #     pull_request:
-#       types: [opened, synchronize, reopened]
+#       types: [opened, synchronize, reopened, ready_for_review]
 #   permissions:
 #     contents: read
 #     pull-requests: write
@@ -75,6 +75,9 @@ on:
 jobs:
   review:
     runs-on: ubuntu-latest
+    # Skip draft PRs; the review runs once the PR is marked ready for review.
+    # Add `ready_for_review` to the caller's trigger types so this fires then.
+    if: github.event.pull_request.draft == false
     concurrency:
       group: ai-review-${{ github.event.pull_request.number }}
       cancel-in-progress: true

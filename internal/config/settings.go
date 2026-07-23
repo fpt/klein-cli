@@ -40,9 +40,9 @@ type Settings struct {
 	// llm.backend == "codex"). Model/effort still come from the llm block.
 	Codex CodexSettings `json:"codex,omitempty"`
 
-	// Kessel configures the kessel app-server backend (used only when
-	// llm.backend == "kessel"). Kessel owns its own model configuration.
-	Kessel KesselSettings `json:"kessel,omitempty"`
+	// ACP configures the generic ACP app-server backend (used only when
+	// llm.backend == "acp"). The server owns its own model configuration.
+	ACP ACPSettings `json:"acp,omitempty"`
 
 	// Repository for persistence (nil for in-memory only)
 	settingsRepository repository.SettingsRepository `json:"-"`
@@ -85,7 +85,7 @@ func (s *Settings) MemoryDBFile() string {
 //
 //nolint:tagliatelle // json keys are the established on-disk settings schema
 type LLMSettings struct {
-	Backend   string `json:"backend"`              // "openai", "anthropic", "gemini", "codex", or "kessel"
+	Backend   string `json:"backend"`              // "openai", "anthropic", "gemini", "codex", or "acp"
 	Model     string `json:"model"`                // model name
 	BaseURL   string `json:"base_url,omitempty"`   // optional provider base URL (OpenAI/Azure-compatible)
 	Thinking  bool   `json:"thinking,omitempty"`   // enable thinking mode
@@ -270,19 +270,31 @@ type CodexSettings struct {
 	SandboxMode    string `json:"sandbox_mode,omitempty"`    // read-only|workspace-write|danger-full-access ("" → workspace-write)
 }
 
-// KesselSettings configures the kessel app-server backend (llm.backend ==
-// "kessel"). Kessel runs its own agent loop and owns its model configuration,
-// so klein only needs to know how to launch it and whether to be consulted
-// before it mutates anything. It has no sandbox of its own.
-type KesselSettings struct {
-	KesselPath     string `json:"kessel_path,omitempty"`     // path to the kessel binary ("" → "kessel-cli" on PATH)
-	ApprovalPolicy string `json:"approval_policy,omitempty"` // never|on-request ("" → the mode default)
-	// Config is an optional path to a kessel config YAML (e.g.
-	// ../rs-kessel/configs/gemma4.yaml). kessel-cli's app-server is configured by
-	// environment variables, so klein reads this file's llm/agent settings and
-	// passes them to the child as env. Its Swift-only sections (tts/stt/watcher)
-	// are ignored. Values here win over the ambient environment.
+// ACPSettings configures the generic ACP app-server backend (llm.backend ==
+// "acp"): any local agent that speaks the app-server JSON-RPC protocol with the
+// `dynamicTools` experimental capability. Such a server runs its own agent loop
+// and owns its model configuration, so klein only needs to know how to launch it
+// and whether to be consulted before it mutates anything. It has no sandbox of
+// its own.
+//
+// Nothing here names a particular implementation: Command is required precisely
+// because there is no single "the" ACP binary.
+type ACPSettings struct {
+	// Command is the ACP server binary (e.g. "gallium", or an absolute path).
+	// Required — this backend has no default binary.
+	Command string `json:"command,omitempty"`
+	// ApprovalPolicy is never|on-request ("" → the mode default).
+	ApprovalPolicy string `json:"approval_policy,omitempty"` //nolint:tagliatelle // established settings schema
+	// Config is an optional path to the ACP server's own TOML config (e.g.
+	// ../rs-gallium/configs/gemma4.toml). Servers of this kind are configured by
+	// environment variables, so klein reads the file's [llm]/[agent] tables and
+	// passes them to the child as env; frontend-only tables are ignored. Values
+	// here win over the ambient environment.
 	Config string `json:"config,omitempty"`
+	// Args overrides the subcommand used to enter app-server mode.
+	// Empty → ["app-server"], the protocol's conventional entry point.
+	// Last field by fieldalignment: the only one carrying a slice header.
+	Args []string `json:"args,omitempty"`
 }
 
 // BashSettings contains bash tool configuration
@@ -451,6 +463,14 @@ func GetDefaultSettings() *Settings {
 // DefaultBackend is the backend used when none is configured.
 const DefaultBackend = "openai"
 
+// The whole-agent app-server backend ids. These mirror agentserver.BackendCodex
+// and agentserver.BackendACP, duplicated here because agentserver imports this
+// package (see isAgentServerBackend).
+const (
+	BackendCodex = "codex"
+	BackendACP   = "acp"
+)
+
 // GetDefaultLLMSettingsForBackend returns default LLM settings for a specific backend
 func GetDefaultLLMSettingsForBackend(backend string) LLMSettings {
 	switch backend {
@@ -470,7 +490,7 @@ func GetDefaultLLMSettingsForBackend(backend string) LLMSettings {
 			Thinking:  false, // Gemini doesn't support thinking in our implementation
 			MaxTokens: 0,
 		}
-	case "codex", "kessel":
+	case BackendCodex, BackendACP:
 		// Model is left empty: these backends use the model configured in their
 		// own config unless overridden via llm.model / -m.
 		return LLMSettings{
@@ -499,7 +519,7 @@ func GetDefaultLLMSettingsForBackend(backend string) LLMSettings {
 // agentserver.IsAgentBackend, duplicated here because agentserver imports this
 // package.
 func isAgentServerBackend(backend string) bool {
-	return backend == "codex" || backend == "kessel"
+	return backend == BackendCodex || backend == BackendACP
 }
 
 // applyDefaults fills in missing fields with default values
@@ -538,10 +558,10 @@ func applyDefaults(settings *Settings) {
 func ValidateSettings(settings *Settings) error {
 	// Validate LLM settings
 	switch settings.LLM.Backend {
-	case "openai", "anthropic", "claude", "gemini", "codex", "kessel":
+	case "openai", "anthropic", "claude", "gemini", BackendCodex, BackendACP:
 	default:
 		return fmt.Errorf(
-			"unsupported LLM backend: %s (must be 'openai', 'anthropic', 'gemini', 'codex', or 'kessel')",
+			"unsupported LLM backend: %s (must be 'openai', 'anthropic', 'gemini', 'codex', or 'acp')",
 			settings.LLM.Backend)
 	}
 

@@ -1,6 +1,0 @@
-{
-  "name": "kessel",
-  "llm": {
-    "backend": "kessel"
-  }
-}

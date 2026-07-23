@@ -124,11 +124,12 @@ func parseReviewFlags(args []string) (opts reviewOptions, code int, ok bool) {
 }
 
 // reviewSettings loads settings and applies the CLI overrides. The whole-agent
-// backends (codex/kessel) run their own toolset out-of-process and can't expose
+// backends (codex/acp) run their own toolset out-of-process and can't expose
 // the review tools, so klein review requires a direct LLM backend. Not
 // supported for now, by decision: codex could run a review only if its tools
 // were wired as dynamicTools, but its sandbox/security model makes that
-// complicated; kessel targets local GGUF models, which don't fit a GHA runner.
+// complicated; a local ACP agent typically targets local GGUF models, which
+// don't fit a GHA runner.
 func reviewSettings(opts reviewOptions) (*config.Settings, error) {
 	settings, err := config.LoadSettings(opts.settingsPath)
 	if err != nil {
@@ -146,7 +147,7 @@ func reviewSettings(opts reviewOptions) (*config.Settings, error) {
 	if err := config.ValidateSettings(settings); err != nil {
 		return nil, fmt.Errorf("settings validation failed: %w", err)
 	}
-	if settings.LLM.Backend == "codex" || settings.LLM.Backend == "kessel" {
+	if settings.LLM.Backend == "codex" || settings.LLM.Backend == "acp" {
 		return nil, fmt.Errorf(
 			"backend %q is not supported by klein review (it can't expose the review tools); use openai, anthropic, or gemini",
 			settings.LLM.Backend)

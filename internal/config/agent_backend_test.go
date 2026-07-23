@@ -9,7 +9,7 @@ import (
 // agentBackends are the whole-agent app-server backends. They own their own
 // model and credentials, so config treats them alike: no inherited chat-model
 // default, no required model, no required API key.
-var agentBackends = []string{"codex", "kessel"}
+var agentBackends = []string{BackendCodex, BackendACP}
 
 // TestLoadAgentBackendModelNotLeaked confirms a settings file with no model does
 // not inherit the default chat model (the base Settings is seeded from
@@ -82,7 +82,7 @@ func TestValidateAgentBackend(t *testing.T) {
 	}
 }
 
-// TestAgentBackendDefault confirms `-b codex` / `-b kessel` resolve to that
+// TestAgentBackendDefault confirms `-b codex` / `-b acp` resolve to that
 // backend with an empty model (the backend uses its configured default).
 func TestAgentBackendDefault(t *testing.T) {
 	t.Parallel()
@@ -100,13 +100,14 @@ func TestAgentBackendDefault(t *testing.T) {
 	}
 }
 
-// TestKesselSettingsRoundTrip confirms the kessel block parses from JSON — a
-// wrong tag would silently fall back to "kessel-cli" on PATH.
-func TestKesselSettingsRoundTrip(t *testing.T) {
+// TestACPSettingsRoundTrip confirms the acp block parses from JSON — a wrong tag
+// would silently leave acp.command empty, which the backend rejects at startup.
+func TestACPSettingsRoundTrip(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
 	p := filepath.Join(dir, "settings.json")
-	body := `{"llm":{"backend":"kessel"},"kessel":{"kessel_path":"/opt/kessel","approval_policy":"on-request"}}`
+	body := `{"llm":{"backend":"` + BackendACP + `"},"acp":{"command":"/opt/gallium","args":["serve"],` +
+		`"config":"/etc/agent.toml","approval_policy":"on-request"}}`
 	if err := os.WriteFile(p, []byte(body), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -114,11 +115,17 @@ func TestKesselSettingsRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if s.Kessel.KesselPath != "/opt/kessel" {
-		t.Errorf("kessel_path: got %q", s.Kessel.KesselPath)
+	if s.ACP.Command != "/opt/gallium" {
+		t.Errorf("command: got %q", s.ACP.Command)
 	}
-	if s.Kessel.ApprovalPolicy != "on-request" {
-		t.Errorf("approval_policy: got %q", s.Kessel.ApprovalPolicy)
+	if len(s.ACP.Args) != 1 || s.ACP.Args[0] != "serve" {
+		t.Errorf("args: got %v", s.ACP.Args)
+	}
+	if s.ACP.Config != "/etc/agent.toml" {
+		t.Errorf("config: got %q", s.ACP.Config)
+	}
+	if s.ACP.ApprovalPolicy != "on-request" {
+		t.Errorf("approval_policy: got %q", s.ACP.ApprovalPolicy)
 	}
 }
 
@@ -126,7 +133,7 @@ func TestKesselSettingsRoundTrip(t *testing.T) {
 func TestValidateRejectsUnknownBackend(t *testing.T) {
 	t.Parallel()
 	s := GetDefaultSettings()
-	s.LLM = LLMSettings{Backend: "kessell", Model: "x"} // typo
+	s.LLM = LLMSettings{Backend: "acpp", Model: "x"} // typo
 	if err := ValidateSettings(s); err == nil {
 		t.Error("expected an error for an unknown backend")
 	}

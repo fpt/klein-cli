@@ -76,8 +76,8 @@ func main() {
 	}
 
 	// Define command line flags
-	backend := flag.String("b", "", "LLM backend (openai, anthropic, gemini, codex, or kessel)")
-	backendLong := flag.String("backend", "", "LLM backend (openai, anthropic, gemini, codex, or kessel)")
+	backend := flag.String("b", "", "LLM backend (openai, anthropic, gemini, codex, or acp)")
+	backendLong := flag.String("backend", "", "LLM backend (openai, anthropic, gemini, codex, or acp)")
 	var model = flag.String("m", "", "Model name to use")
 	var modelLong = flag.String("model", "", "Model name to use")
 	var effort = flag.String("effort", "", "Reasoning effort for reasoning-capable models (none|minimal|low|medium|high|xhigh; primarily OpenAI)")
@@ -269,7 +269,7 @@ func main() {
 			sessDir = settings.SessionsDir()
 		}
 
-		// Whole-agent backend (codex/kessel): one shared app-server process for all sessions (headless).
+		// Whole-agent backend (codex/acp): one shared app-server process for all sessions (headless).
 		backendRunner, startErr := agentserver.Start(
 			ctx, settings, workingDirectory, logger, agentserver.RunnerOptions{ApprovalPolicy: agentserver.ApprovalNever},
 		)
@@ -293,7 +293,7 @@ func main() {
 		return
 	}
 
-	// Whole-agent backend for interactive/one-shot CLI (plain `klein -b codex` or `-b kessel`).
+	// Whole-agent backend for interactive/one-shot CLI (plain `klein -b codex` or `-b acp`).
 	// Only the interactive REPL prompts for approvals; one-shot/file mode is headless.
 	// agentserver.Select returns nil for every backend that needs no external process, so the factory just
 	// runs the ReAct loop as usual.

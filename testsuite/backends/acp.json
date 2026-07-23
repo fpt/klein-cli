@@ -1,0 +1,9 @@
+{
+  "name": "acp",
+  "llm": {
+    "backend": "acp"
+  },
+  "acp": {
+    "command": "gallium"
+  }
+}

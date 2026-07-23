@@ -20,7 +20,7 @@ const stdioCloseTimeout = 5 * time.Second
 // stdioTransport spawns an app-server and speaks JSONL over its stdin/stdout.
 // It mirrors rpc.SpawnStdio from the codex SDK but additionally lets the caller
 // set the child's environment — which the SDK's version does not expose, and
-// which the kessel backend needs to pass its config-derived settings (MODEL_PATH,
+// which the acp backend needs to pass its config-derived settings (MODEL_PATH,
 // LLM_MODEL, …) to the child process.
 //
 // It satisfies rpc.Transport (ReadLine/WriteLine/Close).
@@ -127,8 +127,8 @@ func (t *stdioTransport) waitOrKill() []error {
 }
 
 // childEnv merges overrides onto klein's environment, producing the child's full
-// env. Overrides win: a value the user configured explicitly (via the kessel
-// config) takes precedence over whatever happens to be in the ambient shell.
+// env. Overrides win: a value the user configured explicitly (via the ACP
+// server's config) takes precedence over whatever is in the ambient shell.
 // Returns nil when there is nothing to override (child inherits as-is).
 func childEnv(overrides []string) []string {
 	if len(overrides) == 0 {

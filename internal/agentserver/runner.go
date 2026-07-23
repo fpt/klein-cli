@@ -4,11 +4,11 @@
 // the final text.
 //
 // Two backends are supported. Both speak the same JSON-RPC app-server protocol
-// and differ only in the binary spawned:
+// and differ only in the binary spawned and how it is configured:
 //
-//   - codex  — the codex app-server (`codex app-server`)
-//   - kessel — the kessel agent (`kessel-cli app-server`), which implements the
-//     subset of that protocol used here
+//   - codex — the codex app-server (`codex app-server`)
+//   - acp   — any local ACP agent implementing the subset of that protocol used
+//     here; the binary comes from `acp.command` (e.g. `gallium app-server`)
 //
 // It drives the app-server over the LOW-LEVEL JSON-RPC protocol (not the SDK's
 // high-level Thread helpers) for one reason: klein exposes its own tools to the
@@ -38,16 +38,16 @@ import (
 )
 
 // Config configures a Runner. Model/Effort come from klein's llm settings; the
-// rest from the optional "codex"/"kessel" settings block.
+// rest from the optional "codex"/"acp" settings block.
 type Config struct {
 	Tools      domain.ToolManager
 	MCPServers map[string]any
 	Approver   Approver // decides on-request approvals (nil = auto-accept, for headless)
-	// Command and Args spawn the app-server ("codex app-server", "kessel-cli app-server").
+	// Command and Args spawn the app-server ("codex app-server", "gallium app-server").
 	Command string
 	Args    []string
-	// Env holds environment overrides for the child (kessel is configured purely
-	// by env; see kesselEnv). Empty means the child inherits klein's environment.
+	// Env holds environment overrides for the child (an ACP server is configured
+	// purely by env; see acpEnv). Empty means the child inherits klein's environment.
 	Env []string
 	// Backend names which app-server this is, for backend-specific behavior
 	// (e.g. the codex-only auth probe) and for log/error messages.
@@ -107,8 +107,8 @@ func NewRunner(ctx context.Context, cfg Config) (*Runner, error) {
 
 	// Eagerly validate the backend is usable so a login/config failure surfaces
 	// at klein startup, not on the user's first prompt. Doubles as a liveness
-	// check on the handshake. Kessel answers this too — it carries credentials in
-	// its own config and reports no auth requirement.
+	// check on the handshake. An ACP server answers this too — it carries
+	// credentials in its own config and reports no auth requirement.
 	if err := probeReady(ctx, client, cfg.Backend); err != nil {
 		_ = client.Close()
 		return nil, err
@@ -124,8 +124,8 @@ func NewRunner(ctx context.Context, cfg Config) (*Runner, error) {
 
 // probeReady checks that the app-server is authenticated. initialize succeeds
 // even when codex is logged out, so without this the first failure only appears
-// on the first turn. Backends with no login (kessel) report no auth requirement
-// and pass.
+// on the first turn. Backends with no login (a typical ACP server) report no
+// auth requirement and pass.
 func probeReady(ctx context.Context, client *rpc.Client, backend string) error {
 	var resp protocol.GetAccountResponse
 	if err := client.Call(ctx, "account/read", protocol.GetAccountParams{}, &resp); err != nil {

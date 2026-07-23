@@ -9,7 +9,7 @@ The name KLEIN is inspired by the Klein bottle, a topological surface with no di
 ## Features
 
 - **Interactive Mode**: REPL-style interface for continuous interaction with conversation memory
-- **Multiple LLM Backends**: OpenAI GPT, Anthropic Claude, Google Gemini, plus the codex/kessel whole-agent backends
+- **Multiple LLM Backends**: OpenAI GPT, Anthropic Claude, Google Gemini, plus the codex/acp whole-agent backends
 - **Simplified ReAct Pattern**: Streamlined reasoning and acting with single-action loops for simplicity
 - **Integrated Tools**: File operations, grep search, bash tools, todo tools, and simple web tools
 - **Secure File Access**: Files are accessible only in working directory. Also, applies Read-before-Write semantics for content updates.
@@ -178,7 +178,7 @@ The review works with any of the three direct LLM backends — `openai`
 (default), `anthropic`, or `gemini` — via native tool calling; set `backend`
 and pass the matching key secret. Leave `model` unset to use that backend's
 default; if you do set `model`, it must be one that backend serves (an explicit
-model overrides the backend default). (The whole-agent `codex`/`kessel`
+model overrides the backend default). (The whole-agent `codex`/`acp`
 backends are not supported for review.)
 
 Pin `@main` or a tag (GitHub Actions has no `@latest` ref). Release binaries

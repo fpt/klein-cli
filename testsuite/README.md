@@ -17,7 +17,7 @@ testsuite/
 │   ├── anthropic.json
 │   ├── codex.json
 │   ├── gemini.json
-│   ├── kessel.json
+│   ├── acp.json
 │   └── openai.json
 ├── testcases/             # Individual test cases
 │   ├── code_scenario/     # Simple code generation test

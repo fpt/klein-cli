@@ -7,6 +7,14 @@ import (
 	"github.com/fpt/klein-cli/internal/config"
 )
 
+// Stand-ins for a real ACP server binary; "acp" names a protocol, so these tests
+// only care that whatever path is configured is the one that comes back.
+const (
+	acpBin       = "gallium"
+	acpBinPath   = "/opt/gallium"
+	codexBinPath = "/opt/codex"
+)
+
 // TestIsAgentBackend confirms only the whole-agent backends are recognized;
 // chat backends must keep running through klein's own ReAct loop.
 func TestIsAgentBackend(t *testing.T) {
@@ -15,8 +23,8 @@ func TestIsAgentBackend(t *testing.T) {
 		backend string
 		want    bool
 	}{
-		{"codex", true},
-		{"kessel", true},
+		{BackendCodex, true},
+		{BackendACP, true},
 		{"openai", false},
 		{"anthropic", false},
 		{"gemini", false},
@@ -28,19 +36,21 @@ func TestIsAgentBackend(t *testing.T) {
 	}
 }
 
-// TestCommandDefaults confirms each backend falls back to its binary name on
-// PATH, and that both are launched with the `app-server` subcommand.
+// TestCommandDefaults confirms codex falls back to its binary name on PATH and
+// that the app-server subcommand is the default entry point for both backends.
 func TestCommandDefaults(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
 		backend  string
+		command  string
 		wantPath string
 	}{
-		{"codex", "codex"},
-		{"kessel", "kessel-cli"},
+		{backend: BackendCodex, wantPath: BackendCodex},
+		{backend: BackendACP, command: acpBin, wantPath: acpBin},
 	} {
 		s := &config.Settings{}
 		s.LLM.Backend = tc.backend
+		s.ACP.Command = tc.command
 
 		path, args, err := command(s)
 		if err != nil {
@@ -55,27 +65,58 @@ func TestCommandDefaults(t *testing.T) {
 	}
 }
 
+// TestCommandACPRequiresCommand confirms the generic backend refuses to guess a
+// binary: "acp" names a protocol, not an implementation, so an unset
+// acp.command must fail loudly rather than spawn something arbitrary.
+func TestCommandACPRequiresCommand(t *testing.T) {
+	t.Parallel()
+	s := &config.Settings{}
+	s.LLM.Backend = BackendACP
+
+	if _, _, err := command(s); err == nil {
+		t.Fatal("expected an error when acp.command is unset")
+	}
+}
+
+// TestCommandACPArgsOverride confirms a server that spells its app-server mode
+// differently can say so.
+func TestCommandACPArgsOverride(t *testing.T) {
+	t.Parallel()
+	s := &config.Settings{}
+	s.LLM.Backend = BackendACP
+	s.ACP.Command = "some-agent"
+	s.ACP.Args = []string{"serve", "--acp"}
+
+	_, args, err := command(s)
+	if err != nil {
+		t.Fatalf("command: %v", err)
+	}
+	if !reflect.DeepEqual(args, []string{"serve", "--acp"}) {
+		t.Errorf("args = %v, want the configured override", args)
+	}
+}
+
 // TestCommandExplicitPaths confirms a configured binary path overrides the
 // PATH lookup, and that each backend reads its own settings block.
 func TestCommandExplicitPaths(t *testing.T) {
 	t.Parallel()
 
 	codexSettings := &config.Settings{}
-	codexSettings.LLM.Backend = "codex"
-	codexSettings.Codex.CodexPath = "/opt/codex"
-	codexSettings.Kessel.KesselPath = "/opt/kessel" // must be ignored
+	codexSettings.LLM.Backend = BackendCodex
+	codexSettings.Codex.CodexPath = codexBinPath
+	codexSettings.ACP.Command = acpBinPath // must be ignored
 
-	if path, _, err := command(codexSettings); err != nil || path != "/opt/codex" {
+	if path, _, err := command(codexSettings); err != nil || path != codexBinPath {
 		t.Errorf("codex path = %q, err = %v", path, err)
 	}
 
-	kesselSettings := &config.Settings{}
-	kesselSettings.LLM.Backend = "kessel"
-	kesselSettings.Codex.CodexPath = "/opt/codex" // must be ignored
-	kesselSettings.Kessel.KesselPath = "/opt/kessel"
+	acpSettings := &config.Settings{}
+	acpSettings.LLM.Backend = BackendACP
+	acpSettings.Codex.CodexPath = codexBinPath // must be ignored
+	acpSettings.ACP.Command = acpBinPath
 
-	if path, _, err := command(kesselSettings); err != nil || path != "/opt/kessel" {
-		t.Errorf("kessel path = %q, err = %v", path, err)
+	if path, _, err := command(acpSettings); err != nil || path != acpBinPath {
+		t.Errorf("acp path = %q, err = %v", path, err)
 	}
 }
 
@@ -98,30 +139,30 @@ func TestApprovalPolicyPrefersBackendBlock(t *testing.T) {
 	t.Parallel()
 
 	// Explicit setting wins over the mode default.
-	kessel := &config.Settings{}
-	kessel.LLM.Backend = "kessel"
-	kessel.Kessel.ApprovalPolicy = "on-request"
-	if got := approvalPolicy(kessel, RunnerOptions{ApprovalPolicy: ApprovalNever}); got != "on-request" {
-		t.Errorf("kessel explicit policy: got %q", got)
+	acp := &config.Settings{}
+	acp.LLM.Backend = BackendACP
+	acp.ACP.ApprovalPolicy = ApprovalOnRequest
+	if got := approvalPolicy(acp, RunnerOptions{ApprovalPolicy: ApprovalNever}); got != ApprovalOnRequest {
+		t.Errorf("acp explicit policy: got %q", got)
 	}
 
 	// Absent setting falls back to the mode default.
-	kessel.Kessel.ApprovalPolicy = ""
-	if got := approvalPolicy(kessel, RunnerOptions{ApprovalPolicy: ApprovalNever}); got != ApprovalNever {
-		t.Errorf("kessel default policy: got %q", got)
+	acp.ACP.ApprovalPolicy = ""
+	if got := approvalPolicy(acp, RunnerOptions{ApprovalPolicy: ApprovalNever}); got != ApprovalNever {
+		t.Errorf("acp default policy: got %q", got)
 	}
 
-	// A kessel thread must not pick up codex's policy.
-	kessel.Codex.ApprovalPolicy = "on-request"
-	if got := approvalPolicy(kessel, RunnerOptions{ApprovalPolicy: ApprovalNever}); got != ApprovalNever {
-		t.Errorf("kessel must ignore codex.approval_policy: got %q", got)
+	// An acp thread must not pick up codex's policy.
+	acp.Codex.ApprovalPolicy = ApprovalOnRequest
+	if got := approvalPolicy(acp, RunnerOptions{ApprovalPolicy: ApprovalNever}); got != ApprovalNever {
+		t.Errorf("acp must ignore codex.approval_policy: got %q", got)
 	}
 
 	// ...and codex still reads its own.
 	codex := &config.Settings{}
-	codex.LLM.Backend = "codex"
-	codex.Codex.ApprovalPolicy = "on-request"
-	if got := approvalPolicy(codex, RunnerOptions{ApprovalPolicy: ApprovalNever}); got != "on-request" {
+	codex.LLM.Backend = BackendCodex
+	codex.Codex.ApprovalPolicy = ApprovalOnRequest
+	if got := approvalPolicy(codex, RunnerOptions{ApprovalPolicy: ApprovalNever}); got != ApprovalOnRequest {
 		t.Errorf("codex explicit policy: got %q", got)
 	}
 }

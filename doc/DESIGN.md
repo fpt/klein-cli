@@ -26,7 +26,7 @@ Every entry point ultimately builds the same stack. From the bottom up:
 ├──────────────────────────────────────────────────────────────┤
 │ Backend (domain.LLM)      openai · anthropic · gemini         │  chat, tool-calling, thinking
 └──────────────────────────────────────────────────────────────┘
-   (plus codex & kessel — whole-agent backends routed above domain.LLM; see §7)
+   (plus codex & acp — whole-agent backends routed above domain.LLM; see §7)
 ```
 
 The three layers the rest of this doc drills into:
@@ -286,9 +286,9 @@ append is the dominant memory op.
   `effort` come from the agent's `settings.json` — the gateway does **not** set
   them (it only passes a working directory when starting a session).
 
-### Whole-agent backends: codex and kessel (not `domain.LLM`s)
+### Whole-agent backends: codex and acp (not `domain.LLM`s)
 
-`backend: "codex"` and `backend: "kessel"` are special. Neither is a chat model —
+`backend: "codex"` and `backend: "acp"` are special. Neither is a chat model —
 each runs its **own** reasoning + tool loop. So they are *not* plugged in as a
 `domain.LLM`; instead `app.Agent.Invoke` branches: when a `CodexBackend` is set,
 the turn is routed to a backend thread (`Runner.RunTurn`) and the ReAct loop +
@@ -297,10 +297,17 @@ construction and `ModelID()` work; `Chat` is never called).
 
 Both are driven by **one** implementation, `internal/agentserver`, because both
 speak the same JSON-RPC **app-server protocol**. They differ only in the binary
-spawned (`codex app-server` vs `kessel-cli app-server`, resolved by `command()`)
-and in who owns the model: codex takes it from the codex CLI's config, kessel
-from its own. kessel implements the subset of the protocol used here (see
-rs-kessel `crates/lib/src/appserver/`).
+spawned (resolved by `command()`) and in who owns the model: codex takes it from
+the codex CLI's config, an ACP server from its own.
+
+`acp` is deliberately **generic** — it names the protocol, not an implementation.
+Any local agent that implements the subset used here (`initialize` with
+`experimentalApi`, `thread/start`, `turn/start`, `dynamicTools`) can be plugged
+in by naming its binary in `acp.command`; there is no default, so klein never
+guesses one. `codex` stays a distinct id only because it carries codex-specific
+behavior (sandbox modes, the login probe in `probeReady`). The reference ACP
+server is [rs-gallium](https://github.com/fpt/rs-gallium) (`gallium app-server`,
+see its `crates/gallium-agent/src/appserver/`).
 
 klein keeps every frontend duty around the backend turn: the repl/claw surfaces,
 memory-context injection, run-log append, and **session↔thread mapping**. The
@@ -328,11 +335,13 @@ next turn (memory-context injection still carries facts across restarts).
 `never` the backend proceeds unasked (headless surfaces). Otherwise it raises
 `item/commandExecution/requestApproval` / `item/fileChange/requestApproval`, and
 klein's `toolHandler` either auto-accepts (headless, `Approver == nil`) or
-prompts the user (interactive repl). Note kessel has **no sandbox** of its own —
-`codex.sandbox_mode` does not apply to it, so approvals are the only gate.
+prompts the user (interactive repl). Note an ACP server typically has **no
+sandbox** of its own — `codex.sandbox_mode` does not apply to it, so approvals
+are the only gate.
 
 Requires the `codex` binary on `PATH` (with `dynamicTools` support —
-experimental) or the `kessel-cli` binary; auth/model are the backend's own.
+experimental) or the binary named by `acp.command`; auth/model are the backend's
+own.
 
 ---
 

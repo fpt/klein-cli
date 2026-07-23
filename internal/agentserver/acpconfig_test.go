@@ -8,10 +8,10 @@ import (
 	"testing"
 )
 
-// writeConfig writes a kessel config YAML to a temp file and returns its path.
+// writeConfig writes an ACP server config TOML to a temp file and returns its path.
 func writeConfig(t *testing.T, body string) string {
 	t.Helper()
-	path := filepath.Join(t.TempDir(), "kessel.yaml")
+	path := filepath.Join(t.TempDir(), "acp.toml")
 	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
 		t.Fatalf("write config: %v", err)
 	}
@@ -29,42 +29,39 @@ func parseEnvKVs(kvs []string) map[string]string {
 	return m
 }
 
-// TestKesselEnv_LocalModel covers a local-model config (rs-kessel's gemma4.yaml
-// shape): an hf: modelPath, an explicitly empty baseURL, and Swift-only sections
-// that must be ignored rather than rejected.
-func TestKesselEnv_LocalModel(t *testing.T) {
+// TestACPEnv_LocalModel covers a local-model config (rs-gallium's gemma4.toml
+// shape): an hf: modelPath, an explicitly empty baseURL, and REPL-only keys that
+// must be ignored rather than rejected.
+func TestACPEnv_LocalModel(t *testing.T) {
 	t.Parallel()
 	path := writeConfig(t, `
-llm:
-  modelPath: "hf:unsloth/gemma-4-E4B-it-GGUF/gemma-4-E4B-it-Q4_K_M.gguf"
-  baseURL: ""
-  model: "gemma4:e4b"
-  harmonyTemplate: false
-  temperature: 0.7
-  maxTokens: 2048
+[llm]
+modelPath = "hf:unsloth/gemma-4-E4B-it-GGUF/gemma-4-E4B-it-Q4_K_M.gguf"
+baseURL = ""
+model = "gemma4:e4b"
+inferenceEngine = "candle"
+temperature = 0.7
+maxTokens = 2048
 
-agent:
-  systemPromptPath: null
-  maxTurns: 50
-  skillPaths: ["../skills"]
+[agent]
+systemPromptPath = "system-prompt.md"
+maxTurns = 50
+skillPaths = ["../skills"]
 
-tts:
-  enabled: true
-  voice: "com.apple.voice.enhanced.en-US.Zoe"
-stt:
-  enabled: true
-watcher:
-  enabled: true
+[[mcpServers]]
+command = "godevmcp"
+args = ["serve"]
 `)
-	env, err := kesselEnv(path)
+	env, err := acpEnv(path)
 	if err != nil {
-		t.Fatalf("kesselEnv: %v", err)
+		t.Fatalf("acpEnv: %v", err)
 	}
 	got := parseEnvKVs(env)
 
 	want := map[string]string{
 		"MODEL_PATH":           "hf:unsloth/gemma-4-E4B-it-GGUF/gemma-4-E4B-it-Q4_K_M.gguf",
 		"LLM_MODEL":            "gemma4:e4b",
+		"INFERENCE_ENGINE":     "candle",
 		"LLM_TEMPERATURE":      "0.7",
 		"MAX_TOKENS":           "2048",
 		"MAX_REACT_ITERATIONS": "50",
@@ -85,23 +82,24 @@ watcher:
 	}
 }
 
-// TestKesselEnv_RemoteModel covers an OpenAI-style config with reasoningEffort
-// and a blank apiKey (kessel's convention for "read it from the environment").
-func TestKesselEnv_RemoteModel(t *testing.T) {
+// TestACPEnv_RemoteModel covers an OpenAI-style config with reasoningEffort and
+// a blank apiKey (the convention for "read it from the environment").
+func TestACPEnv_RemoteModel(t *testing.T) {
 	t.Parallel()
 	path := writeConfig(t, `
-llm:
-  baseURL: "https://api.openai.com/v1"
-  model: "gpt-5.6-luna"
-  apiKey: ""
-  maxTokens: 8192
-  reasoningEffort: "high"
-agent:
-  maxTurns: 50
+[llm]
+baseURL = "https://api.openai.com/v1"
+model = "gpt-5.6-luna"
+apiKey = ""
+maxTokens = 8192
+reasoningEffort = "high"
+
+[agent]
+maxTurns = 50
 `)
-	env, err := kesselEnv(path)
+	env, err := acpEnv(path)
 	if err != nil {
-		t.Fatalf("kesselEnv: %v", err)
+		t.Fatalf("acpEnv: %v", err)
 	}
 	got := parseEnvKVs(env)
 
@@ -121,30 +119,56 @@ agent:
 	}
 }
 
-func TestKesselEnv_ExportsExplicitAPIKey(t *testing.T) {
+func TestACPEnv_ExportsExplicitAPIKey(t *testing.T) {
 	t.Parallel()
-	path := writeConfig(t, "llm:\n  apiKey: \"sk-test\"\n")
+	path := writeConfig(t, "[llm]\napiKey = \"sk-test\"\n")
 	got := parseEnvKVs(mustEnv(t, path))
 	if got["OPENAI_API_KEY"] != "sk-test" {
 		t.Errorf("OPENAI_API_KEY = %q, want sk-test", got["OPENAI_API_KEY"])
 	}
 }
 
-func TestKesselEnv_Errors(t *testing.T) {
+// TestACPEnv_RelativeModelPath is the crux of translating a config file into env:
+// the server resolves a relative modelPath against the config's directory, but
+// reads MODEL_PATH relative to its cwd, so klein must anchor it here.
+func TestACPEnv_RelativeModelPath(t *testing.T) {
 	t.Parallel()
-	if _, err := kesselEnv(filepath.Join(t.TempDir(), "nope.yaml")); err == nil {
+	path := writeConfig(t, "[llm]\nmodelPath = \"../models/x.gguf\"\n")
+	got := parseEnvKVs(mustEnv(t, path))
+
+	want := filepath.Join(filepath.Dir(path), "../models/x.gguf")
+	if got["MODEL_PATH"] != want {
+		t.Errorf("MODEL_PATH = %q, want %q (anchored at the config's dir)", got["MODEL_PATH"], want)
+	}
+	if !filepath.IsAbs(got["MODEL_PATH"]) {
+		t.Errorf("MODEL_PATH = %q, want an absolute path", got["MODEL_PATH"])
+	}
+}
+
+// TestACPEnv_AbsoluteModelPath confirms an absolute path is passed through as-is.
+func TestACPEnv_AbsoluteModelPath(t *testing.T) {
+	t.Parallel()
+	path := writeConfig(t, "[llm]\nmodelPath = \"/models/x.gguf\"\n")
+	if got := parseEnvKVs(mustEnv(t, path)); got["MODEL_PATH"] != "/models/x.gguf" {
+		t.Errorf("MODEL_PATH = %q, want /models/x.gguf", got["MODEL_PATH"])
+	}
+}
+
+func TestACPEnv_Errors(t *testing.T) {
+	t.Parallel()
+	if _, err := acpEnv(filepath.Join(t.TempDir(), "nope.toml")); err == nil {
 		t.Error("missing file should error")
 	}
-	if _, err := kesselEnv(writeConfig(t, "llm: [this is not a map")); err == nil {
-		t.Error("malformed yaml should error")
+	if _, err := acpEnv(writeConfig(t, "[llm\nmodel = ")); err == nil {
+		t.Error("malformed toml should error")
 	}
 }
 
 func mustEnv(t *testing.T, path string) []string {
 	t.Helper()
-	env, err := kesselEnv(path)
+	env, err := acpEnv(path)
 	if err != nil {
-		t.Fatalf("kesselEnv: %v", err)
+		t.Fatalf("acpEnv: %v", err)
 	}
 	return env
 }

@@ -24,7 +24,7 @@ go run klein/main.go [flags] [prompt]
 
 | Flag | Type | Default | Description |
 |------|------|---------|-------------|
-| `-b`, `--backend` | string | `""` | LLM backend: `openai`, `anthropic`, `gemini`, `codex`, `kessel` |
+| `-b`, `--backend` | string | `""` | LLM backend: `openai`, `anthropic`, `gemini`, `codex`, `acp` |
 | `-m`, `--model` | string | `""` | Model name (overrides settings file) |
 | `-s`, `--skill` | string | `"code"` | Skill to invoke |
 | `--workdir` | string | `"."` | Working directory for all file operations |
@@ -77,7 +77,7 @@ The `claw` object configures the `klein claw` gateway; see
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
-| `backend` | string | `"openai"` | Backend: `openai`, `anthropic`, `gemini`, `codex`, `kessel` |
+| `backend` | string | `"openai"` | Backend: `openai`, `anthropic`, `gemini`, `codex`, `acp` |
 | `model` | string | *(backend-specific)* | Model name |
 | `base_url` | string | *(backend-specific)* | API base URL (OpenAI/Azure-compatible only) |
 | `thinking` | bool | `true` | Enable thinking mode when model supports it |
@@ -91,7 +91,7 @@ The `claw` object configures the `klein claw` gateway; see
 | `openai` | `gpt-5.6-luna` | *(OpenAI API)* |
 | `gemini` | `gemini-2.5-flash-lite` | *(Google API)* |
 | `codex` | *(codex-owned)* | *(codex app-server)* |
-| `kessel` | *(kessel-owned)* | *(kessel app-server)* |
+| `acp` | *(server-owned)* | *(the ACP app-server)* |
 
 ### `codex` — codex app-server backend
 
@@ -121,53 +121,63 @@ needs a codex build with `dynamicTools`/`experimentalApi` support.
 }
 ```
 
-### `kessel` — kessel app-server backend
+### `acp` — generic ACP app-server backend
 
-Used only when `llm.backend == "kessel"`. Like codex, kessel is a **whole-agent**
-backend driven over the same app-server JSON-RPC protocol (`internal/agentserver`
-serves both): klein routes each turn to a kessel thread and takes back the final
-answer, while klein keeps the frontend, memory-context injection, and
-session↔thread mapping. Requires the **`kessel-cli` binary on `PATH`**.
+Used only when `llm.backend == "acp"`. Like codex, an ACP agent is a
+**whole-agent** backend driven over the same app-server JSON-RPC protocol
+(`internal/agentserver` serves both): klein routes each turn to a thread on the
+server and takes back the final answer, while klein keeps the frontend,
+memory-context injection, and session↔thread mapping.
 
-Kessel owns its own model and credentials — it reads `MODEL_PATH` (a local GGUF)
-or `OPENAI_API_KEY` from the environment it is spawned in, so `llm.model` is
+`acp` names a **protocol, not a program**. Any local agent implementing the
+subset klein uses — `initialize` with the `experimentalApi` capability,
+`thread/start`, `turn/start`, and `dynamicTools` — can be plugged in. Because
+there is no single "the" ACP binary, **`acp.command` is required**; klein does not
+guess a default and will refuse to start without it. The reference implementation
+is [rs-gallium](https://github.com/fpt/rs-gallium), whose binary is `gallium`.
+
+The server owns its own model and credentials — it reads `MODEL_PATH` (a local
+GGUF) or `OPENAI_API_KEY` from the environment it is spawned in, so `llm.model` is
 optional. klein's native tools (memory + schedule) are registered as
-`dynamicTools` exactly as for codex, and kessel calls back in-process over the
-same connection. klein's external MCP servers are passed through; kessel's own
+`dynamicTools` exactly as for codex, and the server calls back in-process over the
+same connection. klein's external MCP servers are passed through; the server's own
 `read`/`glob`/`grep`/`write`/`edit`/`bash` tools cover filesystem and shell.
 
 Two differences from codex worth knowing:
 
-- **No sandbox.** `codex.sandbox_mode` has no kessel equivalent, so
+- **No sandbox.** `codex.sandbox_mode` has no ACP equivalent, so
   `approval_policy` is the only gate on filesystem and shell mutations.
-- **No login.** Kessel has nothing to authenticate against beyond the API key or
-  model path in its own environment.
+- **No login.** Such a server has nothing to authenticate against beyond the API
+  key or model path in its own environment.
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
-| `kessel_path` | string | `kessel-cli` (PATH) | Path to the kessel binary |
-| `config` | string | *(none)* | Path to a kessel config YAML (e.g. `../rs-kessel/configs/gemma4.yaml`). See below. |
-| `approval_policy` | string | *(mode-dependent)* | `never` / `on-request`. Same mode defaults as codex: the interactive repl prompts you (y/N) before kessel writes a file or runs a command; headless surfaces auto-approve. Set explicitly to override. |
+| `command` | string | *(none — **required**)* | The ACP server binary, e.g. `gallium` or an absolute path |
+| `args` | string[] | `["app-server"]` | Subcommand that puts the binary into app-server mode |
+| `config` | string | *(none)* | Path to the server's own config TOML (e.g. `../rs-gallium/configs/gemma4.toml`). See below. |
+| `approval_policy` | string | *(mode-dependent)* | `never` / `on-request`. Same mode defaults as codex: the interactive repl prompts you (y/N) before the server writes a file or runs a command; headless surfaces auto-approve. Set explicitly to override. |
 
-#### Running kessel from one of its config YAMLs
+#### Running the server from one of its config TOMLs
 
-`kessel-cli app-server` takes no config flag — it is configured **entirely by
-environment variables**. The `configs/*.yaml` files in rs-kessel are frontend
-configs (their `tts`/`stt`/`watcher` sections are for the Swift/C# apps).
+An ACP app-server is configured **entirely by environment variables**, which keeps
+klein in control of what reaches the child. A server's own `configs/*.toml` files
+are primarily frontend configs (their `[[mcpServers]]` and `[agent]`
+prompt/skill-path keys drive the server's REPL, not a klein-driven turn).
 
-Point `kessel.config` at one and klein reads just its `llm:` and `agent:`
-sections, translating them into the environment kessel expects (Swift-only
-sections are ignored):
+Point `acp.config` at one and klein reads just its `[llm]` and `[agent]` tables,
+translating them into the environment the server expects (everything else is
+ignored):
 
-| YAML key | Env var passed to `kessel-cli` |
-|----------|-------------------------------|
-| `llm.modelPath` | `MODEL_PATH` (an `hf:` spec is resolved/downloaded by kessel) |
+| TOML key | Env var passed to the server |
+|----------|------------------------------|
+| `llm.modelPath` | `MODEL_PATH` (an `hf:` spec is passed through and resolved by the server; a **relative path is anchored to the config file's directory**, matching how the server resolves it) |
 | `llm.baseURL` | `LLM_BASE_URL` (an explicit `""` means "local model") |
 | `llm.model` | `LLM_MODEL` |
-| `llm.apiKey` | `OPENAI_API_KEY` — **only if non-empty**; blank (the usual case) means kessel inherits it from your shell |
+| `llm.apiKey` | `OPENAI_API_KEY` — **only if non-empty**; blank (the usual case) means the server inherits it from your shell |
 | `llm.temperature` | `LLM_TEMPERATURE` |
 | `llm.maxTokens` | `MAX_TOKENS` |
 | `llm.reasoningEffort` | `REASONING_EFFORT` |
+| `llm.inferenceEngine` | `INFERENCE_ENGINE` |
 | `agent.maxTurns` | `MAX_REACT_ITERATIONS` |
 
 Values from the config **override** the ambient shell; anything the file does not
@@ -175,21 +185,21 @@ set (notably `OPENAI_API_KEY`) is inherited.
 
 ```json
 {
-  "llm": { "backend": "kessel" },
-  "kessel": {
-    "kessel_path": "../rs-kessel/target/release/kessel-cli",
-    "config": "../rs-kessel/configs/gemma4.yaml",
+  "llm": { "backend": "acp" },
+  "acp": {
+    "command": "../rs-gallium/target/release/gallium",
+    "config": "../rs-gallium/configs/gemma4.toml",
     "approval_policy": "on-request"
   }
 }
 ```
 
-Without `config`, kessel simply inherits klein's environment as before:
+Without `config`, the server simply inherits klein's environment:
 
 ```json
 {
-  "llm": { "backend": "kessel" },
-  "kessel": { "kessel_path": "/usr/local/bin/kessel-cli", "approval_policy": "on-request" }
+  "llm": { "backend": "acp" },
+  "acp": { "command": "gallium", "approval_policy": "on-request" }
 }
 ```
 

@@ -6,7 +6,7 @@ import (
 	"testing"
 )
 
-// TestSpawnStdio_PassesEnvToChild is the crux of the kessel config support: the
+// TestSpawnStdio_PassesEnvToChild is the crux of the acp config support: the
 // SDK's rpc.SpawnStdio cannot set the child's environment, so klein uses its own
 // transport. Spawn a real process and confirm it observes the override.
 func TestSpawnStdio_PassesEnvToChild(t *testing.T) {
@@ -35,7 +35,7 @@ func TestSpawnStdio_PassesEnvToChild(t *testing.T) {
 }
 
 // TestSpawnStdio_InheritsEnvWhenNoOverrides confirms the default path (codex,
-// or kessel with no config) leaves the child's environment untouched.
+// or acp with no config) leaves the child's environment untouched.
 func TestSpawnStdio_InheritsEnvWhenNoOverrides(t *testing.T) {
 	t.Setenv("KLEIN_TEST_PASSTHROUGH", "inherited")
 

@@ -166,3 +166,16 @@ func TestApprovalPolicyPrefersBackendBlock(t *testing.T) {
 		t.Errorf("codex explicit policy: got %q", got)
 	}
 }
+
+// TestProbeReadySkipsNonCodex confirms the codex account probe never runs for
+// the generic backend. `account/read` is outside the ACP subset klein requires,
+// so probing it would reject a conforming server that has no account concept.
+// A nil client is the assertion: reaching the RPC call at all would panic.
+func TestProbeReadySkipsNonCodex(t *testing.T) {
+	t.Parallel()
+	for _, backend := range []string{BackendACP, "some-other-agent", ""} {
+		if err := probeReady(t.Context(), nil, backend); err != nil {
+			t.Errorf("probeReady(%q) = %v, want nil (no probe for non-codex)", backend, err)
+		}
+	}
+}

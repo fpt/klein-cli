@@ -309,6 +309,13 @@ behavior (sandbox modes, the login probe in `probeReady`). The reference ACP
 server is [rs-gallium](https://github.com/fpt/rs-gallium) (`gallium app-server`,
 see its `crates/gallium-agent/src/appserver/`).
 
+That subset is a contract, so nothing outside it may be required at startup. In
+particular `probeReady`'s `account/read` call runs **only for `codex`** — it
+validates a login that a generic ACP server does not have, and demanding the
+method would reject conforming implementations with no account concept. There is
+no liveness cost: `initialize` is itself a round trip, so an unreachable or
+non-conforming server has already failed by then.
+
 klein keeps every frontend duty around the backend turn: the repl/claw surfaces,
 memory-context injection, run-log append, and **session↔thread mapping**. The
 active skill's prompt is passed to the backend as *developer instructions*. One

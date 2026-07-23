@@ -105,10 +105,9 @@ func NewRunner(ctx context.Context, cfg Config) (*Runner, error) {
 		return nil, fmt.Errorf("%s initialized notify: %w", cfg.Command, err)
 	}
 
-	// Eagerly validate the backend is usable so a login/config failure surfaces
-	// at klein startup, not on the user's first prompt. Doubles as a liveness
-	// check on the handshake. An ACP server answers this too — it carries
-	// credentials in its own config and reports no auth requirement.
+	// Eagerly validate codex is logged in so an auth failure surfaces at klein
+	// startup, not on the user's first prompt. Skipped for the generic backend —
+	// see probeReady.
 	if err := probeReady(ctx, client, cfg.Backend); err != nil {
 		_ = client.Close()
 		return nil, err
@@ -122,11 +121,21 @@ func NewRunner(ctx context.Context, cfg Config) (*Runner, error) {
 	}, nil
 }
 
-// probeReady checks that the app-server is authenticated. initialize succeeds
-// even when codex is logged out, so without this the first failure only appears
-// on the first turn. Backends with no login (a typical ACP server) report no
-// auth requirement and pass.
+// probeReady checks that a codex app-server is authenticated. initialize
+// succeeds even when codex is logged out, so without this the first failure only
+// appears on the first turn.
+//
+// It is codex-only by design. `account/read` is NOT part of the protocol subset
+// klein requires of a generic ACP server (initialize, thread/start, turn/start,
+// dynamicTools), so probing one would reject conforming implementations that
+// have no account concept at all. Nothing is lost by skipping it: there is no
+// login to validate, and `initialize` is itself a round trip, so a dead or
+// non-conforming server has already failed by this point.
 func probeReady(ctx context.Context, client *rpc.Client, backend string) error {
+	if backend != BackendCodex {
+		return nil
+	}
+
 	var resp protocol.GetAccountResponse
 	if err := client.Call(ctx, "account/read", protocol.GetAccountParams{}, &resp); err != nil {
 		return fmt.Errorf("%s readiness check (account/read) failed: %w", backend, err)

@@ -7,12 +7,12 @@ import (
 	"github.com/fpt/klein-cli/internal/config"
 )
 
-// Stand-ins for a real ACP server binary; "acp" names a protocol, so these tests
-// only care that whatever path is configured is the one that comes back.
+// Stand-ins for a real app-server binary; "appserver" names a protocol, so these
+// tests only care that whatever path is configured is the one that comes back.
 const (
-	acpBin       = "gallium"
-	acpBinPath   = "/opt/gallium"
-	codexBinPath = "/opt/codex"
+	appServerBin     = "gallium"
+	appServerBinPath = "/opt/gallium"
+	codexBinPath     = "/opt/codex"
 )
 
 // TestIsAgentBackend confirms only the whole-agent backends are recognized;
@@ -24,7 +24,7 @@ func TestIsAgentBackend(t *testing.T) {
 		want    bool
 	}{
 		{BackendCodex, true},
-		{BackendACP, true},
+		{BackendAppServer, true},
 		{"openai", false},
 		{"anthropic", false},
 		{"gemini", false},
@@ -46,11 +46,11 @@ func TestCommandDefaults(t *testing.T) {
 		wantPath string
 	}{
 		{backend: BackendCodex, wantPath: BackendCodex},
-		{backend: BackendACP, command: acpBin, wantPath: acpBin},
+		{backend: BackendAppServer, command: appServerBin, wantPath: appServerBin},
 	} {
 		s := &config.Settings{}
 		s.LLM.Backend = tc.backend
-		s.ACP.Command = tc.command
+		s.AppServer.Command = tc.command
 
 		path, args, err := command(s)
 		if err != nil {
@@ -65,33 +65,33 @@ func TestCommandDefaults(t *testing.T) {
 	}
 }
 
-// TestCommandACPRequiresCommand confirms the generic backend refuses to guess a
-// binary: "acp" names a protocol, not an implementation, so an unset
-// acp.command must fail loudly rather than spawn something arbitrary.
-func TestCommandACPRequiresCommand(t *testing.T) {
+// TestCommandAppServerRequiresCommand confirms the generic backend refuses to
+// guess a binary: "appserver" names a protocol, not an implementation, so an
+// unset appserver.command must fail loudly rather than spawn something arbitrary.
+func TestCommandAppServerRequiresCommand(t *testing.T) {
 	t.Parallel()
 	s := &config.Settings{}
-	s.LLM.Backend = BackendACP
+	s.LLM.Backend = BackendAppServer
 
 	if _, _, err := command(s); err == nil {
-		t.Fatal("expected an error when acp.command is unset")
+		t.Fatal("expected an error when appserver.command is unset")
 	}
 }
 
-// TestCommandACPArgsOverride confirms a server that spells its app-server mode
+// TestCommandAppServerArgsOverride confirms a server that spells its app-server mode
 // differently can say so.
-func TestCommandACPArgsOverride(t *testing.T) {
+func TestCommandAppServerArgsOverride(t *testing.T) {
 	t.Parallel()
 	s := &config.Settings{}
-	s.LLM.Backend = BackendACP
-	s.ACP.Command = "some-agent"
-	s.ACP.Args = []string{"serve", "--acp"}
+	s.LLM.Backend = BackendAppServer
+	s.AppServer.Command = "some-agent"
+	s.AppServer.Args = []string{"serve", "--rpc"}
 
 	_, args, err := command(s)
 	if err != nil {
 		t.Fatalf("command: %v", err)
 	}
-	if !reflect.DeepEqual(args, []string{"serve", "--acp"}) {
+	if !reflect.DeepEqual(args, []string{"serve", "--rpc"}) {
 		t.Errorf("args = %v, want the configured override", args)
 	}
 }
@@ -104,19 +104,19 @@ func TestCommandExplicitPaths(t *testing.T) {
 	codexSettings := &config.Settings{}
 	codexSettings.LLM.Backend = BackendCodex
 	codexSettings.Codex.CodexPath = codexBinPath
-	codexSettings.ACP.Command = acpBinPath // must be ignored
+	codexSettings.AppServer.Command = appServerBinPath // must be ignored
 
 	if path, _, err := command(codexSettings); err != nil || path != codexBinPath {
 		t.Errorf("codex path = %q, err = %v", path, err)
 	}
 
-	acpSettings := &config.Settings{}
-	acpSettings.LLM.Backend = BackendACP
-	acpSettings.Codex.CodexPath = codexBinPath // must be ignored
-	acpSettings.ACP.Command = acpBinPath
+	appServerSettings := &config.Settings{}
+	appServerSettings.LLM.Backend = BackendAppServer
+	appServerSettings.Codex.CodexPath = codexBinPath // must be ignored
+	appServerSettings.AppServer.Command = appServerBinPath
 
-	if path, _, err := command(acpSettings); err != nil || path != acpBinPath {
-		t.Errorf("acp path = %q, err = %v", path, err)
+	if path, _, err := command(appServerSettings); err != nil || path != appServerBinPath {
+		t.Errorf("appserver path = %q, err = %v", path, err)
 	}
 }
 
@@ -139,23 +139,23 @@ func TestApprovalPolicyPrefersBackendBlock(t *testing.T) {
 	t.Parallel()
 
 	// Explicit setting wins over the mode default.
-	acp := &config.Settings{}
-	acp.LLM.Backend = BackendACP
-	acp.ACP.ApprovalPolicy = ApprovalOnRequest
-	if got := approvalPolicy(acp, RunnerOptions{ApprovalPolicy: ApprovalNever}); got != ApprovalOnRequest {
-		t.Errorf("acp explicit policy: got %q", got)
+	appSrv := &config.Settings{}
+	appSrv.LLM.Backend = BackendAppServer
+	appSrv.AppServer.ApprovalPolicy = ApprovalOnRequest
+	if got := approvalPolicy(appSrv, RunnerOptions{ApprovalPolicy: ApprovalNever}); got != ApprovalOnRequest {
+		t.Errorf("appserver explicit policy: got %q", got)
 	}
 
 	// Absent setting falls back to the mode default.
-	acp.ACP.ApprovalPolicy = ""
-	if got := approvalPolicy(acp, RunnerOptions{ApprovalPolicy: ApprovalNever}); got != ApprovalNever {
-		t.Errorf("acp default policy: got %q", got)
+	appSrv.AppServer.ApprovalPolicy = ""
+	if got := approvalPolicy(appSrv, RunnerOptions{ApprovalPolicy: ApprovalNever}); got != ApprovalNever {
+		t.Errorf("appserver default policy: got %q", got)
 	}
 
-	// An acp thread must not pick up codex's policy.
-	acp.Codex.ApprovalPolicy = ApprovalOnRequest
-	if got := approvalPolicy(acp, RunnerOptions{ApprovalPolicy: ApprovalNever}); got != ApprovalNever {
-		t.Errorf("acp must ignore codex.approval_policy: got %q", got)
+	// An appserver thread must not pick up codex's policy.
+	appSrv.Codex.ApprovalPolicy = ApprovalOnRequest
+	if got := approvalPolicy(appSrv, RunnerOptions{ApprovalPolicy: ApprovalNever}); got != ApprovalNever {
+		t.Errorf("appserver must ignore codex.approval_policy: got %q", got)
 	}
 
 	// ...and codex still reads its own.
@@ -168,12 +168,12 @@ func TestApprovalPolicyPrefersBackendBlock(t *testing.T) {
 }
 
 // TestProbeReadySkipsNonCodex confirms the codex account probe never runs for
-// the generic backend. `account/read` is outside the ACP subset klein requires,
+// the generic backend. `account/read` is outside the protocol subset klein requires,
 // so probing it would reject a conforming server that has no account concept.
 // A nil client is the assertion: reaching the RPC call at all would panic.
 func TestProbeReadySkipsNonCodex(t *testing.T) {
 	t.Parallel()
-	for _, backend := range []string{BackendACP, "some-other-agent", ""} {
+	for _, backend := range []string{BackendAppServer, "some-other-agent", ""} {
 		if err := probeReady(t.Context(), nil, backend); err != nil {
 			t.Errorf("probeReady(%q) = %v, want nil (no probe for non-codex)", backend, err)
 		}

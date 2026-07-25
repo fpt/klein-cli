@@ -40,9 +40,9 @@ type Settings struct {
 	// llm.backend == "codex"). Model/effort still come from the llm block.
 	Codex CodexSettings `json:"codex,omitempty"`
 
-	// ACP configures the generic ACP app-server backend (used only when
-	// llm.backend == "acp"). The server owns its own model configuration.
-	ACP ACPSettings `json:"acp,omitempty"`
+	// AppServer configures the generic app-server backend (used only when
+	// llm.backend == "appserver"). The server owns its own model configuration.
+	AppServer AppServerSettings `json:"appserver,omitempty"`
 
 	// Repository for persistence (nil for in-memory only)
 	settingsRepository repository.SettingsRepository `json:"-"`
@@ -85,7 +85,7 @@ func (s *Settings) MemoryDBFile() string {
 //
 //nolint:tagliatelle // json keys are the established on-disk settings schema
 type LLMSettings struct {
-	Backend   string `json:"backend"`              // "openai", "anthropic", "gemini", "codex", or "acp"
+	Backend   string `json:"backend"`              // "openai", "anthropic", "gemini", "codex", or "appserver"
 	Model     string `json:"model"`                // model name
 	BaseURL   string `json:"base_url,omitempty"`   // optional provider base URL (OpenAI/Azure-compatible)
 	Thinking  bool   `json:"thinking,omitempty"`   // enable thinking mode
@@ -270,22 +270,22 @@ type CodexSettings struct {
 	SandboxMode    string `json:"sandbox_mode,omitempty"`    // read-only|workspace-write|danger-full-access ("" → workspace-write)
 }
 
-// ACPSettings configures the generic ACP app-server backend (llm.backend ==
-// "acp"): any local agent that speaks the app-server JSON-RPC protocol with the
-// `dynamicTools` experimental capability. Such a server runs its own agent loop
-// and owns its model configuration, so klein only needs to know how to launch it
-// and whether to be consulted before it mutates anything. It has no sandbox of
-// its own.
+// AppServerSettings configures the generic app-server backend (llm.backend ==
+// "appserver"): any local agent that speaks the codex-app-server JSON-RPC
+// protocol with the `dynamicTools` experimental capability. Such a server runs
+// its own agent loop and owns its model configuration, so klein only needs to
+// know how to launch it and whether to be consulted before it mutates anything.
+// It has no sandbox of its own.
 //
 // Nothing here names a particular implementation: Command is required precisely
-// because there is no single "the" ACP binary.
-type ACPSettings struct {
-	// Command is the ACP server binary (e.g. "gallium", or an absolute path).
+// because there is no single "the" app-server binary.
+type AppServerSettings struct {
+	// Command is the app-server binary (e.g. "gallium", or an absolute path).
 	// Required — this backend has no default binary.
 	Command string `json:"command,omitempty"`
 	// ApprovalPolicy is never|on-request ("" → the mode default).
 	ApprovalPolicy string `json:"approval_policy,omitempty"` //nolint:tagliatelle // established settings schema
-	// Config is an optional path to the ACP server's own TOML config (e.g.
+	// Config is an optional path to the server's own TOML config (e.g.
 	// ../rs-gallium/configs/gemma4.toml). Servers of this kind are configured by
 	// environment variables, so klein reads the file's [llm]/[agent] tables and
 	// passes them to the child as env; frontend-only tables are ignored. Values
@@ -464,12 +464,17 @@ func GetDefaultSettings() *Settings {
 const DefaultBackend = "openai"
 
 // The whole-agent app-server backend ids. These mirror agentserver.BackendCodex
-// and agentserver.BackendACP, duplicated here because agentserver imports this
-// package (see isAgentServerBackend).
+// and agentserver.BackendAppServer, duplicated here because agentserver imports
+// this package (see isAgentServerBackend).
 const (
-	BackendCodex = "codex"
-	BackendACP   = "acp"
+	BackendCodex     = "codex"
+	BackendAppServer = "appserver"
 )
+
+// backendACPRemoved is the pre-rename id of BackendAppServer. It named the wrong
+// protocol — see the AppServerSettings doc comment — and is rejected with a
+// pointer to the new id rather than silently aliased.
+const backendACPRemoved = "acp"
 
 // GetDefaultLLMSettingsForBackend returns default LLM settings for a specific backend
 func GetDefaultLLMSettingsForBackend(backend string) LLMSettings {
@@ -490,7 +495,7 @@ func GetDefaultLLMSettingsForBackend(backend string) LLMSettings {
 			Thinking:  false, // Gemini doesn't support thinking in our implementation
 			MaxTokens: 0,
 		}
-	case BackendCodex, BackendACP:
+	case BackendCodex, BackendAppServer:
 		// Model is left empty: these backends use the model configured in their
 		// own config unless overridden via llm.model / -m.
 		return LLMSettings{
@@ -519,7 +524,7 @@ func GetDefaultLLMSettingsForBackend(backend string) LLMSettings {
 // agentserver.IsAgentBackend, duplicated here because agentserver imports this
 // package.
 func isAgentServerBackend(backend string) bool {
-	return backend == BackendCodex || backend == BackendACP
+	return backend == BackendCodex || backend == BackendAppServer
 }
 
 // applyDefaults fills in missing fields with default values
@@ -558,10 +563,16 @@ func applyDefaults(settings *Settings) {
 func ValidateSettings(settings *Settings) error {
 	// Validate LLM settings
 	switch settings.LLM.Backend {
-	case "openai", "anthropic", "claude", "gemini", BackendCodex, BackendACP:
+	case "openai", "anthropic", "claude", "gemini", BackendCodex, BackendAppServer:
+	case backendACPRemoved:
+		return fmt.Errorf(
+			"unsupported LLM backend: %s — renamed to %q. \"ACP\" is ambiguous: klein speaks the "+
+				"codex-app-server protocol, not the agentclientprotocol.com standard. "+
+				"Rename llm.backend and the \"acp\" settings block to \"appserver\"",
+			settings.LLM.Backend, BackendAppServer)
 	default:
 		return fmt.Errorf(
-			"unsupported LLM backend: %s (must be 'openai', 'anthropic', 'gemini', 'codex', or 'acp')",
+			"unsupported LLM backend: %s (must be 'openai', 'anthropic', 'gemini', 'codex', or 'appserver')",
 			settings.LLM.Backend)
 	}
 

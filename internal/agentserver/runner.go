@@ -3,12 +3,12 @@
 // loop; klein routes a conversation turn to one of its threads and takes back
 // the final text.
 //
-// Two backends are supported. Both speak the same JSON-RPC app-server protocol
-// and differ only in the binary spawned and how it is configured:
+// Two backends are supported. Both speak the same codex-app-server JSON-RPC
+// protocol and differ only in the binary spawned and how it is configured:
 //
-//   - codex — the codex app-server (`codex app-server`)
-//   - acp   — any local ACP agent implementing the subset of that protocol used
-//     here; the binary comes from `acp.command` (e.g. `gallium app-server`)
+//   - codex     — the codex app-server (`codex app-server`)
+//   - appserver — any local agent implementing the subset of that protocol used
+//     here; the binary comes from `appserver.command` (e.g. `gallium app-server`)
 //
 // It drives the app-server over the LOW-LEVEL JSON-RPC protocol (not the SDK's
 // high-level Thread helpers) for one reason: klein exposes its own tools to the
@@ -38,7 +38,7 @@ import (
 )
 
 // Config configures a Runner. Model/Effort come from klein's llm settings; the
-// rest from the optional "codex"/"acp" settings block.
+// rest from the optional "codex"/"appserver" settings block.
 type Config struct {
 	Tools      domain.ToolManager
 	MCPServers map[string]any
@@ -46,8 +46,9 @@ type Config struct {
 	// Command and Args spawn the app-server ("codex app-server", "gallium app-server").
 	Command string
 	Args    []string
-	// Env holds environment overrides for the child (an ACP server is configured
-	// purely by env; see acpEnv). Empty means the child inherits klein's environment.
+	// Env holds environment overrides for the child (an app-server is configured
+	// purely by env; see appServerEnv). Empty means the child inherits klein's
+	// environment.
 	Env []string
 	// Backend names which app-server this is, for backend-specific behavior
 	// (e.g. the codex-only auth probe) and for log/error messages.
@@ -126,7 +127,7 @@ func NewRunner(ctx context.Context, cfg Config) (*Runner, error) {
 // appears on the first turn.
 //
 // It is codex-only by design. `account/read` is NOT part of the protocol subset
-// klein requires of a generic ACP server (initialize, thread/start, turn/start,
+// klein requires of a generic app-server (initialize, thread/start, turn/start,
 // dynamicTools), so probing one would reject conforming implementations that
 // have no account concept at all. Nothing is lost by skipping it: there is no
 // login to validate, and `initialize` is itself a round trip, so a dead or

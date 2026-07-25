@@ -10,21 +10,21 @@ import (
 	"github.com/BurntSushi/toml"
 )
 
-// acpConfig is the subset of an ACP server's config TOML (e.g. rs-gallium's
-// configs/gemma4.toml) that this backend actually uses.
+// appServerConfig is the subset of an app-server's config TOML (e.g.
+// rs-gallium's configs/gemma4.toml) that this backend actually uses.
 //
 // Such a file is primarily the server's own frontend config — tables like
 // [[mcpServers]] and the agent's systemPromptPath/skillPaths are consumed by the
 // server's REPL and are irrelevant to a klein-driven app-server turn, so they are
 // simply not modeled; the decoder ignores keys absent here. The app-server reads
 // none of this itself: it is configured purely by environment variables, so klein
-// translates the [llm]/[agent] settings into the env it expects (see acpEnv).
+// translates the [llm]/[agent] settings into the env it expects (see appServerEnv).
 //
 // Pointers distinguish "absent" from "present but empty/zero" — an explicit
 // `baseURL = ""` means "no base URL" (local model), which differs from omitting it.
 //
 //nolint:tagliatelle // key names are the server's config schema (baseURL, …), not ours
-type acpConfig struct {
+type appServerConfig struct {
 	LLM struct {
 		ModelPath       *string  `toml:"modelPath"`
 		BaseURL         *string  `toml:"baseURL"`
@@ -40,21 +40,21 @@ type acpConfig struct {
 	} `toml:"agent"`
 }
 
-// acpEnv reads the ACP server config at path and returns the environment
+// appServerEnv reads the app-server config at path and returns the environment
 // overrides for the spawned app-server, mapping the file's TOML keys onto the
 // env vars the server reads at startup.
 //
 // apiKey is only exported when the file sets a non-empty value: these configs
 // conventionally leave it blank and expect OPENAI_API_KEY from the ambient
 // environment, which the child inherits.
-func acpEnv(path string) ([]string, error) {
+func appServerEnv(path string) ([]string, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return nil, fmt.Errorf("read acp config %s: %w", path, err)
+		return nil, fmt.Errorf("read app-server config %s: %w", path, err)
 	}
-	var cfg acpConfig
+	var cfg appServerConfig
 	if err := toml.Unmarshal(data, &cfg); err != nil {
-		return nil, fmt.Errorf("parse acp config %s: %w", path, err)
+		return nil, fmt.Errorf("parse app-server config %s: %w", path, err)
 	}
 
 	var env []string

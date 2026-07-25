@@ -26,7 +26,7 @@ Every entry point ultimately builds the same stack. From the bottom up:
 ├──────────────────────────────────────────────────────────────┤
 │ Backend (domain.LLM)      openai · anthropic · gemini         │  chat, tool-calling, thinking
 └──────────────────────────────────────────────────────────────┘
-   (plus codex & acp — whole-agent backends routed above domain.LLM; see §7)
+   (plus codex & appserver — whole-agent backends routed above domain.LLM; see §7)
 ```
 
 The three layers the rest of this doc drills into:
@@ -286,9 +286,9 @@ append is the dominant memory op.
   `effort` come from the agent's `settings.json` — the gateway does **not** set
   them (it only passes a working directory when starting a session).
 
-### Whole-agent backends: codex and acp (not `domain.LLM`s)
+### Whole-agent backends: codex and appserver (not `domain.LLM`s)
 
-`backend: "codex"` and `backend: "acp"` are special. Neither is a chat model —
+`backend: "codex"` and `backend: "appserver"` are special. Neither is a chat model —
 each runs its **own** reasoning + tool loop. So they are *not* plugged in as a
 `domain.LLM`; instead `app.Agent.Invoke` branches: when a `CodexBackend` is set,
 the turn is routed to a backend thread (`Runner.RunTurn`) and the ReAct loop +
@@ -298,20 +298,36 @@ construction and `ModelID()` work; `Chat` is never called).
 Both are driven by **one** implementation, `internal/agentserver`, because both
 speak the same JSON-RPC **app-server protocol**. They differ only in the binary
 spawned (resolved by `command()`) and in who owns the model: codex takes it from
-the codex CLI's config, an ACP server from its own.
+the codex CLI's config, a generic app-server from its own.
 
-`acp` is deliberately **generic** — it names the protocol, not an implementation.
-Any local agent that implements the subset used here (`initialize` with
-`experimentalApi`, `thread/start`, `turn/start`, `dynamicTools`) can be plugged
-in by naming its binary in `acp.command`; there is no default, so klein never
-guesses one. `codex` stays a distinct id only because it carries codex-specific
-behavior (sandbox modes, the login probe in `probeReady`). The reference ACP
-server is [rs-gallium](https://github.com/fpt/rs-gallium) (`gallium app-server`,
-see its `crates/gallium-agent/src/appserver/`).
+`appserver` is deliberately **generic** — it names the protocol, not an
+implementation. Any local agent that implements the subset used here
+(`initialize` with `experimentalApi`, `thread/start`, `turn/start`,
+`dynamicTools`) can be plugged in by naming its binary in `appserver.command`;
+there is no default, so klein never guesses one. `codex` stays a distinct id only
+because it carries codex-specific behavior (sandbox modes, the login probe in
+`probeReady`). The reference server is
+[rs-gallium](https://github.com/fpt/rs-gallium) (`gallium app-server`, see its
+`crates/gallium-agent/src/appserver/`).
+
+**Why not "ACP".** This backend was named `acp` between 2026-07-23 and
+2026-07-25, and that name conflated two different protocols:
+
+| "ACP" as used by | Means | klein |
+|---|---|---|
+| gallium / rs-kessel / klein | the codex-app-server subset — `initialize` / `thread/start` / `turn/start` plus `dynamicTools` | **what this backend speaks** |
+| [agentclientprotocol.com](https://agentclientprotocol.com), the `codex-acp` npm bridge | the editor-facing standard — `session/new`, `session/prompt`, `session/update` | **not implemented** |
+
+rs-gallium settled the question on its side — the standard is a no-go, with no
+adapter planned ([#15](https://github.com/fpt/rs-gallium/issues/15), reaffirmed
+in [#13](https://github.com/fpt/rs-gallium/issues/13)) — so klein names the
+backend after the protocol it actually speaks. `"backend": "acp"` is rejected at
+startup with a message naming the new id; there is no silent alias, because the
+two senses must not be allowed to blur back together.
 
 That subset is a contract, so nothing outside it may be required at startup. In
 particular `probeReady`'s `account/read` call runs **only for `codex`** — it
-validates a login that a generic ACP server does not have, and demanding the
+validates a login that a generic app-server does not have, and demanding the
 method would reject conforming implementations with no account concept. There is
 no liveness cost: `initialize` is itself a round trip, so an unreachable or
 non-conforming server has already failed by then.
@@ -342,13 +358,13 @@ next turn (memory-context injection still carries facts across restarts).
 `never` the backend proceeds unasked (headless surfaces). Otherwise it raises
 `item/commandExecution/requestApproval` / `item/fileChange/requestApproval`, and
 klein's `toolHandler` either auto-accepts (headless, `Approver == nil`) or
-prompts the user (interactive repl). Note an ACP server typically has **no
+prompts the user (interactive repl). Note a generic app-server typically has **no
 sandbox** of its own — `codex.sandbox_mode` does not apply to it, so approvals
 are the only gate.
 
 Requires the `codex` binary on `PATH` (with `dynamicTools` support —
-experimental) or the binary named by `acp.command`; auth/model are the backend's
-own.
+experimental) or the binary named by `appserver.command`; auth/model are the
+backend's own.
 
 ---
 

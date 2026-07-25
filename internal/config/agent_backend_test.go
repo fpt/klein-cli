@@ -3,13 +3,14 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
 // agentBackends are the whole-agent app-server backends. They own their own
 // model and credentials, so config treats them alike: no inherited chat-model
 // default, no required model, no required API key.
-var agentBackends = []string{BackendCodex, BackendACP}
+var agentBackends = []string{BackendCodex, BackendAppServer}
 
 // TestLoadAgentBackendModelNotLeaked confirms a settings file with no model does
 // not inherit the default chat model (the base Settings is seeded from
@@ -82,7 +83,7 @@ func TestValidateAgentBackend(t *testing.T) {
 	}
 }
 
-// TestAgentBackendDefault confirms `-b codex` / `-b acp` resolve to that
+// TestAgentBackendDefault confirms `-b codex` / `-b appserver` resolve to that
 // backend with an empty model (the backend uses its configured default).
 func TestAgentBackendDefault(t *testing.T) {
 	t.Parallel()
@@ -100,13 +101,14 @@ func TestAgentBackendDefault(t *testing.T) {
 	}
 }
 
-// TestACPSettingsRoundTrip confirms the acp block parses from JSON — a wrong tag
-// would silently leave acp.command empty, which the backend rejects at startup.
-func TestACPSettingsRoundTrip(t *testing.T) {
+// TestAppServerSettingsRoundTrip confirms the appserver block parses from JSON — a
+// wrong tag would silently leave appserver.command empty, which the backend
+// rejects at startup.
+func TestAppServerSettingsRoundTrip(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
 	p := filepath.Join(dir, "settings.json")
-	body := `{"llm":{"backend":"` + BackendACP + `"},"acp":{"command":"/opt/gallium","args":["serve"],` +
+	body := `{"llm":{"backend":"` + BackendAppServer + `"},"appserver":{"command":"/opt/gallium","args":["serve"],` +
 		`"config":"/etc/agent.toml","approval_policy":"on-request"}}`
 	if err := os.WriteFile(p, []byte(body), 0o644); err != nil {
 		t.Fatal(err)
@@ -115,17 +117,17 @@ func TestACPSettingsRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if s.ACP.Command != "/opt/gallium" {
-		t.Errorf("command: got %q", s.ACP.Command)
+	if s.AppServer.Command != "/opt/gallium" {
+		t.Errorf("command: got %q", s.AppServer.Command)
 	}
-	if len(s.ACP.Args) != 1 || s.ACP.Args[0] != "serve" {
-		t.Errorf("args: got %v", s.ACP.Args)
+	if len(s.AppServer.Args) != 1 || s.AppServer.Args[0] != "serve" {
+		t.Errorf("args: got %v", s.AppServer.Args)
 	}
-	if s.ACP.Config != "/etc/agent.toml" {
-		t.Errorf("config: got %q", s.ACP.Config)
+	if s.AppServer.Config != "/etc/agent.toml" {
+		t.Errorf("config: got %q", s.AppServer.Config)
 	}
-	if s.ACP.ApprovalPolicy != "on-request" {
-		t.Errorf("approval_policy: got %q", s.ACP.ApprovalPolicy)
+	if s.AppServer.ApprovalPolicy != "on-request" {
+		t.Errorf("approval_policy: got %q", s.AppServer.ApprovalPolicy)
 	}
 }
 
@@ -136,5 +138,22 @@ func TestValidateRejectsUnknownBackend(t *testing.T) {
 	s.LLM = LLMSettings{Backend: "acpp", Model: "x"} // typo
 	if err := ValidateSettings(s); err == nil {
 		t.Error("expected an error for an unknown backend")
+	}
+}
+
+// TestValidateRejectsRenamedACPBackend confirms the removed `acp` id is not
+// silently aliased to BackendAppServer, and that the error names the new id —
+// an existing settings.json is otherwise valid-looking JSON that would just stop
+// working with no hint why.
+func TestValidateRejectsRenamedACPBackend(t *testing.T) {
+	t.Parallel()
+	s := GetDefaultSettings()
+	s.LLM = LLMSettings{Backend: backendACPRemoved}
+	err := ValidateSettings(s)
+	if err == nil {
+		t.Fatal("expected an error for the renamed acp backend")
+	}
+	if !strings.Contains(err.Error(), BackendAppServer) {
+		t.Errorf("error must name the new backend id, got: %v", err)
 	}
 }

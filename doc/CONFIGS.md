@@ -24,7 +24,7 @@ go run klein/main.go [flags] [prompt]
 
 | Flag | Type | Default | Description |
 |------|------|---------|-------------|
-| `-b`, `--backend` | string | `""` | LLM backend: `openai`, `anthropic`, `gemini`, `codex`, `acp` |
+| `-b`, `--backend` | string | `""` | LLM backend: `openai`, `anthropic`, `gemini`, `codex`, `appserver` |
 | `-m`, `--model` | string | `""` | Model name (overrides settings file) |
 | `-s`, `--skill` | string | `"code"` | Skill to invoke |
 | `--workdir` | string | `"."` | Working directory for all file operations |
@@ -77,7 +77,7 @@ The `claw` object configures the `klein claw` gateway; see
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
-| `backend` | string | `"openai"` | Backend: `openai`, `anthropic`, `gemini`, `codex`, `acp` |
+| `backend` | string | `"openai"` | Backend: `openai`, `anthropic`, `gemini`, `codex`, `appserver` |
 | `model` | string | *(backend-specific)* | Model name |
 | `base_url` | string | *(backend-specific)* | API base URL (OpenAI/Azure-compatible only) |
 | `thinking` | bool | `true` | Enable thinking mode when model supports it |
@@ -91,7 +91,7 @@ The `claw` object configures the `klein claw` gateway; see
 | `openai` | `gpt-5.6-luna` | *(OpenAI API)* |
 | `gemini` | `gemini-2.5-flash-lite` | *(Google API)* |
 | `codex` | *(codex-owned)* | *(codex app-server)* |
-| `acp` | *(server-owned)* | *(the ACP app-server)* |
+| `appserver` | *(server-owned)* | *(the app-server)* |
 
 ### `codex` — codex app-server backend
 
@@ -121,20 +121,31 @@ needs a codex build with `dynamicTools`/`experimentalApi` support.
 }
 ```
 
-### `acp` — generic ACP app-server backend
+### `appserver` — generic app-server backend
 
-Used only when `llm.backend == "acp"`. Like codex, an ACP agent is a
+Used only when `llm.backend == "appserver"`. Like codex, such an agent is a
 **whole-agent** backend driven over the same app-server JSON-RPC protocol
 (`internal/agentserver` serves both): klein routes each turn to a thread on the
 server and takes back the final answer, while klein keeps the frontend,
 memory-context injection, and session↔thread mapping.
 
-`acp` names a **protocol, not a program**. Any local agent implementing the
+`appserver` names a **protocol, not a program**. Any local agent implementing the
 subset klein uses — `initialize` with the `experimentalApi` capability,
 `thread/start`, `turn/start`, and `dynamicTools` — can be plugged in. Because
-there is no single "the" ACP binary, **`acp.command` is required**; klein does not
-guess a default and will refuse to start without it. The reference implementation
-is [rs-gallium](https://github.com/fpt/rs-gallium), whose binary is `gallium`.
+there is no single "the" app-server binary, **`appserver.command` is required**;
+klein does not guess a default and will refuse to start without it. The reference
+implementation is [rs-gallium](https://github.com/fpt/rs-gallium), whose binary is
+`gallium`.
+
+> **On the name.** This backend was called `acp` until 2026-07-25. That was
+> wrong: "ACP" also names the [agentclientprotocol.com](https://agentclientprotocol.com)
+> standard (`session/new`, `session/prompt`, `session/update`), which klein does
+> **not** speak and which rs-gallium has ruled out
+> ([fpt/rs-gallium#15](https://github.com/fpt/rs-gallium/issues/15), reaffirmed in
+> [#13](https://github.com/fpt/rs-gallium/issues/13)). What klein speaks is the
+> **codex-app-server** protocol, hence the name. `"backend": "acp"` is now
+> rejected at startup with a message pointing here — rename it and the `acp`
+> settings block to `appserver`.
 
 The server owns its own model and credentials — it reads `MODEL_PATH` (a local
 GGUF) or `OPENAI_API_KEY` from the environment it is spawned in, so `llm.model` is
@@ -145,28 +156,28 @@ same connection. klein's external MCP servers are passed through; the server's o
 
 Two differences from codex worth knowing:
 
-- **No sandbox.** `codex.sandbox_mode` has no ACP equivalent, so
+- **No sandbox.** `codex.sandbox_mode` has no equivalent here, so
   `approval_policy` is the only gate on filesystem and shell mutations.
 - **No login.** Such a server has nothing to authenticate against beyond the API
   key or model path in its own environment.
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
-| `command` | string | *(none — **required**)* | The ACP server binary, e.g. `gallium` or an absolute path |
+| `command` | string | *(none — **required**)* | The app-server binary, e.g. `gallium` or an absolute path |
 | `args` | string[] | `["app-server"]` | Subcommand that puts the binary into app-server mode |
 | `config` | string | *(none)* | Path to the server's own config TOML (e.g. `../rs-gallium/configs/gemma4.toml`). See below. |
 | `approval_policy` | string | *(mode-dependent)* | `never` / `on-request`. Same mode defaults as codex: the interactive repl prompts you (y/N) before the server writes a file or runs a command; headless surfaces auto-approve. Set explicitly to override. |
 
 #### Running the server from one of its config TOMLs
 
-An ACP app-server is configured **entirely by environment variables**, which keeps
+An app-server is configured **entirely by environment variables**, which keeps
 klein in control of what reaches the child. A server's own `configs/*.toml` files
 are primarily frontend configs (their `[[mcpServers]]` and `[agent]`
 prompt/skill-path keys drive the server's REPL, not a klein-driven turn).
 
-Point `acp.config` at one and klein reads just its `[llm]` and `[agent]` tables,
-translating them into the environment the server expects (everything else is
-ignored):
+Point `appserver.config` at one and klein reads just its `[llm]` and `[agent]`
+tables, translating them into the environment the server expects (everything else
+is ignored):
 
 | TOML key | Env var passed to the server |
 |----------|------------------------------|
@@ -185,8 +196,8 @@ set (notably `OPENAI_API_KEY`) is inherited.
 
 ```json
 {
-  "llm": { "backend": "acp" },
-  "acp": {
+  "llm": { "backend": "appserver" },
+  "appserver": {
     "command": "../rs-gallium/target/release/gallium",
     "config": "../rs-gallium/configs/gemma4.toml",
     "approval_policy": "on-request"
@@ -198,8 +209,8 @@ Without `config`, the server simply inherits klein's environment:
 
 ```json
 {
-  "llm": { "backend": "acp" },
-  "acp": { "command": "gallium", "approval_policy": "on-request" }
+  "llm": { "backend": "appserver" },
+  "appserver": { "command": "gallium", "approval_policy": "on-request" }
 }
 ```
 

@@ -109,21 +109,21 @@ is_backend_available() {
                 return 1
             fi
             ;;
-        acp*)
-            # acp is a whole-agent backend spawning whatever binary the backend
-            # file names in acp.command. Its model comes from acp.config (the
-            # server's own TOML) or its environment, so there is no klein-side API
-            # key to check — just the binary.
-            acp_bin=$(jq -r '.acp.command // ""' \
+        appserver*)
+            # appserver is a whole-agent backend spawning whatever binary the
+            # backend file names in appserver.command. Its model comes from
+            # appserver.config (the server's own TOML) or its environment, so there
+            # is no klein-side API key to check — just the binary.
+            appserver_bin=$(jq -r '.appserver.command // ""' \
                 "${script_dir}/backends/${backend_name}.json" 2>/dev/null || echo "")
-            if [ -z "$acp_bin" ]; then
-                log_both "${YELLOW}⚠️  Skipping $backend_name: no acp.command in the backend file${NC}"
+            if [ -z "$appserver_bin" ]; then
+                log_both "${YELLOW}⚠️  Skipping $backend_name: no appserver.command in the backend file${NC}"
                 return 1
             fi
-            if command -v "$acp_bin" >/dev/null 2>&1 || [ -x "$acp_bin" ]; then
+            if command -v "$appserver_bin" >/dev/null 2>&1 || [ -x "$appserver_bin" ]; then
                 return 0
             else
-                log_both "${YELLOW}⚠️  Skipping $backend_name: acp binary '$acp_bin' not found${NC}"
+                log_both "${YELLOW}⚠️  Skipping $backend_name: app-server binary '$appserver_bin' not found${NC}"
                 return 1
             fi
             ;;
@@ -135,17 +135,17 @@ is_backend_available() {
 }
 
 # Tools that only exist inside klein's own ReAct loop: plan mode and sub-agent
-# spawning. A whole-agent backend (codex/acp) runs its own loop and is never
+# spawning. A whole-agent backend (codex/appserver) runs its own loop and is never
 # handed these, so a testcase that requires one cannot pass there — it is not
 # applicable rather than a failure. (Web/PDF/etc. tools are intentionally NOT
 # listed: those testcases can still succeed via the backend's own capabilities.)
 KLEIN_LOOP_ONLY_TOOLS="EnterPlanMode ExitPlanMode spawn_agent Task"
 
 # is_whole_agent_backend <backend> — true when the backend delegates the whole
-# turn to an external app-server (codex/acp) rather than klein's ReAct loop.
+# turn to an external app-server (codex/appserver) rather than klein's ReAct loop.
 is_whole_agent_backend() {
     case "$(jq -r '.llm.backend // ""' "${script_dir}/backends/${1}.json" 2>/dev/null)" in
-        codex|acp) return 0 ;;
+        codex|appserver) return 0 ;;
         *) return 1 ;;
     esac
 }

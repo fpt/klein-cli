@@ -15,9 +15,9 @@ testsuite/
 ├── matrix_runner.sh       # Run tests across multiple backends
 ├── backends/              # Backend configuration files
 │   ├── anthropic.json
+│   ├── appserver.json
 │   ├── codex.json
 │   ├── gemini.json
-│   ├── acp.json
 │   └── openai.json
 ├── testcases/             # Individual test cases
 │   ├── code_scenario/     # Simple code generation test

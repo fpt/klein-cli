@@ -22,14 +22,14 @@ type RunnerOptions struct {
 	ApprovalPolicy string
 }
 
-// defaultAppServerArgs is the conventional subcommand that puts an ACP agent
-// into app-server mode. acp.args overrides it for a server that spells it
+// defaultAppServerArgs is the conventional subcommand that puts an agent into
+// app-server mode. appserver.args overrides it for a server that spells it
 // differently.
 var defaultAppServerArgs = []string{"app-server"}
 
 // command resolves the binary and arguments for the configured backend. codex
-// defaults to `codex` on PATH; the generic acp backend has no default binary and
-// must name one, since it stands for any conforming server.
+// defaults to `codex` on PATH; the generic appserver backend has no default
+// binary and must name one, since it stands for any conforming server.
 func command(settings *config.Settings) (string, []string, error) {
 	switch settings.LLM.Backend {
 	case BackendCodex:
@@ -38,13 +38,13 @@ func command(settings *config.Settings) (string, []string, error) {
 			path = "codex"
 		}
 		return path, defaultAppServerArgs, nil
-	case BackendACP:
-		path := settings.ACP.Command
+	case BackendAppServer:
+		path := settings.AppServer.Command
 		if path == "" {
 			return "", nil, errors.New(
-				`backend "acp" requires acp.command in settings.json (path to the ACP app-server binary)`)
+				`backend "appserver" requires appserver.command in settings.json (path to the app-server binary)`)
 		}
-		args := settings.ACP.Args
+		args := settings.AppServer.Args
 		if len(args) == 0 {
 			args = defaultAppServerArgs
 		}
@@ -58,8 +58,8 @@ func command(settings *config.Settings) (string, []string, error) {
 // in the backend's own block wins over the mode default from opts.
 func approvalPolicy(settings *config.Settings, opts RunnerOptions) string {
 	explicit := settings.Codex.ApprovalPolicy
-	if settings.LLM.Backend == BackendACP {
-		explicit = settings.ACP.ApprovalPolicy
+	if settings.LLM.Backend == BackendAppServer {
+		explicit = settings.AppServer.ApprovalPolicy
 	}
 	if explicit != "" {
 		return explicit
@@ -69,7 +69,7 @@ func approvalPolicy(settings *config.Settings, opts RunnerOptions) string {
 
 // NewRunnerFromSettings builds a Runner from klein settings + a working dir.
 // Model/effort come from the llm block; the binary path and sandbox come from
-// the optional "codex" or "acp" block. opts supplies the mode's approval
+// the optional "codex" or "appserver" block. opts supplies the mode's approval
 // behavior. Two sets of tools are made reachable to a backend turn:
 //   - klein's configured external MCP servers (translated to backend config), and
 //   - klein's native tools (memory, schedule) registered as dynamic tools,
@@ -98,12 +98,12 @@ func NewRunnerFromSettings(
 		return nil, err
 	}
 
-	// An ACP app-server is configured from its environment, not a config flag —
-	// klein stays in control of what reaches the child. When a server config TOML
-	// is set, translate its [llm]/[agent] tables into the child's env.
+	// An app-server is configured from its environment, not a config flag — klein
+	// stays in control of what reaches the child. When a server config TOML is
+	// set, translate its [llm]/[agent] tables into the child's env.
 	var env []string
-	if settings.LLM.Backend == BackendACP && settings.ACP.Config != "" {
-		if env, err = acpEnv(settings.ACP.Config); err != nil {
+	if settings.LLM.Backend == BackendAppServer && settings.AppServer.Config != "" {
+		if env, err = appServerEnv(settings.AppServer.Config); err != nil {
 			return nil, err
 		}
 	}

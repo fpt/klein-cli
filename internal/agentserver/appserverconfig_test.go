@@ -8,10 +8,10 @@ import (
 	"testing"
 )
 
-// writeConfig writes an ACP server config TOML to a temp file and returns its path.
+// writeConfig writes an app-server config TOML to a temp file and returns its path.
 func writeConfig(t *testing.T, body string) string {
 	t.Helper()
-	path := filepath.Join(t.TempDir(), "acp.toml")
+	path := filepath.Join(t.TempDir(), "appserver.toml")
 	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
 		t.Fatalf("write config: %v", err)
 	}
@@ -29,10 +29,10 @@ func parseEnvKVs(kvs []string) map[string]string {
 	return m
 }
 
-// TestACPEnv_LocalModel covers a local-model config (rs-gallium's gemma4.toml
+// TestAppServerEnv_LocalModel covers a local-model config (rs-gallium's gemma4.toml
 // shape): an hf: modelPath, an explicitly empty baseURL, and REPL-only keys that
 // must be ignored rather than rejected.
-func TestACPEnv_LocalModel(t *testing.T) {
+func TestAppServerEnv_LocalModel(t *testing.T) {
 	t.Parallel()
 	path := writeConfig(t, `
 [llm]
@@ -52,9 +52,9 @@ skillPaths = ["../skills"]
 command = "godevmcp"
 args = ["serve"]
 `)
-	env, err := acpEnv(path)
+	env, err := appServerEnv(path)
 	if err != nil {
-		t.Fatalf("acpEnv: %v", err)
+		t.Fatalf("appServerEnv: %v", err)
 	}
 	got := parseEnvKVs(env)
 
@@ -82,9 +82,9 @@ args = ["serve"]
 	}
 }
 
-// TestACPEnv_RemoteModel covers an OpenAI-style config with reasoningEffort and
+// TestAppServerEnv_RemoteModel covers an OpenAI-style config with reasoningEffort and
 // a blank apiKey (the convention for "read it from the environment").
-func TestACPEnv_RemoteModel(t *testing.T) {
+func TestAppServerEnv_RemoteModel(t *testing.T) {
 	t.Parallel()
 	path := writeConfig(t, `
 [llm]
@@ -97,9 +97,9 @@ reasoningEffort = "high"
 [agent]
 maxTurns = 50
 `)
-	env, err := acpEnv(path)
+	env, err := appServerEnv(path)
 	if err != nil {
-		t.Fatalf("acpEnv: %v", err)
+		t.Fatalf("appServerEnv: %v", err)
 	}
 	got := parseEnvKVs(env)
 
@@ -119,7 +119,7 @@ maxTurns = 50
 	}
 }
 
-func TestACPEnv_ExportsExplicitAPIKey(t *testing.T) {
+func TestAppServerEnv_ExportsExplicitAPIKey(t *testing.T) {
 	t.Parallel()
 	path := writeConfig(t, "[llm]\napiKey = \"sk-test\"\n")
 	got := parseEnvKVs(mustEnv(t, path))
@@ -128,10 +128,10 @@ func TestACPEnv_ExportsExplicitAPIKey(t *testing.T) {
 	}
 }
 
-// TestACPEnv_RelativeModelPath is the crux of translating a config file into env:
+// TestAppServerEnv_RelativeModelPath is the crux of translating a config file into env:
 // the server resolves a relative modelPath against the config's directory, but
 // reads MODEL_PATH relative to its cwd, so klein must anchor it here.
-func TestACPEnv_RelativeModelPath(t *testing.T) {
+func TestAppServerEnv_RelativeModelPath(t *testing.T) {
 	t.Parallel()
 	path := writeConfig(t, "[llm]\nmodelPath = \"../models/x.gguf\"\n")
 	got := parseEnvKVs(mustEnv(t, path))
@@ -145,8 +145,8 @@ func TestACPEnv_RelativeModelPath(t *testing.T) {
 	}
 }
 
-// TestACPEnv_AbsoluteModelPath confirms an absolute path is passed through as-is.
-func TestACPEnv_AbsoluteModelPath(t *testing.T) {
+// TestAppServerEnv_AbsoluteModelPath confirms an absolute path is passed through as-is.
+func TestAppServerEnv_AbsoluteModelPath(t *testing.T) {
 	t.Parallel()
 	path := writeConfig(t, "[llm]\nmodelPath = \"/models/x.gguf\"\n")
 	if got := parseEnvKVs(mustEnv(t, path)); got["MODEL_PATH"] != "/models/x.gguf" {
@@ -154,21 +154,21 @@ func TestACPEnv_AbsoluteModelPath(t *testing.T) {
 	}
 }
 
-func TestACPEnv_Errors(t *testing.T) {
+func TestAppServerEnv_Errors(t *testing.T) {
 	t.Parallel()
-	if _, err := acpEnv(filepath.Join(t.TempDir(), "nope.toml")); err == nil {
+	if _, err := appServerEnv(filepath.Join(t.TempDir(), "nope.toml")); err == nil {
 		t.Error("missing file should error")
 	}
-	if _, err := acpEnv(writeConfig(t, "[llm\nmodel = ")); err == nil {
+	if _, err := appServerEnv(writeConfig(t, "[llm\nmodel = ")); err == nil {
 		t.Error("malformed toml should error")
 	}
 }
 
 func mustEnv(t *testing.T, path string) []string {
 	t.Helper()
-	env, err := acpEnv(path)
+	env, err := appServerEnv(path)
 	if err != nil {
-		t.Fatalf("acpEnv: %v", err)
+		t.Fatalf("appServerEnv: %v", err)
 	}
 	return env
 }

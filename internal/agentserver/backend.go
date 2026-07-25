@@ -11,20 +11,29 @@ import (
 // settings.LLM.Backend values that select a whole-agent app-server backend.
 //
 // Both speak the same JSON-RPC app-server protocol, so one Runner drives either;
-// they differ only in the binary spawned and how it is configured. BackendACP is
-// the generic case — any local agent implementing the subset of the protocol
-// used here (initialize/thread/turn plus `dynamicTools`); codex is kept separate
-// only because it carries codex-specific behavior (sandbox modes, the login probe).
+// they differ only in the binary spawned and how it is configured.
+// BackendAppServer is the generic case — any local agent implementing the subset
+// of the protocol used here (initialize/thread/turn plus `dynamicTools`); codex
+// is kept separate only because it carries codex-specific behavior (sandbox
+// modes, the login probe).
+//
+// "app-server" here means the codex-app-server compatible protocol, and nothing
+// else. This backend was briefly called `acp`, which was wrong in a way worth
+// recording: "ACP" also names the agentclientprotocol.com standard
+// (session/new, session/prompt, session/update), which klein does not speak and
+// which rs-gallium — the reference implementation of this backend — has ruled
+// out (fpt/rs-gallium#15, reaffirmed in #13). Naming the backend after the
+// protocol it actually speaks keeps the two senses distinct.
 const (
-	BackendCodex = "codex"
-	BackendACP   = "acp"
+	BackendCodex     = "codex"
+	BackendAppServer = "appserver"
 )
 
 // IsAgentBackend reports whether a backend name selects a whole-agent backend —
 // one that runs its own reasoning + tool loop, bypassing klein's ReAct loop —
 // as opposed to a chat model plugged in as a domain.LLM.
 func IsAgentBackend(backend string) bool {
-	return backend == BackendCodex || backend == BackendACP
+	return backend == BackendCodex || backend == BackendAppServer
 }
 
 // Approval policy values for RunnerOptions.ApprovalPolicy: ApprovalNever
@@ -101,7 +110,7 @@ func (b *sharedBackend) EnsureBackendProcess(_ context.Context, _ string) (domai
 }
 
 // Select returns an AgentBackend for the configured backend, or nil when the
-// backend needs no external process (every backend other than codex/acp).
+// backend needs no external process (every backend other than codex/appserver).
 // opts supplies the approval behavior for the lazy (agent-owned) case.
 func Select(settings *config.Settings, logger *pkgLogger.Logger, opts RunnerOptions) domain.AgentBackend {
 	if !IsAgentBackend(settings.LLM.Backend) {

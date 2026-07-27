@@ -1,7 +1,9 @@
 package agentserver
 
 import (
+	"bytes"
 	"encoding/json"
+	"fmt"
 	"maps"
 	"strings"
 	"testing"
@@ -9,6 +11,7 @@ import (
 	"github.com/pmenglund/codex-sdk-go/rpc"
 
 	"github.com/fpt/klein-cli/pkg/agent/events"
+	pkgLogger "github.com/fpt/klein-cli/pkg/logger"
 )
 
 const (
@@ -293,4 +296,81 @@ func TestProgress_OtherThreadIgnored(t *testing.T) {
 	if len(*got) != 0 {
 		t.Errorf("notifications for other threads must be ignored: %+v", *got)
 	}
+}
+
+// newProgressWithLogger returns a turnProgress that reports unrendered item
+// types into the returned buffer, so the reports can be asserted on.
+func newProgressWithLogger() (*turnProgress, *bytes.Buffer) {
+	var buf bytes.Buffer
+	tp := &turnProgress{
+		announced: map[string]bool{},
+		reported:  map[string]bool{},
+		logger:    pkgLogger.NewLoggerWithConsoleWriter(pkgLogger.LogLevelWarn, &buf),
+		emit:      func(events.EventType, any) {},
+	}
+	return tp, &buf
+}
+
+// An item type nothing renders is the signature of a backend and a client that
+// have drifted apart. Dropping it silently is what let fpt/rs-gallium#49 sit
+// unnoticed, so it has to reach the log.
+func TestProgress_UnrenderedItemType_IsReported(t *testing.T) {
+	t.Parallel()
+	progress, buf := newProgressWithLogger()
+
+	feed(progress, completed(itm("i1", "toolResult", map[string]any{"text": "hi"})))
+
+	if !strings.Contains(buf.String(), "toolResult") {
+		t.Errorf("unrendered type was not reported: %q", buf.String())
+	}
+}
+
+// A backend that sends an unhandled variant on every item must cost one line
+// per turn, not one per item.
+func TestProgress_UnrenderedItemType_IsReportedOncePerTurn(t *testing.T) {
+	t.Parallel()
+	progress, buf := newProgressWithLogger()
+
+	for i := range 5 {
+		feed(progress, completed(itm(fmt.Sprintf("i%d", i), "toolResult", nil)))
+	}
+
+	if n := strings.Count(buf.String(), "toolResult"); n != 1 {
+		t.Errorf("want 1 report, got %d: %q", n, buf.String())
+	}
+}
+
+// Types this renderer knows and deliberately skips are not drift, and must not
+// be reported — otherwise the signal drowns in codex's ordinary bookkeeping.
+func TestProgress_KnownUnrenderedTypes_AreNotReported(t *testing.T) {
+	t.Parallel()
+	for _, typ := range []string{"agentMessage", "plan", "sleep", "reviewMode"} {
+		progress, buf := newProgressWithLogger()
+		feed(progress, completed(itm("i1", typ, nil)))
+		if buf.Len() != 0 {
+			t.Errorf("%s should be silent, logged: %q", typ, buf.String())
+		}
+	}
+}
+
+// A type the switch handles is obviously not drift.
+func TestProgress_RenderedItemType_IsNotReported(t *testing.T) {
+	t.Parallel()
+	progress, buf := newProgressWithLogger()
+
+	feed(progress, completed(itm("i1", "dynamicToolCall", map[string]any{
+		kTool: "memory", "status": stCompleted, "result": "ok",
+	})))
+
+	if buf.Len() != 0 {
+		t.Errorf("a rendered type should be silent, logged: %q", buf.String())
+	}
+}
+
+// The logger is optional, and every existing caller leaves it nil.
+func TestProgress_NilLogger_DoesNotPanic(t *testing.T) {
+	t.Parallel()
+	progress, _ := newProgress()
+
+	feed(progress, completed(itm("i1", "toolResult", nil)))
 }

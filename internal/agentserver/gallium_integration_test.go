@@ -71,22 +71,52 @@ func assertNoDrift(t *testing.T, buf *bytes.Buffer) {
 	}
 }
 
-// galliumScript writes a script for gallium's `scripted` engine: one tool call,
-// then a reply. The shortest script that exercises the whole ReAct loop and both
-// halves of a tool-call notification.
-func galliumScript(t *testing.T, dir string) string {
+// writeScript stores a script for gallium's `scripted` engine and returns its
+// path.
+func writeScript(t *testing.T, script string) string {
 	t.Helper()
-	path := filepath.Join(dir, "script.json")
-	script := `{
-	  "steps": [
-	    { "toolCalls": [{ "id": "c1", "name": "LS", "arguments": { "path": "." } }] },
-	    { "text": "I listed the working directory.", "inputTokens": 42 }
-	  ]
-	}`
+	path := filepath.Join(t.TempDir(), "script.json")
 	if err := os.WriteFile(path, []byte(script), 0o600); err != nil {
 		t.Fatalf("writing script: %v", err)
 	}
 	return path
+}
+
+// galliumScript is one tool call then a reply — the shortest script that
+// exercises the whole ReAct loop and both halves of a tool-call notification.
+func galliumScript(t *testing.T) string {
+	t.Helper()
+	return writeScript(t, `{
+	  "steps": [
+	    { "toolCalls": [{ "id": "c1", "name": "LS", "arguments": { "path": "." } }] },
+	    { "text": "I listed the working directory.", "inputTokens": 42 }
+	  ]
+	}`)
+}
+
+// newGalliumRunner spawns a gallium app-server replaying script in workDir, and
+// returns it with the buffer its drift reports land in. Closed on cleanup.
+//
+// GALLIUM_AUTO_APPROVE is set because these turns run tools: the scripts only
+// read, but a backend that stopped to ask, with no terminal to ask on, would
+// hang rather than fail.
+func newGalliumRunner(t *testing.T, bin, script, workDir string) (*Runner, *bytes.Buffer) {
+	t.Helper()
+	logger, drift := driftLog()
+	runner, err := NewRunner(context.Background(), Config{
+		Command:        bin,
+		Args:           []string{"app-server"},
+		Logger:         logger,
+		Env:            []string{"INFERENCE_ENGINE=scripted", "MODEL_PATH=" + script, "GALLIUM_AUTO_APPROVE=1"},
+		Backend:        BackendAppServer,
+		Cwd:            workDir,
+		ApprovalPolicy: ApprovalNever,
+	})
+	if err != nil {
+		t.Fatalf("spawning gallium: %v", err)
+	}
+	t.Cleanup(func() { _ = runner.Close() })
+	return runner, drift
 }
 
 func TestGallium_RealAppServer_RendersAToolCall(t *testing.T) {
@@ -96,31 +126,10 @@ func TestGallium_RealAppServer_RendersAToolCall(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(work, "only-file.txt"), []byte("hello\n"), 0o600); err != nil {
 		t.Fatalf("seeding the work dir: %v", err)
 	}
-	script := galliumScript(t, t.TempDir())
+	runner, drift := newGalliumRunner(t, bin, galliumScript(t), work)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
-
-	logger, drift := driftLog()
-	runner, err := NewRunner(ctx, Config{
-		Command: bin,
-		Args:    []string{"app-server"},
-		Logger:  logger,
-		Env: []string{
-			"INFERENCE_ENGINE=scripted",
-			"MODEL_PATH=" + script,
-			// The turn calls LS, which is read-only, but a backend prompting for
-			// approval with no terminal would hang rather than fail.
-			"GALLIUM_AUTO_APPROVE=1",
-		},
-		Backend:        BackendAppServer,
-		Cwd:            work,
-		ApprovalPolicy: ApprovalNever,
-	})
-	if err != nil {
-		t.Fatalf("spawning gallium: %v", err)
-	}
-	defer func() { _ = runner.Close() }()
 
 	var got []capturedEvent
 	emit := func(typ events.EventType, data any) {
@@ -179,37 +188,17 @@ func TestGallium_RealAppServer_RendersAToolCall(t *testing.T) {
 func TestGallium_RealAppServer_RendersAFailingToolCall(t *testing.T) {
 	bin := galliumBin(t)
 
-	work := t.TempDir()
-	scriptDir := t.TempDir()
-	path := filepath.Join(scriptDir, "script.json")
 	// Read a file that is not there: a real tool failure, not a synthetic one.
-	script := `{
+	script := writeScript(t, `{
 	  "steps": [
 	    { "toolCalls": [{ "id": "c1", "name": "Read", "arguments": { "path": "no-such-file.txt" } }] },
 	    { "text": "I could not read it." }
 	  ]
-	}`
-	if err := os.WriteFile(path, []byte(script), 0o600); err != nil {
-		t.Fatalf("writing script: %v", err)
-	}
+	}`)
+	runner, drift := newGalliumRunner(t, bin, script, t.TempDir())
 
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
-
-	logger, drift := driftLog()
-	runner, err := NewRunner(ctx, Config{
-		Command:        bin,
-		Args:           []string{"app-server"},
-		Env:            []string{"INFERENCE_ENGINE=scripted", "MODEL_PATH=" + path, "GALLIUM_AUTO_APPROVE=1"},
-		Backend:        BackendAppServer,
-		Cwd:            work,
-		Logger:         logger,
-		ApprovalPolicy: ApprovalNever,
-	})
-	if err != nil {
-		t.Fatalf("spawning gallium: %v", err)
-	}
-	defer func() { _ = runner.Close() }()
 
 	var got []capturedEvent
 	emit := func(typ events.EventType, data any) {
@@ -226,6 +215,60 @@ func TestGallium_RealAppServer_RendersAFailingToolCall(t *testing.T) {
 	}
 	if !results[0].IsError {
 		t.Errorf("a failing tool rendered as a success: %+v", results[0])
+	}
+
+	assertNoDrift(t, drift)
+}
+
+// A turn abandoned mid-flight — Ctrl+C, or any canceled context — must not
+// leave the backend working.
+//
+// gallium answers turn/start at once and runs the turn behind it
+// (fpt/rs-gallium#53), and refuses a second turn on a thread whose slot is still
+// held: "one turn at a time". So walking away without saying anything cost the
+// user their *next* message too, and every one after it until the abandoned turn
+// ended on its own — a sleeping shell, or a model call, for as long as it took.
+func TestGallium_RealAppServer_CancelledTurnFreesTheThread(t *testing.T) {
+	t.Parallel()
+	bin := galliumBin(t)
+
+	// A tool that outlives the cancellation by a wide margin, so "the thread is
+	// free again" cannot be confused with "the turn happened to finish".
+	script := writeScript(t, `{
+	  "steps": [
+	    { "toolCalls": [{ "id": "c1", "name": "Bash", "arguments": { "command": "sleep 30" } }] },
+	    { "text": "first turn." },
+	    { "text": "second turn." },
+	    { "text": "third turn." }
+	  ]
+	}`)
+	runner, drift := newGalliumRunner(t, bin, script, t.TempDir())
+
+	emit := func(events.EventType, any) {}
+
+	// Turn 1, canceled while the tool is still running. This is Ctrl+C.
+	ctx1, cancel1 := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel1()
+	started := time.Now()
+	threadID, _, err1 := runner.RunTurn(ctx1, "", "sleep please", "", emit)
+	if err1 == nil {
+		t.Fatal("a canceled turn should return an error")
+	}
+	// The interrupt is answered only once the turn has aborted, so returning at
+	// all means the backend confirmed it stopped — well before the sleep's 30s.
+	if elapsed := time.Since(started); elapsed > 20*time.Second {
+		t.Errorf("waited %v for the interrupt: the turn was not stopped, only waited out", elapsed)
+	}
+
+	// Turn 2 is the next thing the user types. It must be served.
+	ctx2, cancel2 := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel2()
+	_, text, err2 := runner.RunTurn(ctx2, threadID, "still there?", "", emit)
+	if err2 != nil {
+		t.Fatalf("the thread was left unusable by the canceled turn: %v", err2)
+	}
+	if text == "" {
+		t.Error("the next turn produced no text")
 	}
 
 	assertNoDrift(t, drift)

@@ -28,6 +28,7 @@ import (
 	"os"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/pmenglund/codex-sdk-go/protocol"
 	"github.com/pmenglund/codex-sdk-go/rpc"
@@ -73,6 +74,8 @@ type Runner struct {
 	started  map[string]bool
 	dynTools []map[string]any
 	mu       sync.Mutex
+	// startGraceOverride shortens startTurnGrace for tests; zero uses the const.
+	startGraceOverride time.Duration
 }
 
 const clientName = "klein"
@@ -232,13 +235,18 @@ func (r *Runner) runTurn(
 	defer iter.Close()
 
 	turnParams := map[string]any{
-		"threadId": threadID,
-		"input":    []map[string]any{{keyType: keyText, keyText: prompt}},
+		keyThreadID: threadID,
+		"input":     []map[string]any{{keyType: keyText, keyText: prompt}},
 	}
 	if r.cfg.Effort != "" {
 		turnParams["effort"] = r.cfg.Effort
 	}
-	if err := r.client.Call(ctx, "turn/start", turnParams, &json.RawMessage{}); err != nil {
+	turnID, err := r.startTurn(ctx, threadID, turnParams)
+	if err != nil {
+		// A start that was canceled in flight may still have left a turn running,
+		// and startTurn hands back its id when it managed to learn one. An empty
+		// id (a refusal, a dead transport) makes this a no-op.
+		r.interruptTurn(ctx, threadID, turnID)
 		return "", fmt.Errorf("codex turn/start: %w", err)
 	}
 
@@ -252,6 +260,11 @@ func (r *Runner) runTurn(
 	for {
 		note, err := iter.Next(ctx)
 		if err != nil {
+			// Ctrl+C (or any canceled/expired context) lands here. Leaving now
+			// would abandon a turn the backend is still running: it holds the
+			// thread's turn slot, and the next turn/start is refused ("one turn
+			// at a time") until it ends on its own.
+			r.interruptTurn(ctx, threadID, turnID)
 			return "", fmt.Errorf("codex notification stream: %w", err)
 		}
 		text, status := classifyNote(note, threadID, progress)
@@ -265,6 +278,142 @@ func (r *Runner) runTurn(
 			return final, fmt.Errorf("codex turn failed: %s", string(note.Raw))
 		default: // noteContinue
 		}
+	}
+}
+
+// startTurnGrace bounds how long a canceled turn/start is given to come back
+// with its turn id. Short: the response is an acknowledgement the backend sends
+// before doing any of the turn's work, so if it has not arrived by now it is not
+// going to arrive in time to be useful.
+const startTurnGrace = 3 * time.Second
+
+// startTurn issues turn/start and returns the new turn's id — the handle
+// turn/interrupt needs.
+//
+// The call deliberately does not travel on ctx. A request already on the wire
+// has a turn behind it whether or not klein is still listening, and dropping the
+// response loses the only handle for stopping it: the same abandoned-turn leak
+// this path exists to prevent, in the window where the id does not exist yet. So
+// a cancellation waits a bounded grace period for the id and returns it
+// alongside the error, leaving the caller to interrupt.
+//
+// A response that arrives after that grace is not discarded either: by then
+// nobody is left to act on it, so the goroutine stops the turn itself. Ownership
+// of that duty passes under the lock, so exactly one of the two does it.
+func (r *Runner) startTurn(ctx context.Context, threadID string, params map[string]any) (string, error) {
+	// Already given up before asking: starting a turn would be work for nobody.
+	if err := ctx.Err(); err != nil {
+		return "", fmt.Errorf("turn not started: %w", err)
+	}
+
+	type startResult struct {
+		err error
+		id  string
+	}
+	done := make(chan startResult, 1)
+	var (
+		mu        sync.Mutex
+		abandoned bool // the caller stopped waiting; the goroutine cleans up
+	)
+
+	go func() {
+		// codex answers turn/start at once and reports the rest by notification,
+		// so this response is an acknowledgement, not the turn's outcome.
+		var started struct {
+			Turn struct {
+				ID string `json:"id"`
+			} `json:"turn"`
+			TurnID string `json:"turnId"`
+		}
+		err := r.client.Call(context.WithoutCancel(ctx), "turn/start", params, &started)
+		id := started.Turn.ID
+		if id == "" {
+			id = started.TurnID
+		}
+
+		mu.Lock()
+		if !abandoned {
+			done <- startResult{id: id, err: err} // buffered: never blocks
+			mu.Unlock()
+			return
+		}
+		mu.Unlock()
+
+		// Late. runTurn returned long ago and cannot interrupt what it never
+		// learned the name of, so this is the only chance the turn gets to be
+		// stopped rather than run on holding the thread's slot.
+		r.interruptTurn(ctx, threadID, id)
+	}()
+
+	select {
+	case res := <-done:
+		return res.id, res.err
+	case <-ctx.Done():
+	}
+
+	select {
+	case res := <-done:
+		// The turn exists and klein knows its id; the caller can now stop it.
+		return res.id, fmt.Errorf("canceled while starting the turn: %w", ctx.Err())
+	case <-time.After(r.startGrace()):
+		mu.Lock()
+		abandoned = true
+		mu.Unlock()
+		// The answer may have landed between the timer firing and the handover.
+		select {
+		case res := <-done:
+			return res.id, fmt.Errorf("canceled while starting the turn: %w", ctx.Err())
+		default:
+		}
+		return "", fmt.Errorf(
+			"canceled while starting the turn, and it did not answer within %s: %w", r.startGrace(), ctx.Err())
+	}
+}
+
+// startGrace is startTurnGrace, or the override tests set to keep themselves
+// fast — nothing configures it at runtime.
+func (r *Runner) startGrace() time.Duration {
+	if r.startGraceOverride > 0 {
+		return r.startGraceOverride
+	}
+	return startTurnGrace
+}
+
+// interruptTimeout bounds the wait for the backend to confirm the turn stopped.
+// A backend with no interruption point (one blocked in a model call that ignores
+// cancellation) would otherwise hold klein here indefinitely, and the caller has
+// already given up on this turn.
+const interruptTimeout = 10 * time.Second
+
+// interruptTurn asks the backend to stop a turn klein is walking away from, and
+// waits for it to confirm.
+//
+// The wait is the point, not politeness: the protocol parks the request and
+// answers only once the turn has aborted, so a response means *stopped*, not
+// *heard*. Returning before that would hand the next turn/start a thread whose
+// slot is still taken.
+//
+// Best-effort. An app-server that predates turn/interrupt answers
+// method-not-found, and there is nothing to do about it here — the caller is
+// already returning an error, and the turn will free the thread when it ends on
+// its own. It is worth a log line: it means Ctrl+C left work running.
+func (r *Runner) interruptTurn(ctx context.Context, threadID, turnID string) {
+	if turnID == "" {
+		return
+	}
+	// ctx is the reason we are here — canceled or expired — so the interrupt
+	// cannot travel on it, or it would fail before reaching the backend.
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), interruptTimeout)
+	defer cancel()
+
+	params := map[string]any{keyThreadID: threadID, "turnId": turnID}
+	if err := r.client.Call(ctx, "turn/interrupt", params, &json.RawMessage{}); err != nil && r.cfg.Logger != nil {
+		r.cfg.Logger.Warn(
+			"could not stop the abandoned turn; the backend may still be working",
+			"thread", threadID,
+			"turn", turnID,
+			"error", err,
+		)
 	}
 }
 

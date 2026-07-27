@@ -20,6 +20,7 @@ const (
 	jsonTypeObject  = "object"
 	keyText         = "text"
 	keyType         = "type"
+	keyThreadID     = "threadId"
 
 	decisionAccept  = "accept"  // approve a command/file-change request
 	decisionDecline = "decline" // deny it; codex continues the turn

@@ -34,6 +34,7 @@ import (
 
 	"github.com/fpt/klein-cli/pkg/agent/domain"
 	"github.com/fpt/klein-cli/pkg/agent/events"
+	pkgLogger "github.com/fpt/klein-cli/pkg/logger"
 	"github.com/fpt/klein-cli/pkg/message"
 )
 
@@ -52,7 +53,10 @@ type Config struct {
 	Env []string
 	// Backend names which app-server this is, for backend-specific behavior
 	// (e.g. the codex-only auth probe) and for log/error messages.
-	Backend        string
+	Backend string
+	// Logger reports item types the backend sent that this renderer has no case
+	// for. Optional: nil keeps the old silence, which is what the tests use.
+	Logger         *pkgLogger.Logger
 	Model          string
 	Effort         string
 	ApprovalPolicy string
@@ -238,7 +242,12 @@ func (r *Runner) runTurn(
 		return "", fmt.Errorf("codex turn/start: %w", err)
 	}
 
-	progress := &turnProgress{emit: emit, announced: map[string]bool{}}
+	progress := &turnProgress{
+		emit:      emit,
+		announced: map[string]bool{},
+		logger:    r.cfg.Logger,
+		reported:  map[string]bool{},
+	}
 	final := ""
 	for {
 		note, err := iter.Next(ctx)
@@ -353,6 +362,50 @@ const (
 type turnProgress struct {
 	emit      func(events.EventType, any)
 	announced map[string]bool
+	// logger reports item types nothing renders. Optional; nil stays silent.
+	logger *pkgLogger.Logger
+	// reported dedupes those reports by type, so a backend that sends an
+	// unhandled variant on every item costs one line per turn, not one per item.
+	reported map[string]bool
+}
+
+// itemTypesKnownUnrendered are variants this renderer recognises and
+// deliberately skips: the turn's own text arrives through extractText, and the
+// rest are backend bookkeeping klein has no display for.
+//
+// Anything outside both this set and render's switch is reported, because a
+// type nobody handles usually means the backend and the client have drifted
+// apart — fpt/rs-gallium#49 was exactly that, and stayed invisible because an
+// unrecognised type is indistinguishable from one deliberately ignored.
+//
+// The list is best-effort. If a legitimate variant turns up in the log, adding
+// it here is the fix; the per-type dedupe keeps the cost to one line meanwhile.
+var itemTypesKnownUnrendered = map[string]bool{
+	"agentMessage":      true,
+	"plan":              true,
+	"sleep":             true,
+	"reviewMode":        true,
+	"enteredReviewMode": true,
+	"exitedReviewMode":  true,
+}
+
+// reportUnrendered logs an item type that reached render with no case for it.
+func (tp *turnProgress) reportUnrendered(itemType string) {
+	if tp.logger == nil || itemType == "" || itemTypesKnownUnrendered[itemType] {
+		return
+	}
+	if tp.reported == nil {
+		tp.reported = map[string]bool{}
+	}
+	if tp.reported[itemType] {
+		return
+	}
+	tp.reported[itemType] = true
+	tp.logger.Warn(
+		"app-server sent an item type this build does not render",
+		"type", itemType,
+		"hint", "the backend may be newer than klein, or the two have drifted",
+	)
 }
 
 // render emits progress for one ThreadItem, dispatching by variant. completed
@@ -380,6 +433,8 @@ func (tp *turnProgress) render(raw json.RawMessage, completed bool) {
 				tp.emit(events.EventTypeThinkingChunk, events.ThinkingChunkData{Content: s + "\n"})
 			}
 		}
+	default:
+		tp.reportUnrendered(it.Type)
 	}
 }
 

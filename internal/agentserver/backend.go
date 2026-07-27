@@ -58,6 +58,10 @@ func Start(
 		return nil, nil
 	}
 	logger.Info("Starting app-server backend", "backend", settings.LLM.Backend, "model", settings.LLM.Model)
+	// The runner has no logger of its own; this is the one place upstream that
+	// has one, and it is what lets an unrendered item type get reported rather
+	// than dropped.
+	opts.Logger = logger
 	// NewRunnerFromSettings spawns the app-server and validates it is
 	// authenticated, so a login/config failure surfaces here at startup.
 	runner, err := NewRunnerFromSettings(ctx, settings, workingDir, opts)

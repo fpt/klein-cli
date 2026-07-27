@@ -9,6 +9,7 @@ import (
 	"github.com/fpt/klein-cli/internal/tool"
 	"github.com/fpt/klein-cli/internal/tool/memorydb"
 	"github.com/fpt/klein-cli/pkg/agent/domain"
+	pkgLogger "github.com/fpt/klein-cli/pkg/logger"
 )
 
 // RunnerOptions carries mode-dependent behavior the settings file doesn't fix.
@@ -20,6 +21,10 @@ type RunnerOptions struct {
 	// "on-request" for the interactive repl). An explicit approval_policy in the
 	// backend's settings block overrides it.
 	ApprovalPolicy string
+	// Logger reports app-server items klein has no renderer for. Set by
+	// StartAgentBackend, the one place upstream that holds a logger; nil
+	// elsewhere, and nil is silent.
+	Logger *pkgLogger.Logger
 }
 
 // defaultAppServerArgs is the conventional subcommand that puts an agent into
@@ -121,5 +126,6 @@ func NewRunnerFromSettings(
 		MCPServers:     MCPServersConfig(settings.MCP.Servers),
 		Tools:          nativeTools,
 		Approver:       opts.Approver,
+		Logger:         opts.Logger,
 	})
 }

@@ -366,6 +366,38 @@ Requires the `codex` binary on `PATH` (with `dynamicTools` support —
 experimental) or the binary named by `appserver.command`; auth/model are the
 backend's own.
 
+**Protocol drift.** A subset is a contract between two repos that release
+separately, so the failure mode is not a crash but a *silent* divergence:
+`turnProgress.render` switches over the item variants it knows, and falling off
+the end is correct forward-compatibility — a newer backend must not break an
+older klein. It is also indistinguishable from a backend that has gone wrong.
+That is not hypothetical: rs-gallium sent tool results as `toolResult`, a variant
+with no case here, so every one was dropped, while the *start* announcement
+arrived as `commandExecution` and rendered as a shell result — `exit 0`, printed
+before the tool had run, with the real output never shown and a failing call
+byte-identical to a passing one ([fpt/rs-gallium#49](https://github.com/fpt/rs-gallium/issues/49),
+fixed producer-side in [#50](https://github.com/fpt/rs-gallium/pull/50)). Both
+projects' test suites passed throughout.
+
+Two seams make that loud instead:
+
+- **Report what nothing renders.** `render`'s `default` warns once per turn per
+  unknown type. `itemTypesKnownUnrendered` holds the variants klein recognises
+  and deliberately skips (`agentMessage` — the turn text arrives via
+  `extractText` — plus `plan`, `sleep`, the review modes, `autoApprovalReview`
+  and `permissions`), so ordinary codex bookkeeping does not drown the signal.
+  The list is best-effort: a legitimate variant showing up in a log is fixed by
+  adding it there, and the per-type dedupe bounds the noise meanwhile. The
+  logger is threaded from `StartAgentBackend` → `RunnerOptions` → `Config` and
+  is optional the whole way; `nil` is silent.
+- **Test the pair, not the belief.** Unit tests that hand-build notifications
+  can only confirm what klein already thinks; they passed throughout the bug
+  above. `gallium_integration_test.go` spawns a real gallium and asserts on the
+  rendered events — and, because it hands the Runner a logger, fails if gallium
+  ever sends a type nothing renders. It is affordable because gallium's
+  `scripted` engine replays a JSON script: no model, no API key, no network.
+  See [DEVELOPMENT.md](DEVELOPMENT.md) for running it.
+
 ---
 
 ## 8. State & paths

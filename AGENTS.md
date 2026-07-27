@@ -78,6 +78,11 @@ go test ./...                      # Run all tests
 go test -v ./...                   # Run tests with verbose output
 go test ./internal/app             # Test specific package (app layer)
 go test ./pkg/agent/react          # Test ReAct implementation
+
+# App-server integration tests: spawn a real rs-gallium and assert on what klein
+# renders (skipped without GALLIUM_BIN). Needs no model — gallium's `scripted`
+# engine replays a JSON script. See doc/DEVELOPMENT.md for building the binary.
+make test-gallium GALLIUM_BIN=/path/to/rs-gallium/target/release/gallium
 ```
 
 **Code Quality:**

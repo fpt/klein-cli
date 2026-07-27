@@ -467,6 +467,37 @@ go test -v ./pkg/llmclient/react/
 make test
 ```
 
+#### App-server integration tests (opt-in)
+
+`internal/agentserver` is tested twice over. The unit tests hand-build
+notifications and feed them to the renderer — they check klein's *beliefs* about
+the protocol. `gallium_integration_test.go` spawns a real
+[rs-gallium](https://github.com/fpt/rs-gallium) `app-server`, runs a real turn,
+and asserts on what klein actually renders, which is the only thing that catches
+the two projects drifting apart (see [DESIGN.md §7](DESIGN.md), *Protocol
+drift*).
+
+It needs no model: gallium's `scripted` engine replays a JSON script, so a turn
+with a tool call finishes in well under a second.
+
+```bash
+# A gallium with no model backends is enough, and builds in minutes with no
+# cmake/C++/GPU toolchain (--no-default-features drops candle + llama.cpp).
+git clone https://github.com/fpt/rs-gallium && cd rs-gallium
+cargo build --release -p gallium-agent --no-default-features
+
+# Back in klein:
+make test-gallium GALLIUM_BIN=/path/to/rs-gallium/target/release/gallium
+```
+
+Point it at a **freshly built** binary. There is deliberately no fall back to
+`gallium` on `PATH` — that is usually whatever was last `make install`ed, and
+testing against a stale one turns "you did not configure this" into a confusing
+assertion failure. `go test ./...` skips these when `GALLIUM_BIN` is unset, so
+the default suite stays fast; CI runs them in the **Gallium Integration**
+workflow, on changes to `internal/agentserver/**` and nightly (gallium can drift
+on days klein does not change).
+
 ### Code Quality
 
 ```bash

@@ -380,13 +380,21 @@ type turnProgress struct {
 //
 // The list is best-effort. If a legitimate variant turns up in the log, adding
 // it here is the fix; the per-type dedupe keeps the cost to one line meanwhile.
+//
+// autoApprovalReview and permissions are here for that reason: the codex SDK
+// carries item-scoped notifications for both (item/autoApprovalReview/{started,
+// completed}, item/permissions/requestApproval), so they are ordinary codex
+// bookkeeping rather than drift — klein handles approval through toolHandler and
+// has nothing to display for the items themselves.
 var itemTypesKnownUnrendered = map[string]bool{
-	"agentMessage":      true,
-	"plan":              true,
-	"sleep":             true,
-	"reviewMode":        true,
-	"enteredReviewMode": true,
-	"exitedReviewMode":  true,
+	"agentMessage":       true,
+	"plan":               true,
+	"sleep":              true,
+	"reviewMode":         true,
+	"enteredReviewMode":  true,
+	"exitedReviewMode":   true,
+	"autoApprovalReview": true,
+	"permissions":        true,
 }
 
 // reportUnrendered logs an item type that reached render with no case for it.

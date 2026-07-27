@@ -342,9 +342,11 @@ func TestProgress_UnrenderedItemType_IsReportedOncePerTurn(t *testing.T) {
 
 // Types this renderer knows and deliberately skips are not drift, and must not
 // be reported — otherwise the signal drowns in codex's ordinary bookkeeping.
+// Driven off the map itself so an entry added there is covered without also
+// being remembered here.
 func TestProgress_KnownUnrenderedTypes_AreNotReported(t *testing.T) {
 	t.Parallel()
-	for _, typ := range []string{"agentMessage", "plan", "sleep", "reviewMode"} {
+	for typ := range itemTypesKnownUnrendered {
 		progress, buf := newProgressWithLogger()
 		feed(progress, completed(itm("i1", typ, nil)))
 		if buf.Len() != 0 {

@@ -1,0 +1,85 @@
+# Runs the app-server integration tests against a real rs-gallium build.
+#
+# Every other test in internal/agentserver checks klein's *beliefs* about the
+# protocol: notifications are hand-built and fed to the renderer. That is how
+# fpt/rs-gallium#49 stayed hidden — gallium sent an item type klein had no case
+# for, both projects' suites passed, and every tool call displayed as a
+# successful `exec` returning "exit 0". Only running the pair catches that, and
+# the pair can only drift when the *other* repo changes, which is why this also
+# runs nightly rather than on klein's commits alone.
+name: Gallium Integration
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - "internal/agentserver/**"
+      - ".github/workflows/gallium-integration.yml"
+  push:
+    branches: [main]
+    paths:
+      - "internal/agentserver/**"
+      - ".github/workflows/gallium-integration.yml"
+  # Drift usually arrives from rs-gallium, not from here, so check daily even
+  # when klein is untouched.
+  schedule:
+    - cron: "17 5 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  gallium:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Check out klein
+        uses: actions/checkout@v5
+        with:
+          path: klein
+
+      # main, deliberately unpinned: pinning a ref would test klein against a
+      # gallium frozen at the moment the pin was written, which is exactly the
+      # drift this job exists to notice.
+      - name: Check out rs-gallium
+        uses: actions/checkout@v5
+        with:
+          repository: fpt/rs-gallium
+          ref: main
+          path: rs-gallium
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          cache: true
+          cache-dependency-path: klein/go.sum
+
+      - name: Cache cargo + build
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            rs-gallium/target
+          key: ${{ runner.os }}-gallium-cargo-${{ hashFiles('rs-gallium/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-gallium-cargo-
+
+      # --no-default-features drops the `gallium` (candle) and `local`
+      # (llama.cpp) engines, leaving a pure-Rust binary that needs no cmake, no
+      # C++ toolchain and no GPU — minutes on a cold cache instead of the
+      # llama.cpp build upstream's macOS/Windows jobs pay for. The tests drive
+      # the `scripted` engine, which replays a JSON script and is not behind
+      # either feature, so nothing under test is compiled out. rs-gallium ships
+      # no Linux build of its own; this is why one is buildable here at all.
+      - name: Build gallium (no model backends)
+        working-directory: rs-gallium
+        run: cargo build --release --locked -p gallium-agent --no-default-features
+
+      # -run Gallium only: the rest of the suite already ran in Unit Tests.
+      - name: Run the integration tests
+        working-directory: klein
+        env:
+          GALLIUM_BIN: ${{ github.workspace }}/rs-gallium/target/release/gallium
+        run: go test ./internal/agentserver/ -run Gallium -v

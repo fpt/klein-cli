@@ -20,6 +20,7 @@ package agentserver
 // whole turn including a tool call finishes in milliseconds.
 
 import (
+	"bytes"
 	"context"
 	"os"
 	"path/filepath"
@@ -28,6 +29,7 @@ import (
 	"time"
 
 	"github.com/fpt/klein-cli/pkg/agent/events"
+	pkgLogger "github.com/fpt/klein-cli/pkg/logger"
 )
 
 // galliumBin returns the gallium to test against, or skips.
@@ -47,6 +49,26 @@ func galliumBin(t *testing.T) string {
 		t.Fatalf("GALLIUM_BIN=%q is not usable: %v", bin, err)
 	}
 	return bin
+}
+
+// driftLog returns a logger to hand the Runner, plus the buffer its reports land
+// in. Passing it is what makes these tests cover the *other* half of the drift
+// defense: turnProgress warns about item types nothing renders, and only a real
+// backend can produce a type klein did not think of. assertNoDrift then fails the
+// test on one, so a future gallium that adds an item type says so here rather
+// than in a user's log.
+func driftLog() (*pkgLogger.Logger, *bytes.Buffer) {
+	var buf bytes.Buffer
+	return pkgLogger.NewLoggerWithConsoleWriter(pkgLogger.LogLevelWarn, &buf), &buf
+}
+
+// assertNoDrift fails if the turn produced an unrendered-item report. Call after
+// RunTurn returns: reports are written from the same goroutine.
+func assertNoDrift(t *testing.T, buf *bytes.Buffer) {
+	t.Helper()
+	if buf.Len() != 0 {
+		t.Errorf("gallium sent an item type klein does not render: %s", buf.String())
+	}
 }
 
 // galliumScript writes a script for gallium's `scripted` engine: one tool call,
@@ -79,9 +101,11 @@ func TestGallium_RealAppServer_RendersAToolCall(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 
+	logger, drift := driftLog()
 	runner, err := NewRunner(ctx, Config{
 		Command: bin,
 		Args:    []string{"app-server"},
+		Logger:  logger,
 		Env: []string{
 			"INFERENCE_ENGINE=scripted",
 			"MODEL_PATH=" + script,
@@ -145,6 +169,8 @@ func TestGallium_RealAppServer_RendersAToolCall(t *testing.T) {
 	if strings.Contains(results[0].Content, "exit 0") {
 		t.Errorf("still rendering the sandboxed-shell placeholder: %q", results[0].Content)
 	}
+
+	assertNoDrift(t, drift)
 }
 
 // A failing tool must be distinguishable from a passing one. It was not: IsError
@@ -170,12 +196,14 @@ func TestGallium_RealAppServer_RendersAFailingToolCall(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 
+	logger, drift := driftLog()
 	runner, err := NewRunner(ctx, Config{
 		Command:        bin,
 		Args:           []string{"app-server"},
 		Env:            []string{"INFERENCE_ENGINE=scripted", "MODEL_PATH=" + path, "GALLIUM_AUTO_APPROVE=1"},
 		Backend:        BackendAppServer,
 		Cwd:            work,
+		Logger:         logger,
 		ApprovalPolicy: ApprovalNever,
 	})
 	if err != nil {
@@ -199,4 +227,6 @@ func TestGallium_RealAppServer_RendersAFailingToolCall(t *testing.T) {
 	if !results[0].IsError {
 		t.Errorf("a failing tool rendered as a success: %+v", results[0])
 	}
+
+	assertNoDrift(t, drift)
 }

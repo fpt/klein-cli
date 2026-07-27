@@ -40,6 +40,17 @@ fix: ## Fix code issues
 integ: build ## Matrix integration test (testcases × backends)
 	CLI=output/klein BACKENDS="openai,anthropic,gemini" ./testsuite/matrix_runner.sh
 
+# The bare `go test` skips these, so an unset GALLIUM_BIN would look like a pass;
+# fail loudly instead, and say how to get a binary. Point it at a fresh build:
+# a stale `make install`ed gallium fails for the wrong reason.
+test-gallium: ## App-server integration test against a real gallium (GALLIUM_BIN=...)
+	@test -n "$(GALLIUM_BIN)" || { \
+		echo "set GALLIUM_BIN=/path/to/gallium"; \
+		echo "  build one: cargo build --release -p gallium-agent --no-default-features"; \
+		echo "  (in a rs-gallium checkout; no model backends needed)"; \
+		exit 1; }
+	GALLIUM_BIN="$(GALLIUM_BIN)" go test ./internal/agentserver/ -run Gallium -v
+
 test-capabilities: ## Capability testing
 	go build -o output/test-capabilities ./cmd/test-capabilities
 	./output/test-capabilities

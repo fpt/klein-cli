@@ -239,21 +239,13 @@ func (r *Runner) runTurn(
 	if r.cfg.Effort != "" {
 		turnParams["effort"] = r.cfg.Effort
 	}
-	// The response is read for its turn id, which is what turn/interrupt targets.
-	// codex answers turn/start at once and reports the rest by notification, so
-	// this is an acknowledgement, not the turn's outcome.
-	var started struct {
-		TurnID string `json:"turnId"`
-		Turn   struct {
-			ID string `json:"id"`
-		} `json:"turn"`
-	}
-	if err := r.client.Call(ctx, "turn/start", turnParams, &started); err != nil {
+	turnID, err := r.startTurn(ctx, turnParams)
+	if err != nil {
+		// A start that was canceled in flight may still have left a turn running,
+		// and startTurn hands back its id when it managed to learn one. An empty
+		// id (a refusal, a dead transport) makes this a no-op.
+		r.interruptTurn(ctx, threadID, turnID)
 		return "", fmt.Errorf("codex turn/start: %w", err)
-	}
-	turnID := started.Turn.ID
-	if turnID == "" {
-		turnID = started.TurnID
 	}
 
 	progress := &turnProgress{
@@ -284,6 +276,68 @@ func (r *Runner) runTurn(
 			return final, fmt.Errorf("codex turn failed: %s", string(note.Raw))
 		default: // noteContinue
 		}
+	}
+}
+
+// startTurnGrace bounds how long a canceled turn/start is given to come back
+// with its turn id. Short: the response is an acknowledgement the backend sends
+// before doing any of the turn's work, so if it has not arrived by now it is not
+// going to arrive in time to be useful.
+const startTurnGrace = 3 * time.Second
+
+// startTurn issues turn/start and returns the new turn's id — the handle
+// turn/interrupt needs.
+//
+// The call deliberately does not travel on ctx. A request already on the wire
+// has a turn behind it whether or not klein is still listening, and dropping the
+// response loses the only handle for stopping it: the same abandoned-turn leak
+// this path exists to prevent, in the window where the id does not exist yet. So
+// a cancellation waits a bounded grace period for the id and returns it
+// alongside the error, leaving the caller to interrupt.
+//
+// If the response never comes, the goroutine outlives this call and exits when
+// the backend eventually answers — the buffered channel is what makes that safe.
+func (r *Runner) startTurn(ctx context.Context, params map[string]any) (string, error) {
+	// Already given up before asking: starting a turn would be work for nobody.
+	if err := ctx.Err(); err != nil {
+		return "", fmt.Errorf("turn not started: %w", err)
+	}
+
+	type startResult struct {
+		err error
+		id  string
+	}
+	done := make(chan startResult, 1)
+	go func() {
+		// codex answers turn/start at once and reports the rest by notification,
+		// so this response is an acknowledgement, not the turn's outcome.
+		var started struct {
+			Turn struct {
+				ID string `json:"id"`
+			} `json:"turn"`
+			TurnID string `json:"turnId"`
+		}
+		err := r.client.Call(context.WithoutCancel(ctx), "turn/start", params, &started)
+		id := started.Turn.ID
+		if id == "" {
+			id = started.TurnID
+		}
+		done <- startResult{id: id, err: err}
+	}()
+
+	select {
+	case res := <-done:
+		return res.id, res.err
+	case <-ctx.Done():
+	}
+
+	select {
+	case res := <-done:
+		// The turn exists and klein knows its id; the caller can now stop it.
+		return res.id, fmt.Errorf("canceled while starting the turn: %w", ctx.Err())
+	case <-time.After(startTurnGrace):
+		return "", fmt.Errorf(
+			"canceled while starting the turn, and it did not answer within %s: %w", startTurnGrace, ctx.Err())
 	}
 }
 

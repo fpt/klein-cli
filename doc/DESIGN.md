@@ -376,6 +376,13 @@ hold klein indefinitely, and it is best-effort — an app-server predating
 `turn/interrupt` answers method-not-found, which is logged, since it means Ctrl+C
 left work running.
 
+That leaves one window: a cancellation *between* sending `turn/start` and reading
+its reply, where a turn may exist that klein cannot name. `startTurn` therefore
+does not tie the request to ctx — a request already on the wire has a turn behind
+it whether or not klein is still listening — and on cancellation waits
+`startTurnGrace` for the id before giving up, so the interrupt has something to
+target. A context already canceled on entry starts no turn at all.
+
 Requires the `codex` binary on `PATH` (with `dynamicTools` support —
 experimental) or the binary named by `appserver.command`; auth/model are the
 backend's own.

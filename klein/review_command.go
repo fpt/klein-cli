@@ -261,6 +261,44 @@ func noReviewableFilesResult(skipped []string) tool.ReviewResult {
 	return tool.ReviewResult{Summary: summary, Verdict: "approve", Finalized: true}
 }
 
+// newReviewAgent builds the review agent and applies the review sandbox: the
+// hard read-only tool override and control-token sanitizing. Returns the
+// agent's cleanup func, which the caller must defer.
+func newReviewAgent(
+	ctx context.Context, opts reviewOptions, settings *config.Settings,
+	reviewMgr domain.ToolManager, fsRepo repository.FilesystemRepository,
+	logger *pkgLogger.Logger, out io.Writer,
+) (*app.Agent, func(), error) {
+	llmClient, err := client.NewLLMClient(settings.LLM)
+	if err != nil {
+		return nil, nil, fmt.Errorf("create LLM client: %w", err)
+	}
+
+	a, cleanup, err := app.NewAgentWithOptions(ctx, app.AgentOptions{
+		Settings:   settings,
+		WorkingDir: opts.workdir,
+		MCPToolManagers: map[string]domain.ToolManager{
+			"review": reviewMgr,
+		},
+		Logger:            logger,
+		Out:               out,
+		FsRepo:            fsRepo,
+		IsInteractiveMode: false,
+		LLMClient:         llmClient,
+	})
+	if err != nil {
+		return nil, nil, fmt.Errorf("create agent: %w", err)
+	}
+	a.SetAllowedToolsOverride(reviewAllowedTools)
+	// Safe here because reviewAllowedTools is read-only: no Write/Edit can carry
+	// the substitution back to disk. See Agent.SetSanitizeToolResults.
+	a.SetSanitizeToolResults(true)
+	if opts.maxBudget > 0 {
+		a.SetTokenBudget(opts.maxBudget)
+	}
+	return a, cleanup, nil
+}
+
 // executeReview parses the request, runs the review agent with the sandboxed
 // toolset, and returns the accumulated review.
 func executeReview(
@@ -288,31 +326,11 @@ func executeReview(
 	}
 	reviewMgr := tool.NewReviewToolManager(prepared.ranges.Validate, prepared.previousIDs)
 
-	llmClient, err := client.NewLLMClient(settings.LLM)
+	a, cleanup, err := newReviewAgent(ctx, opts, settings, reviewMgr, fsRepo, logger, out)
 	if err != nil {
-		return zero, fmt.Errorf("create LLM client: %w", err)
-	}
-
-	a, cleanup, err := app.NewAgentWithOptions(ctx, app.AgentOptions{
-		Settings:   settings,
-		WorkingDir: opts.workdir,
-		MCPToolManagers: map[string]domain.ToolManager{
-			"review": reviewMgr,
-		},
-		Logger:            logger,
-		Out:               out,
-		FsRepo:            fsRepo,
-		IsInteractiveMode: false,
-		LLMClient:         llmClient,
-	})
-	if err != nil {
-		return zero, fmt.Errorf("create agent: %w", err)
+		return zero, err
 	}
 	defer cleanup()
-	a.SetAllowedToolsOverride(reviewAllowedTools)
-	if opts.maxBudget > 0 {
-		a.SetTokenBudget(opts.maxBudget)
-	}
 
 	logger.Info("Starting review",
 		"files", prepared.numFiles, "previous_comments", len(prepared.previousIDs),

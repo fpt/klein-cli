@@ -3,6 +3,8 @@ package review
 import (
 	"fmt"
 	"strings"
+
+	"github.com/fpt/klein-cli/internal/sanitize"
 )
 
 // PreviousComment is one unresolved inline comment from an earlier review
@@ -80,8 +82,24 @@ func BuildPrompt(req Request, enrichedDiff, language string) string {
 		language = "en"
 	}
 	fmt.Fprintf(&b, "\nWrite the summary and all inline review comments in this language: %s\n", language)
-	return b.String()
+
+	out := sanitize.ControlTokens(b.String())
+	// Only mention the rewrite when it actually happened, so the note doesn't
+	// invite the model to hunt for substitutions in a diff that has none.
+	if out != b.String() {
+		out += controlTokenNote
+	}
+	return out
 }
+
+// controlTokenNote tells the model that control-token pipes were rewritten.
+// Without it the reviewer sees `<｜channel｜>` in the code, believes the token
+// is misspelled, and files a confident false positive.
+const controlTokenNote = "\nNote on notation: chat-template control tokens in the diff and in files you Read " +
+	"are shown with a fullwidth vertical bar (`<｜channel｜>`) instead of the ASCII `|`. " +
+	"The real source uses ASCII; this substitution keeps the provider's prompt filter from " +
+	"rejecting the request. Do NOT report it as a defect, and do not quote it as evidence " +
+	"of one — treat `<｜…｜>` as if it read `<|…|>`.\n"
 
 // writePreviousComments renders the unresolved comments from earlier rounds.
 func writePreviousComments(b *strings.Builder, comments []PreviousComment) {

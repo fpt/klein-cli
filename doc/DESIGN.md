@@ -362,6 +362,20 @@ prompts the user (interactive repl). Note a generic app-server typically has **n
 sandbox** of its own — `codex.sandbox_mode` does not apply to it, so approvals
 are the only gate.
 
+**Cancellation.** `turn/start` is an acknowledgement, not the outcome: the
+backend answers at once and reports the turn by notification. So a cancelled
+context (Ctrl+C in the repl) unblocks *klein* and nothing else — the turn keeps
+running, holding the thread's one turn slot, and the next `turn/start` is refused
+("one turn at a time") until it ends on its own. `runTurn` therefore keeps the
+turn id from the start response and, on any exit from the notification loop that
+isn't the turn's own ending, sends `turn/interrupt{threadId, turnId}` and
+**waits**: the protocol parks that request and answers once the turn has aborted,
+so the reply means *stopped*, not *heard*. The wait is bounded
+(`interruptTimeout`) because a backend with no interruption point would otherwise
+hold klein indefinitely, and it is best-effort — an app-server predating
+`turn/interrupt` answers method-not-found, which is logged, since it means Ctrl+C
+left work running.
+
 Requires the `codex` binary on `PATH` (with `dynamicTools` support —
 experimental) or the binary named by `appserver.command`; auth/model are the
 backend's own.

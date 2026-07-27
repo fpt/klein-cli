@@ -113,15 +113,36 @@ func (f *fakeServer) requests() []map[string]any {
 }
 
 // runnerOn wires a Runner to a fake server, skipping NewRunner's handshake: the
-// thread is pre-marked as started so RunTurn goes straight to the turn.
-func runnerOn(t *testing.T, server *fakeServer) *Runner {
+// thread is pre-marked as started so RunTurn goes straight to the turn. grace
+// stands in for startTurnGrace so a test does not have to wait out the real one.
+func runnerOn(t *testing.T, server *fakeServer, grace time.Duration) *Runner {
 	t.Helper()
 	client := rpc.NewClient(server, rpc.ClientOptions{})
 	t.Cleanup(func() { _ = client.Close() })
 	return &Runner{
-		client:  client,
-		cfg:     Config{Backend: BackendAppServer},
-		started: map[string]bool{"thread_1": true},
+		client:             client,
+		cfg:                Config{Backend: BackendAppServer},
+		started:            map[string]bool{"thread_1": true},
+		startGraceOverride: grace,
+	}
+}
+
+// waitForInterrupt returns the params of the first turn/interrupt the server
+// saw, waiting up to timeout for one that has not arrived yet.
+func waitForInterrupt(t *testing.T, server *fakeServer, timeout time.Duration) map[string]any {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	for {
+		for _, req := range server.requests() {
+			if req["method"] == "turn/interrupt" {
+				params, _ := req["params"].(map[string]any)
+				return params
+			}
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("the turn was left running: %+v", server.requests())
+		}
+		time.Sleep(10 * time.Millisecond)
 	}
 }
 
@@ -131,8 +152,9 @@ func runnerOn(t *testing.T, server *fakeServer) *Runner {
 func TestRunTurn_CanceledDuringTurnStart_StillInterrupts(t *testing.T) {
 	t.Parallel()
 
+	// Answers within the grace, so runTurn itself does the interrupting.
 	server := newFakeServer(300 * time.Millisecond)
-	runner := runnerOn(t, server)
+	runner := runnerOn(t, server, 2*time.Second)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
 	defer cancel()
@@ -142,15 +164,7 @@ func TestRunTurn_CanceledDuringTurnStart_StillInterrupts(t *testing.T) {
 		t.Fatal("a canceled turn should return an error")
 	}
 
-	var interrupted map[string]any
-	for _, req := range server.requests() {
-		if req["method"] == "turn/interrupt" {
-			interrupted, _ = req["params"].(map[string]any)
-		}
-	}
-	if interrupted == nil {
-		t.Fatalf("the turn was left running: %+v", server.requests())
-	}
+	interrupted := waitForInterrupt(t, server, time.Second)
 	if interrupted["turnId"] != "turn_1" || interrupted["threadId"] != "thread_1" {
 		t.Errorf("interrupted the wrong turn: %+v", interrupted)
 	}
@@ -162,7 +176,7 @@ func TestRunTurn_AlreadyCanceled_StartsNothing(t *testing.T) {
 	t.Parallel()
 
 	server := newFakeServer(0)
-	runner := runnerOn(t, server)
+	runner := runnerOn(t, server, time.Second)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
@@ -174,5 +188,35 @@ func TestRunTurn_AlreadyCanceled_StartsNothing(t *testing.T) {
 		if req["method"] == "turn/start" {
 			t.Errorf("started a turn for a canceled context: %+v", server.requests())
 		}
+	}
+}
+
+// The acknowledgement can also arrive after klein has stopped waiting for it. By
+// then runTurn has returned and cannot interrupt a turn it never learned the
+// name of, so whoever finally reads the id has to stop the turn itself —
+// otherwise it runs on, holding the thread's slot, which is the leak this whole
+// path exists to close.
+func TestRunTurn_TurnStartAnswersAfterTheGrace_InterruptsAnyway(t *testing.T) {
+	t.Parallel()
+
+	// The answer lands well after the grace has expired.
+	server := newFakeServer(400 * time.Millisecond)
+	runner := runnerOn(t, server, 50*time.Millisecond)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancel()
+
+	started := time.Now()
+	if _, _, err := runner.RunTurn(ctx, "thread_1", "hi", "", func(events.EventType, any) {}); err == nil {
+		t.Fatal("a canceled turn should return an error")
+	}
+	// The caller is not made to wait for the late answer.
+	if waited := time.Since(started); waited > 300*time.Millisecond {
+		t.Errorf("RunTurn waited %v for a response it had given up on", waited)
+	}
+
+	interrupted := waitForInterrupt(t, server, 2*time.Second)
+	if interrupted["turnId"] != "turn_1" {
+		t.Errorf("interrupted the wrong turn: %+v", interrupted)
 	}
 }

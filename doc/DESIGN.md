@@ -381,7 +381,10 @@ its reply, where a turn may exist that klein cannot name. `startTurn` therefore
 does not tie the request to ctx — a request already on the wire has a turn behind
 it whether or not klein is still listening — and on cancellation waits
 `startTurnGrace` for the id before giving up, so the interrupt has something to
-target. A context already canceled on entry starts no turn at all.
+target. An id that arrives *after* that grace is not dropped either — by then
+`runTurn` has returned and cannot act on it, so the pending request interrupts
+the turn itself; ownership of that duty passes under a lock, so exactly one of
+the two does it. A context already canceled on entry starts no turn at all.
 
 Requires the `codex` binary on `PATH` (with `dynamicTools` support —
 experimental) or the binary named by `appserver.command`; auth/model are the

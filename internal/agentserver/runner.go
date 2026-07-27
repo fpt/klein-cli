@@ -74,6 +74,8 @@ type Runner struct {
 	started  map[string]bool
 	dynTools []map[string]any
 	mu       sync.Mutex
+	// startGraceOverride shortens startTurnGrace for tests; zero uses the const.
+	startGraceOverride time.Duration
 }
 
 const clientName = "klein"
@@ -239,7 +241,7 @@ func (r *Runner) runTurn(
 	if r.cfg.Effort != "" {
 		turnParams["effort"] = r.cfg.Effort
 	}
-	turnID, err := r.startTurn(ctx, turnParams)
+	turnID, err := r.startTurn(ctx, threadID, turnParams)
 	if err != nil {
 		// A start that was canceled in flight may still have left a turn running,
 		// and startTurn hands back its id when it managed to learn one. An empty
@@ -295,9 +297,10 @@ const startTurnGrace = 3 * time.Second
 // a cancellation waits a bounded grace period for the id and returns it
 // alongside the error, leaving the caller to interrupt.
 //
-// If the response never comes, the goroutine outlives this call and exits when
-// the backend eventually answers — the buffered channel is what makes that safe.
-func (r *Runner) startTurn(ctx context.Context, params map[string]any) (string, error) {
+// A response that arrives after that grace is not discarded either: by then
+// nobody is left to act on it, so the goroutine stops the turn itself. Ownership
+// of that duty passes under the lock, so exactly one of the two does it.
+func (r *Runner) startTurn(ctx context.Context, threadID string, params map[string]any) (string, error) {
 	// Already given up before asking: starting a turn would be work for nobody.
 	if err := ctx.Err(); err != nil {
 		return "", fmt.Errorf("turn not started: %w", err)
@@ -308,6 +311,11 @@ func (r *Runner) startTurn(ctx context.Context, params map[string]any) (string, 
 		id  string
 	}
 	done := make(chan startResult, 1)
+	var (
+		mu        sync.Mutex
+		abandoned bool // the caller stopped waiting; the goroutine cleans up
+	)
+
 	go func() {
 		// codex answers turn/start at once and reports the rest by notification,
 		// so this response is an acknowledgement, not the turn's outcome.
@@ -322,7 +330,19 @@ func (r *Runner) startTurn(ctx context.Context, params map[string]any) (string, 
 		if id == "" {
 			id = started.TurnID
 		}
-		done <- startResult{id: id, err: err}
+
+		mu.Lock()
+		if !abandoned {
+			done <- startResult{id: id, err: err} // buffered: never blocks
+			mu.Unlock()
+			return
+		}
+		mu.Unlock()
+
+		// Late. runTurn returned long ago and cannot interrupt what it never
+		// learned the name of, so this is the only chance the turn gets to be
+		// stopped rather than run on holding the thread's slot.
+		r.interruptTurn(ctx, threadID, id)
 	}()
 
 	select {
@@ -335,10 +355,28 @@ func (r *Runner) startTurn(ctx context.Context, params map[string]any) (string, 
 	case res := <-done:
 		// The turn exists and klein knows its id; the caller can now stop it.
 		return res.id, fmt.Errorf("canceled while starting the turn: %w", ctx.Err())
-	case <-time.After(startTurnGrace):
+	case <-time.After(r.startGrace()):
+		mu.Lock()
+		abandoned = true
+		mu.Unlock()
+		// The answer may have landed between the timer firing and the handover.
+		select {
+		case res := <-done:
+			return res.id, fmt.Errorf("canceled while starting the turn: %w", ctx.Err())
+		default:
+		}
 		return "", fmt.Errorf(
-			"canceled while starting the turn, and it did not answer within %s: %w", startTurnGrace, ctx.Err())
+			"canceled while starting the turn, and it did not answer within %s: %w", r.startGrace(), ctx.Err())
 	}
+}
+
+// startGrace is startTurnGrace, or the override tests set to keep themselves
+// fast — nothing configures it at runtime.
+func (r *Runner) startGrace() time.Duration {
+	if r.startGraceOverride > 0 {
+		return r.startGraceOverride
+	}
+	return startTurnGrace
 }
 
 // interruptTimeout bounds the wait for the backend to confirm the turn stopped.

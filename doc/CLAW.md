@@ -1,13 +1,13 @@
-# klein-claw: Messaging Gateway
+# `klein claw`: Messaging Gateway
 
-klein-claw is an OpenClaw-inspired messaging gateway that turns the klein agent into a personal AI assistant accessible via Discord (and other platforms in the future).
+`klein claw` is an OpenClaw-inspired messaging gateway that turns the klein agent into a personal AI assistant accessible via Discord (and other platforms in the future). It is a subcommand of `klein`, not a binary of its own.
 
 ## Current State (MVP)
 
 The MVP is functional with the following components:
 
-- **Connect-gRPC server** (`--serve` mode) — Exposes the agent via HTTP/2 with session management
-- **Gateway binary** (`cmd/gateway`) — Routes messages between Discord and the agent
+- **Connect-gRPC server** — Exposes the agent via HTTP/2 with session management, either embedded in-process (the default) or standalone via `klein --serve`
+- **Gateway** (`internal/gateway`, run by `klein claw`) — Routes messages between Discord and the agent
 - **Discord adapter** — Bot with allowlists, mention-only mode, typing indicators, 2000-char splitting
 - **Memory system** — MEMORY.md (long-term) + daily notes, injected into prompts
 - **Session routing** — Per-channel/peer sessions mapped to Connect RPC sessions
@@ -220,26 +220,30 @@ The MVP is functional with the following components:
 
 ## Architecture Notes
 
-### Why Two Processes?
+### Why an RPC Boundary?
 
-The agent and gateway run as separate processes for good reasons:
+The gateway talks to the agent over Connect-gRPC even when both live in one process. `klein claw` starts an **embedded** agent server on an ephemeral loopback port by default; setting `agent_addr` splits them across two processes instead. Keeping the boundary in both cases buys:
 
 1. **Agent reuse** — The same agent serves CLI, gateway, and future IDE integrations via the same Connect-gRPC API
-2. **Independent scaling** — The gateway is I/O-bound (WebSocket, HTTP), the agent is compute-bound (LLM calls). They have different resource profiles.
-3. **Independent restarts** — Update the gateway (new Discord features) without interrupting long-running agent sessions, and vice versa
-4. **Security boundary** — The gateway handles external input (Discord messages from the internet). Keeping it separate from the agent (which has filesystem and bash access) limits the blast radius.
+2. **Independent scaling** — The gateway is I/O-bound (WebSocket, HTTP), the agent is compute-bound (LLM calls). They have different resource profiles, and the split deployment is available when that matters.
+3. **Independent restarts** — In the split deployment, update the gateway (new Discord features) without interrupting long-running agent sessions, and vice versa
+4. **Security boundary** — The gateway handles external input (Discord messages from the internet). The split deployment keeps it out of the process that has filesystem and bash access, limiting the blast radius.
+
+The single-process default exists because none of the above is worth a second process to start, supervise, and keep version-matched for the common case of one user running one gateway.
 
 ### Memory Architecture
 
 The current memory system is deliberately file-based:
 
 ```
-~/.klein/claw/memory/
-├── MEMORY.md          # Long-term facts (injected into every prompt)
-└── daily/
-    ├── 2025-06-01.md  # Daily journal notes
-    ├── 2025-06-02.md
-    └── ...
+<base_dir>/memory/          # base_dir defaults to ~/.klein
+├── MEMORY.md               # Long-term facts (injected into every prompt)
+├── daily/
+│   ├── 2025-06-01.md       # Daily journal notes
+│   ├── 2025-06-02.md
+│   └── ...
+└── runs/
+    └── 2025-06-01.md       # Daily log of scheduled runs
 ```
 
 The agent reads and writes these files using its standard filesystem tools. The gateway's `MemoryManager` reads them for prompt injection. This means:

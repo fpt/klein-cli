@@ -18,7 +18,7 @@ The name KLEIN is inspired by the Klein bottle, a topological surface with no di
 - **MCP Server Support**: MCP Servers can be configured in settings.json
 - **Conversation State Management**: Automatic handling of conversation history and context
 - **AGENTS.md support**: Includes content of AGENTS.md to system prompt automatically
-- **Messaging Gateway (klein-claw)**: Discord integration for using the agent as a personal AI assistant via messaging
+- **Messaging Gateway (`klein claw`)**: Discord integration for using the agent as a personal AI assistant via messaging
 
 ## Quick Start
 
@@ -313,51 +313,58 @@ klein --settings ./my-settings.json "Create a simple web server in Golang."
 }
 ```
 
-## Gateway (klein-claw)
+## Gateway (`klein claw`)
 
-klein-claw is an OpenClaw-inspired messaging gateway that makes the agent accessible via Discord. It runs as a separate binary communicating with the klein agent over Connect-gRPC.
+`klein claw` is an OpenClaw-inspired messaging gateway that makes the agent accessible via Discord. It is a subcommand of `klein`, not a separate binary, and by default it starts an **embedded, in-process agent server** — so a single command is the whole gateway.
 
 ```
-Discord ──► klein-claw (gateway) ──► Connect-gRPC ──► klein agent (--serve)
-                                  ◄── streaming events ◄──
+Discord ──► klein claw ──► [in-process agent]
+                       ◄── streaming events ◄──
 ```
+
+Set `agent_addr` in the `claw` config (or pass `--agent-addr`) to dial a separately-run `klein --serve` instead, which splits the two across processes.
 
 ### Quick Start
 
-**1. Start the agent in server mode:**
-```bash
-# With Anthropic Claude
-klein --serve -b anthropic
+**1. Add a `claw` section to `settings.json`:**
 
-# Or build and run
-make build
-./output/klein --serve -b anthropic --serve-addr :50051
-```
-
-**2. Create a gateway config:**
-
-Create `~/.klein/claw/config.json`:
 ```json
 {
-  "agent_addr": "http://localhost:50051",
-  "working_dir": "/path/to/your/project",
-  "default_skill": "claw",
-  "discord": {
-    "token": "YOUR_DISCORD_BOT_TOKEN",
-    "allowed_user_ids": ["YOUR_DISCORD_USER_ID"],
-    "mention_only": true
+  "llm": { "backend": "anthropic", "model": "claude-sonnet-4-6" },
+  "base_dir": "~/.klein",
+  "claw": {
+    "default_skill": "claw",
+    "discord": {
+      "token": "YOUR_DISCORD_BOT_TOKEN",
+      "allowed_user_ids": ["YOUR_DISCORD_USER_ID"],
+      "mention_only": true
+    }
   }
 }
 ```
 
-**3. Start the gateway:**
+**2. Start the gateway:**
+
 ```bash
 # From source
-go run ./cmd/gateway --config ~/.klein/claw/config.json
+go run ./klein claw
 
 # Or build and run
-make build-gateway
-./output/klein-claw --config ~/.klein/claw/config.json
+make build
+./output/klein claw
+
+# A fully isolated second instance (its own base_dir + Discord token)
+./output/klein claw --settings ~/work/settings.json
+```
+
+Sessions, memory, and the schedule store are **not** configured in the `claw` block — they derive from the top-level `base_dir` (default `~/.klein`), shared with the CLI.
+
+### Interactive CLI — `klein claw repl`
+
+`klein claw repl` opens a terminal chat that shares claw's tools (memory, schedules, MCP) and backend but keeps its own session. It's the local frontend for inspecting and curating memory and schedules; it does not start Discord or the scheduler.
+
+```bash
+./output/klein claw repl
 ```
 
 ### Discord Bot Setup
@@ -367,7 +374,7 @@ make build-gateway
 3. Enable the **MESSAGE CONTENT** privileged intent under Bot settings
 4. Generate an invite URL with `bot` scope and `Send Messages` + `Read Message History` permissions
 5. Invite the bot to your server
-6. Copy the bot token into your gateway config
+6. Copy the bot token into the `claw.discord.token` field of your `settings.json`
 
 ### Gateway Commands
 
@@ -376,100 +383,45 @@ In Discord, use `!` prefix for gateway commands:
 | Command | Description |
 |---------|-------------|
 | `!clear` | Clear conversation and start fresh |
-| `!skill <name>` | Switch skill (code, respond, claw) |
+| `!skill <name>` | Switch the session's default skill |
 | `!memory` | Show stored memory content |
 | `!help` | Show available commands |
 
+Slash commands are also available: `/list` shows the loaded skills, and `/<skill> [args]` runs one skill for a single message without changing the session's persistent skill.
+
 ### Memory System
 
-The gateway includes a persistent memory system at `~/.klein/claw/memory/`:
+The gateway includes a persistent memory system at `<base_dir>/memory/`:
 - **MEMORY.md** — Long-term facts about the user (preferences, projects, etc.)
 - **daily/YYYY-MM-DD.md** — Daily journal notes for significant events
+- **runs/YYYY-MM-DD.md** — Daily log of scheduled runs, so one job can read another's output
 
 Memory context is automatically injected into each conversation. The agent can read and update these files using its standard filesystem tools.
 
-### Heartbeat (legacy single job)
+### Schedules
 
-Optional periodic prompt execution. Configure in `config.json`:
+Recurring jobs are configured in the `claw.schedules` array. Each job fires on a standard 5-field **cron expression** in a required **timezone**, and `"silent": true` runs the prompt without posting the result back to a channel.
+
 ```json
-{
-  "heartbeat": {
+"schedules": [
+  {
+    "name": "nightly-memory",
     "enabled": true,
-    "interval": "24h",
-    "prompt": "Review MEMORY.md and create today's daily note.",
+    "cron": "45 23 * * *",
+    "timezone": "Asia/Tokyo",
     "skill": "claw",
-    "channel_type": "discord",
-    "channel_id": "YOUR_CHANNEL_ID"
+    "silent": true,
+    "prompt": "Review today's runs/ log and daily note, and summarise what's worth keeping into today's daily note."
   }
-}
+]
 ```
 
-### Schedules (multi-job + silent mode)
+Schedules the agent creates itself (via the `Schedule*` tools) are stored in `<base_dir>/schedules.json` and live-reloaded, so no restart is needed.
 
-For continuous data collection — e.g. periodic `ResearcherFetch` to build a
-time-series store — use the `schedules` array. Each entry runs on its own
-ticker. Set `"silent": true` to run the prompt without posting the result
-back to a channel (the gateway logs a short preview so the run is auditable).
+### Full Configuration Reference
 
-```json
-{
-  "schedules": [
-    {
-      "name": "researcher-collect",
-      "enabled": true,
-      "interval": "1h",
-      "skill": "market-narratives",
-      "prompt": "Call ResearcherFetch to refresh the RSS sources. Then call ResearcherAnalyze with window_days=7 limit=20. Reply with just the counts.",
-      "silent": true,
-      "run_at_start": true
-    },
-    {
-      "name": "researcher-daily-digest",
-      "enabled": true,
-      "interval": "24h",
-      "skill": "market-narratives",
-      "prompt": "Use ResearcherNarratives limit=5 to fetch the top market narratives. Summarise as a short Markdown digest with one bullet per narrative.",
-      "channel_type": "discord",
-      "channel_id": "YOUR_CHANNEL_ID"
-    }
-  ]
-}
-```
+Every `claw` field — plus `base_dir`, the `discord`/`memory`/`schedules` blocks, and multi-instance setup — is documented in **[§5 of the Configuration Reference](doc/CONFIGS.md#5-gateway-configuration-klein-claw)**.
 
-- `interval`: Go duration string. Floor: 5 minutes (anything shorter is rounded up — usually a config typo).
-- `skill`: overrides `default_skill` for this turn only. Use `market-narratives` to access the Researcher tools.
-- `silent: true`: run the prompt but don't post the response back to Discord.
-- `run_at_start: true`: fire once immediately when the gateway starts (useful for bootstrap on restart).
-
-The legacy `heartbeat` block above is kept for backward compatibility — at startup it is folded in as one additional schedule.
-
-### Configuration Reference
-
-| Field | Default | Description |
-|-------|---------|-------------|
-| `agent_addr` | `http://localhost:50051` | Connect-gRPC server address |
-| `working_dir` | `.` | Agent working directory |
-| `default_skill` | `claw` | Skill used for message handling |
-| `default_model` | `claude-sonnet-4-6` | LLM model |
-| `max_iterations` | `15` | ReAct loop cap per invocation |
-| `discord.token` | | Discord bot token (required) |
-| `discord.allowed_guild_ids` | `[]` | Guild allowlist (empty = all) |
-| `discord.allowed_channel_ids` | `[]` | Channel allowlist (empty = all) |
-| `discord.allowed_user_ids` | `[]` | User allowlist (empty = all) |
-| `discord.mention_only` | `false` | Only respond when @mentioned in guilds |
-| `memory.base_dir` | `~/.klein/claw/memory/` | Memory storage directory |
-| `memory.max_notes` | `30` | Maximum daily notes to retain |
-| `heartbeat.enabled` | `false` | Enable periodic prompts (legacy single-job) |
-| `heartbeat.interval` | `24h` | Go duration string |
-| `heartbeat.prompt` | | Prompt text to execute |
-| `schedules[].name` | | Human-readable id for logs |
-| `schedules[].enabled` | `false` | Per-schedule on/off |
-| `schedules[].interval` | | Go duration string; floor 5m |
-| `schedules[].skill` | | Skill override for this schedule (e.g. `market-narratives`) |
-| `schedules[].prompt` | | What the agent will see as a user message |
-| `schedules[].silent` | `false` | Run without posting the response to a channel |
-| `schedules[].run_at_start` | `false` | Fire once immediately on gateway startup |
-| `schedules[].channel_type` / `channel_id` | | Output channel — only used when `silent: false` |
 
 ## Development
 

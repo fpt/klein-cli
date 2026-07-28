@@ -299,7 +299,14 @@ func main() {
 	// runs the ReAct loop as usual.
 	backendOpts := agentserver.RunnerOptions{ApprovalPolicy: agentserver.ApprovalNever}
 	if isInteractiveMode {
-		backendOpts = agentserver.RunnerOptions{ApprovalPolicy: agentserver.ApprovalOnRequest, Approver: terminalApprover(settings.LLM.Backend)}
+		// auto_approve_commands answers the allowlisted requests before the prompt
+		// ever reaches the terminal; everything else still asks.
+		approver := agentserver.WithAutoApprove(
+			settings.AutoApproveCommands, logger, terminalApprover(settings.LLM.Backend))
+		backendOpts = agentserver.RunnerOptions{
+			ApprovalPolicy: agentserver.ApprovalOnRequest,
+			Approver:       approver,
+		}
 	}
 
 	// Long-term memory (Remember/Recall/Reinforce tools + the /memory REPL

@@ -18,7 +18,17 @@ var (
 const (
 	// maxInlinePasteRunes is the threshold for inline vs placeholder paste.
 	// Pastes with more runes or containing newlines become placeholders.
-	maxInlinePasteRunes = 80
+	//
+	// The placeholder earns its keep on a wall of text, where echoing the paste
+	// would bury the prompt and leave nothing editable. A single line does
+	// neither: it stays one line, and it is exactly the thing you want to see and
+	// fix a character of before sending. 80 was drawn too tight for that: an
+	// ordinary URL — a GitHub Actions workflow link, say — clears it by a few
+	// characters, so the paste most worth reading back was the one turned into
+	// `[pasted 1 lines, N chars]`. 120 is the usual line-length ceiling and
+	// covers URLs of that shape; the newline check is what still catches the
+	// pastes the placeholder is for.
+	maxInlinePasteRunes = 120
 )
 
 // BracketedPasteReader wraps an io.ReadCloser to intercept bracketed paste

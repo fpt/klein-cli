@@ -131,6 +131,88 @@ func TestAppServerSettingsRoundTrip(t *testing.T) {
 	}
 }
 
+// loadCodexBlock writes a settings file whose codex block is codexJSON and
+// returns the parsed block.
+func loadCodexBlock(t *testing.T, codexJSON string) CodexSettings {
+	t.Helper()
+	p := filepath.Join(t.TempDir(), "settings.json")
+	body := `{"llm":{"backend":"` + BackendCodex + `"},"codex":` + codexJSON + `}`
+	if err := os.WriteFile(p, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	s, err := LoadSettings(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return s.Codex
+}
+
+// wantBool asserts an optional bool was parsed (not left nil) and holds want.
+// Checking through the pointer matters: a wrong json tag leaves it nil, which a
+// plain value comparison would read as "the user said false".
+func wantBool(t *testing.T, field string, got *bool, want bool) {
+	t.Helper()
+	switch {
+	case got == nil:
+		t.Errorf("%s: not parsed (nil)", field)
+	case *got != want:
+		t.Errorf("%s: got %v, want %v", field, *got, want)
+	}
+}
+
+// These tags mirror codex's own config keys, so a wrong one silently drops the
+// setting: the launch line simply omits the override and the backend runs with a
+// sandbox the user thought they had changed.
+func TestSandboxWorkspaceWriteRoundTrip(t *testing.T) {
+	t.Parallel()
+	c := loadCodexBlock(t, `{"sandbox_workspace_write":{"network_access":true,`+
+		`"exclude_tmpdir_env_var":false,"exclude_slash_tmp":true,"writable_roots":["/srv/cache"]}}`)
+
+	sw := c.SandboxWorkspaceWrite
+	wantBool(t, "network_access", sw.NetworkAccess, true)
+	wantBool(t, "exclude_tmpdir_env_var", sw.ExcludeTmpdirEnvVar, false)
+	wantBool(t, "exclude_slash_tmp", sw.ExcludeSlashTmp, true)
+	if len(sw.WritableRoots) != 1 || sw.WritableRoots[0] != "/srv/cache" {
+		t.Errorf("writable_roots: got %v", sw.WritableRoots)
+	}
+}
+
+func TestShellEnvironmentPolicyRoundTrip(t *testing.T) {
+	t.Parallel()
+	c := loadCodexBlock(t, `{"shell_environment_policy":{"inherit":"all",`+
+		`"ignore_default_excludes":true,"exclude":["AWS_*"],"include_only":["PATH"],`+
+		`"set":{"GH_TOKEN":"t"}}}`)
+
+	sep := c.ShellEnvironmentPolicy
+	if sep.Inherit != "all" {
+		t.Errorf("inherit: got %q", sep.Inherit)
+	}
+	wantBool(t, "ignore_default_excludes", sep.IgnoreDefaultExcludes, true)
+	if len(sep.Exclude) != 1 || sep.Exclude[0] != "AWS_*" {
+		t.Errorf("exclude: got %v", sep.Exclude)
+	}
+	if len(sep.IncludeOnly) != 1 || sep.IncludeOnly[0] != "PATH" {
+		t.Errorf("include_only: got %v", sep.IncludeOnly)
+	}
+	if sep.Set["GH_TOKEN"] != "t" {
+		t.Errorf("set: got %v", sep.Set)
+	}
+}
+
+// An absent table must leave every field unset, so klein passes no override for
+// it and the user's own ~/.codex/config.toml stays in charge.
+func TestCodexConfigTablesDefaultToUnset(t *testing.T) {
+	t.Parallel()
+	c := loadCodexBlock(t, `{}`)
+
+	if c.SandboxWorkspaceWrite.NetworkAccess != nil {
+		t.Errorf("network_access should be unset, got %v", *c.SandboxWorkspaceWrite.NetworkAccess)
+	}
+	if c.ShellEnvironmentPolicy.Inherit != "" {
+		t.Errorf("inherit should be unset, got %q", c.ShellEnvironmentPolicy.Inherit)
+	}
+}
+
 // TestValidateRejectsUnknownBackend guards the backend allowlist.
 func TestValidateRejectsUnknownBackend(t *testing.T) {
 	t.Parallel()

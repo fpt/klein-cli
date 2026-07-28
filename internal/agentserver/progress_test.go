@@ -355,6 +355,29 @@ func TestProgress_KnownUnrenderedTypes_AreNotReported(t *testing.T) {
 	}
 }
 
+// codex opens every turn by echoing the prompt back as a userMessage item, on
+// both item/started and item/completed. Missing from the known-skipped set, that
+// made the drift warning fire on literally every prompt. Uses the payload codex
+// 0.144.1 actually sends (content items, no top-level text) rather than the
+// minimal stub, so it also pins that the echo is not mistaken for turn output.
+func TestProgress_UserMessageEcho_IsSilentAndNotTurnText(t *testing.T) {
+	t.Parallel()
+	progress, buf := newProgressWithLogger()
+
+	echo := itm("019fa749", "userMessage", map[string]any{
+		"clientId": nil,
+		"content":  []any{map[string]any{keyType: keyText, keyText: "Reply with exactly: ok"}},
+	})
+	final := feed(progress, started(echo), completed(echo))
+
+	if buf.Len() != 0 {
+		t.Errorf("codex's prompt echo must not be reported as drift, logged: %q", buf.String())
+	}
+	if final != "" {
+		t.Errorf("the prompt echo must not become the turn's text, got %q", final)
+	}
+}
+
 // A type the switch handles is obviously not drift.
 func TestProgress_RenderedItemType_IsNotReported(t *testing.T) {
 	t.Parallel()

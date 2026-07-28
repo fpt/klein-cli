@@ -362,6 +362,108 @@ prompts the user (interactive repl). Note a generic app-server typically has **n
 sandbox** of its own — `codex.sandbox_mode` does not apply to it, so approvals
 are the only gate.
 
+**Auto-approving trusted commands: `auto_approve_commands`.** A top-level list of
+command prefixes an app-server backend may run without asking. It is deliberately
+*not* under `codex` or `appserver`: whether the agent behind the protocol is codex
+or gallium does not change which commands you trust it to run unattended, so both
+read the same list.
+
+```json
+"auto_approve_commands": ["gh run list", "gh run view"]
+```
+
+`WithAutoApprove` decorates the `Approver`, so the terminal prompt is untouched
+and the decision is testable without a terminal. An allowlisted request is
+answered before the prompt is ever printed; everything else still asks. Empty (the
+default) is exactly the behavior from before it existed.
+
+It is **not** seeded from `bash.whitelisted_commands`, which is a list chosen for
+klein's own sandbox-free Bash tool. Inheriting it would auto-approve `go run` and
+`make` on a surface where, under `workspace-write`, an approval can mean "run this
+*outside* the sandbox" — codex asks precisely when the sandbox refused, so a yes
+there is an escalation, not a repeat.
+
+Three findings shaped the matcher, all measured against codex-cli 0.144.1's
+`item/commandExecution/requestApproval`:
+
+- **The backend unwraps the shell for us.** `command` is
+  `/bin/zsh -lc 'gh --version'`, which no prefix list could ever match, but
+  `commandActions[].command` is the bare `gh --version`. klein matches the parsed
+  actions, so there is no shell-quoting parser here to get wrong.
+- **A compound line is *one* action, not one per command.** `gh --version &&
+  whoami` arrives as a single action holding the whole chain. Rejecting a
+  candidate containing `&&`, `||`, `;`, `|`, `$(`, backticks, `>`, `<`, `&`, or a
+  newline is therefore the entire security boundary, not a backstop: an entry of
+  `gh` would otherwise approve anything appendable to it.
+- **`acceptForSession` is not always on offer.** `availableDecisions` came back
+  `["accept", {"acceptWithExecpolicyAmendment": …}, "cancel"]`, so klein cannot
+  assume a session-scoped accept exists; it keeps sending plain `accept`.
+
+Matching is prefix-at-a-word-boundary (so `gh` does not match `ghost`) and entries
+may be several words — which is how the list can permit reading workflow state
+without also permitting `gh api --method DELETE` through the same binary. Every
+command in a request must match, and a request klein cannot parse in full goes to
+the prompt. Each auto-approval is logged: one that leaves no trace is
+indistinguishable from a command that was never proposed.
+
+codex's own `execpolicy` covers similar ground from the other side — it offers
+`proposedExecpolicyAmendment` and takes `acceptWithExecpolicyAmendment` to persist
+a rule — but it is decided interactively and stored in codex's config, so it does
+nothing for `claw`/`--serve`, where there is nobody to prompt.
+
+**Sandbox and environment detail: two codex config tables.** `codex.sandbox_mode`
+and `codex.approval_policy` are named per-thread on `thread/start`, but the
+finer-grained knobs have no thread-scoped equivalent — `thread/start`'s `sandbox`
+is the bare mode name. So `codex.sandbox_workspace_write` and
+`codex.shell_environment_policy` mirror the codex config tables of the same
+names, and klein renders them as `-c key=value` overrides on the child's launch
+line (`codexConfigArgs`). That reconfigures *this one process*, leaving
+`~/.codex/config.toml` and ordinary `codex` runs untouched. The generic backend
+is unaffected; codex's config is codex's.
+
+The pairing that motivates it: `workspace-write` keeps the file restrictions but
+disables network access, which is what stops a tool like `gh` from working, while
+codex separately filters the environment it hands to commands — so the token the
+shell exported may not arrive either.
+
+```json
+"codex": {
+  "sandbox_mode": "workspace-write",
+  "sandbox_workspace_write": { "network_access": true },
+  "shell_environment_policy": { "inherit": "all" }
+}
+```
+
+Two properties matter more than the field list:
+
+- **Unset is not false.** The bools are pointers, so a field the user did not
+  write produces no override at all. Emitting codex's own default instead would
+  quietly overrule whatever their `config.toml` says — an omitted setting has to
+  mean "not klein's business", not "off".
+- **Values are escaped as TOML** via JSON encoding, which for strings and string
+  arrays is the same encoding: Go emits exactly the escapes a TOML basic string
+  accepts and never JSON's `\/`. This is not cosmetic — codex falls back to
+  treating an unparseable value as a *literal string*, so a mis-escaped path or
+  token would be accepted and silently mean something else.
+
+`shell_environment_policy.inherit` is validated against `core|all|none` before
+the spawn, because codex checks it at startup and exits with `unknown variant`,
+which reaches the user as a spawn failure naming neither the setting nor the file
+it came from. The rest of the keys were confirmed against codex-cli 0.144.1's own
+`--strict-config` validator, which rejects any field it does not recognise.
+
+**Cancellation starts with who gets the signal.** All of the below assumes the
+backend is still alive to be interrupted, and by default it was not: a terminal
+delivers Ctrl+C to *every* process in the foreground group, and an app-server
+installs no SIGINT handler (codex-cli 0.144.1 dies with signal 2). So the
+interrupt klein meant as "stop this turn" killed the backend outright, and every
+prompt after it failed on a dead pipe — `codex turn/start EOF`. `spawnStdio`
+therefore starts the child in its own process group
+(`detachFromTerminalSignals`), leaving Ctrl+C for klein alone to interpret via
+the machinery below. Nothing leaks: `Close` shuts the child down normally, and a
+klein that dies without it closes the stdin pipe, which is the stdio-server
+contract for "exit".
+
 **Cancellation.** `turn/start` is an acknowledgement, not the outcome: the
 backend answers at once and reports the turn by notification. So a cancelled
 context (Ctrl+C in the repl) unblocks *klein* and nothing else — the turn keeps

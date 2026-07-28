@@ -46,6 +46,8 @@ func spawnStdio(
 	if len(env) > 0 {
 		cmd.Env = env
 	}
+	// Ctrl+C is klein's to interpret, not the backend's to die from.
+	detachFromTerminalSignals(cmd)
 
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {

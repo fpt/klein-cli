@@ -44,6 +44,23 @@ type Settings struct {
 	// llm.backend == "appserver"). The server owns its own model configuration.
 	AppServer AppServerSettings `json:"appserver,omitempty"`
 
+	// AutoApproveCommands lists command prefixes an app-server backend may run
+	// without asking. It sits here rather than in the codex/appserver blocks
+	// because it is deliberately one list for both: whether the agent behind the
+	// protocol is codex or gallium does not change which commands you trust it to
+	// run unattended.
+	//
+	// Empty (the default) means every request is still asked, i.e. exactly the
+	// behavior before this existed. It is intentionally NOT seeded with defaults:
+	// bash.whitelisted_commands is a list chosen for klein's own sandbox-free Bash
+	// tool, and inheriting it here would auto-approve `go run` and `make` on a
+	// surface where approval can mean "run this outside the sandbox".
+	//
+	// Matching is prefix-on-word-boundary against the command with its shell
+	// wrapper removed, and never applies to a command carrying shell chaining or
+	// substitution. See agentserver.WithAutoApprove.
+	AutoApproveCommands []string `json:"auto_approve_commands,omitempty"` //nolint:tagliatelle
+
 	// Repository for persistence (nil for in-memory only)
 	settingsRepository repository.SettingsRepository `json:"-"`
 }
@@ -268,7 +285,62 @@ type CodexSettings struct {
 	CodexPath      string `json:"codex_path,omitempty"`      // path to the codex binary ("" → "codex" on PATH)
 	ApprovalPolicy string `json:"approval_policy,omitempty"` //nolint:tagliatelle // never|on-request|untrusted|granular
 	SandboxMode    string `json:"sandbox_mode,omitempty"`    // read-only|workspace-write|danger-full-access ("" → workspace-write)
+	// SandboxWorkspaceWrite and ShellEnvironmentPolicy mirror the codex config
+	// tables of the same names. Unlike the three fields above — which klein
+	// states per-thread on thread/start — these have no thread-scoped equivalent,
+	// so klein passes them to the child as `-c` overrides on its launch line
+	// (see agentserver.codexConfigArgs). Every field is optional and an unset one
+	// is not passed at all, leaving ~/.codex/config.toml in charge of it.
+	//
+	// Every json tag below spells a codex config key, so all of them are
+	// snake_case whatever klein's own convention would be — hence the nolints.
+	SandboxWorkspaceWrite  SandboxWorkspaceWriteSettings  `json:"sandbox_workspace_write,omitempty"`  //nolint:tagliatelle
+	ShellEnvironmentPolicy ShellEnvironmentPolicySettings `json:"shell_environment_policy,omitempty"` //nolint:tagliatelle
 }
+
+// SandboxWorkspaceWriteSettings mirrors codex's [sandbox_workspace_write] table,
+// which tunes the workspace-write sandbox — most usefully network_access, off by
+// default, which is what blocks a tool like `gh` from reaching the network.
+//
+// It applies only while the effective sandbox is workspace-write; under
+// read-only or danger-full-access codex ignores the table, so pairing this with
+// a different codex.sandbox_mode is inert rather than an error.
+//
+// The bools are pointers so "unset" stays distinct from "explicitly false":
+// codex defaults them to false, and klein passing a false the user never asked
+// for would override a true in their own config.
+type SandboxWorkspaceWriteSettings struct {
+	NetworkAccess       *bool `json:"network_access,omitempty"`         //nolint:tagliatelle
+	ExcludeTmpdirEnvVar *bool `json:"exclude_tmpdir_env_var,omitempty"` //nolint:tagliatelle
+	ExcludeSlashTmp     *bool `json:"exclude_slash_tmp,omitempty"`      //nolint:tagliatelle
+	// WritableRoots are extra paths writable beyond the workspace itself.
+	// Last by fieldalignment: a slice's pointer sits at its front, so ending on
+	// one leaves the trailing len/cap words outside the GC's scan range.
+	WritableRoots []string `json:"writable_roots,omitempty"` //nolint:tagliatelle
+}
+
+// ShellEnvironmentPolicySettings mirrors codex's [shell_environment_policy]
+// table, which decides what environment the commands codex runs actually see.
+// codex filters the inherited environment by default, so a token the shell
+// exported does not necessarily reach a tool.
+type ShellEnvironmentPolicySettings struct {
+	// Inherit is core|all|none — the exact set codex accepts. "" leaves it unset.
+	Inherit string `json:"inherit,omitempty"`
+	// IgnoreDefaultExcludes disables codex's built-in filtering of names that
+	// look like secrets (*KEY*, *TOKEN*, *SECRET*).
+	IgnoreDefaultExcludes *bool `json:"ignore_default_excludes,omitempty"` //nolint:tagliatelle
+	// Set adds or overrides variables outright.
+	Set map[string]string `json:"set,omitempty"`
+	// Exclude and IncludeOnly are case-insensitive glob patterns over variable
+	// names, applied after Inherit. Last by fieldalignment, as above.
+	Exclude     []string `json:"exclude,omitempty"`
+	IncludeOnly []string `json:"include_only,omitempty"` //nolint:tagliatelle
+}
+
+// ShellEnvironmentInheritModes are the values codex accepts for
+// shell_environment_policy.inherit; anything else makes it exit at startup with
+// "unknown variant".
+var ShellEnvironmentInheritModes = []string{"core", "all", "none"}
 
 // AppServerSettings configures the generic app-server backend (llm.backend ==
 // "appserver"): any local agent that speaks the codex-app-server JSON-RPC

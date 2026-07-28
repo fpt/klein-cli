@@ -266,7 +266,11 @@ func runClawREPL(args []string) int {
 
 	// Codex backend for the interactive claw REPL — prompts for on-request approvals.
 	// agentserver.Select returns nil for backends that need no external process, leaving the ReAct loop in place.
-	backendOpts := agentserver.RunnerOptions{ApprovalPolicy: agentserver.ApprovalOnRequest, Approver: terminalApprover(settings.LLM.Backend)}
+	backendOpts := agentserver.RunnerOptions{
+		ApprovalPolicy: agentserver.ApprovalOnRequest,
+		Approver: agentserver.WithAutoApprove(
+			settings.AutoApproveCommands, logger, terminalApprover(settings.LLM.Backend)),
+	}
 	a, cleanup, err := app.NewAgentWithOptions(ctx, app.AgentOptions{
 		Settings:          settings,
 		WorkingDir:        workingDir,

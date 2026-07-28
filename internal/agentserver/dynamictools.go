@@ -28,10 +28,18 @@ const (
 
 // ApprovalRequest describes an action codex is asking permission to perform
 // (used when approval_policy is "on-request"). Kind is a short verb phrase
-// ("run a command", "apply file changes"); Summary is the specifics.
+// ("run a command", "apply file changes"); Summary is the specifics, for display.
+//
+// Commands carries the shell commands the request would run, with the backend's
+// shell wrapper already stripped — the app-server parses `/bin/zsh -lc 'gh
+// --version'` into `gh --version` for us, so nothing here has to. It is empty
+// for a file-change request, and for a command request the backend did not
+// parse; either way, an empty Commands is what stops WithAutoApprove from
+// deciding anything, since it has nothing to check against the allowlist.
 type ApprovalRequest struct {
-	Kind    string
-	Summary string
+	Kind     string
+	Summary  string
+	Commands []string
 }
 
 // Approver decides an approval request. Return true to accept, false to decline.
@@ -72,7 +80,12 @@ func (h *toolHandler) ItemCommandExecutionRequestApproval(
 	if cwd := ptrStr(p.Cwd); cwd != "" {
 		summary += "  (in " + cwd + ")"
 	}
-	if h.approve(ApprovalRequest{Kind: "run a command", Summary: summary}) {
+	req := ApprovalRequest{
+		Kind:     "run a command",
+		Summary:  summary,
+		Commands: commandActionCommands(p.CommandActions),
+	}
+	if h.approve(req) {
 		return &protocol.CommandExecutionRequestApprovalResponse{Decision: decisionAccept}, nil
 	}
 	return &protocol.CommandExecutionRequestApprovalResponse{Decision: decisionDecline}, nil

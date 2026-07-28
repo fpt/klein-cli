@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 
 	"github.com/fpt/klein-cli/internal/config"
 	"github.com/fpt/klein-cli/internal/tool"
@@ -30,11 +31,17 @@ type RunnerOptions struct {
 // defaultAppServerArgs is the conventional subcommand that puts an agent into
 // app-server mode. appserver.args overrides it for a server that spells it
 // differently.
-var defaultAppServerArgs = []string{"app-server"}
+var defaultAppServerArgs = []string{appServerSubcommand}
+
+// appServerSubcommand is that subcommand name on its own.
+const appServerSubcommand = "app-server"
 
 // command resolves the binary and arguments for the configured backend. codex
 // defaults to `codex` on PATH; the generic appserver backend has no default
 // binary and must name one, since it stands for any conforming server.
+//
+// codex's launch line also carries the `-c` overrides for the config tables
+// klein cannot state per-thread — see codexConfigArgs.
 func command(settings *config.Settings) (string, []string, error) {
 	switch settings.LLM.Backend {
 	case BackendCodex:
@@ -42,7 +49,11 @@ func command(settings *config.Settings) (string, []string, error) {
 		if path == "" {
 			path = "codex"
 		}
-		return path, defaultAppServerArgs, nil
+		if err := validateCodexConfig(settings.Codex); err != nil {
+			return "", nil, err
+		}
+		args := append(slices.Clone(defaultAppServerArgs), codexConfigArgs(settings.Codex)...)
+		return path, args, nil
 	case BackendAppServer:
 		path := settings.AppServer.Command
 		if path == "" {

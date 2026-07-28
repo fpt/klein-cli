@@ -535,8 +535,14 @@ type turnProgress struct {
 // completed}, item/permissions/requestApproval), so they are ordinary codex
 // bookkeeping rather than drift — klein handles approval through toolHandler and
 // has nothing to display for the items themselves.
+//
+// userMessage is codex echoing back the prompt klein just sent, as the first
+// item of every turn (both item/started and item/completed; verified against
+// codex-cli 0.144.1). Displaying the user's own input back to them is noise, and
+// leaving it out of this set made the drift warning fire on every single prompt.
 var itemTypesKnownUnrendered = map[string]bool{
 	"agentMessage":       true,
+	"userMessage":        true,
 	"plan":               true,
 	"sleep":              true,
 	"reviewMode":         true,

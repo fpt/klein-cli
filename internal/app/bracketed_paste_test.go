@@ -2,9 +2,11 @@ package app
 
 import (
 	"bytes"
+	"fmt"
 	"io"
 	"strings"
 	"testing"
+	"unicode/utf8"
 )
 
 // testReadCloser wraps a bytes.Reader as an io.ReadCloser for testing.
@@ -80,8 +82,8 @@ func TestBracketedPasteReader_ShortPaste(t *testing.T) {
 }
 
 func TestBracketedPasteReader_LongPaste(t *testing.T) {
-	// Long single-line paste (>80 runes) should become placeholder
-	pastedText := strings.Repeat("x", 100)
+	// Single-line paste past maxInlinePasteRunes should become placeholder
+	pastedText := strings.Repeat("x", maxInlinePasteRunes+20)
 	input := []byte(string(pasteStartSeq) + pastedText + string(pasteEndSeq))
 	reader := NewBracketedPasteReader(newTestInput(input))
 
@@ -93,8 +95,8 @@ func TestBracketedPasteReader_LongPaste(t *testing.T) {
 	if !strings.Contains(output, "[pasted") {
 		t.Errorf("expected placeholder, got %q", output)
 	}
-	if !strings.Contains(output, "100 chars") {
-		t.Errorf("expected '100 chars' in placeholder, got %q", output)
+	if want := fmt.Sprintf("%d chars", maxInlinePasteRunes+20); !strings.Contains(output, want) {
+		t.Errorf("expected %q in placeholder, got %q", want, output)
 	}
 	if !strings.Contains(output, "1 lines") {
 		t.Errorf("expected '1 lines' in placeholder, got %q", output)
@@ -109,6 +111,44 @@ func TestBracketedPasteReader_LongPaste(t *testing.T) {
 	}
 }
 
+// A pasted URL is the case the inline threshold exists for: one line, and the
+// thing you most want to read back and tweak before sending. An Actions
+// workflow URL of ordinary length lands just past the old 80-rune limit, so it
+// used to vanish behind a placeholder.
+//
+// The bounds check below is the real subject: this asserts something about the
+// band between the old limit and the new one, so a URL edited out of that band
+// must fail loudly rather than start passing for free.
+func TestBracketedPasteReader_URLStaysInline(t *testing.T) {
+	t.Parallel()
+	const oldLimit = 80
+	url := "https://github.com/example-org/example-service/actions/workflows/nightly-dispatch.yml"
+	if n := utf8.RuneCountInString(url); n <= oldLimit || n > maxInlinePasteRunes {
+		t.Fatalf("this test needs a URL between %d and %d runes, got %d",
+			oldLimit+1, maxInlinePasteRunes, n)
+	}
+
+	input := []byte("can you check workflow runs here? " + string(pasteStartSeq) + url + string(pasteEndSeq))
+	reader := NewBracketedPasteReader(newTestInput(input))
+
+	output, err := readAll(reader)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !strings.Contains(output, url) {
+		t.Errorf("the URL should reach the line verbatim, got %q", output)
+	}
+	if strings.Contains(output, "[pasted") {
+		t.Errorf("a single-line URL should not be hidden behind a placeholder: %q", output)
+	}
+	if segments := reader.GetPasteSegments(); len(segments) != 0 {
+		t.Errorf("an inlined paste needs no segment, got %d", len(segments))
+	}
+}
+
+// Length is not the only test: a multiline paste stays a placeholder however
+// short it is, which is what keeps the threshold from swallowing the case the
+// placeholder exists for.
 func TestBracketedPasteReader_MultilinePaste(t *testing.T) {
 	// Multiline paste should always become placeholder regardless of length
 	pastedText := "line1\nline2\nline3"
@@ -138,7 +178,7 @@ func TestBracketedPasteReader_MultilinePaste(t *testing.T) {
 
 func TestBracketedPasteReader_MultiplePastes(t *testing.T) {
 	// Multiple paste events should accumulate segments
-	paste1 := strings.Repeat("a", 100)
+	paste1 := strings.Repeat("a", maxInlinePasteRunes+20)
 	paste2 := "line1\nline2"
 	input := []byte(
 		"typed1" +
@@ -216,7 +256,7 @@ func TestBracketedPasteReader_EmptyPaste(t *testing.T) {
 }
 
 func TestBracketedPasteReader_GetSegmentsClearsState(t *testing.T) {
-	paste := strings.Repeat("x", 100)
+	paste := strings.Repeat("x", maxInlinePasteRunes+20)
 	input := []byte(string(pasteStartSeq) + paste + string(pasteEndSeq))
 	reader := NewBracketedPasteReader(newTestInput(input))
 
@@ -236,7 +276,7 @@ func TestBracketedPasteReader_GetSegmentsClearsState(t *testing.T) {
 }
 
 func TestBracketedPasteReader_ClearSegments(t *testing.T) {
-	paste := strings.Repeat("x", 100)
+	paste := strings.Repeat("x", maxInlinePasteRunes+20)
 	input := []byte(string(pasteStartSeq) + paste + string(pasteEndSeq))
 	reader := NewBracketedPasteReader(newTestInput(input))
 
@@ -251,7 +291,7 @@ func TestBracketedPasteReader_ClearSegments(t *testing.T) {
 }
 
 func TestBracketedPasteReader_ExactThreshold(t *testing.T) {
-	// Exactly 80 runes, single line — should pass through inline
+	// Exactly at the threshold, single line — should pass through inline
 	pastedText := strings.Repeat("a", maxInlinePasteRunes)
 	input := []byte(string(pasteStartSeq) + pastedText + string(pasteEndSeq))
 	reader := NewBracketedPasteReader(newTestInput(input))
@@ -272,7 +312,7 @@ func TestBracketedPasteReader_ExactThreshold(t *testing.T) {
 }
 
 func TestBracketedPasteReader_OneOverThreshold(t *testing.T) {
-	// 81 runes, single line — should become placeholder
+	// One rune past the threshold, single line — should become placeholder
 	pastedText := strings.Repeat("a", maxInlinePasteRunes+1)
 	input := []byte(string(pasteStartSeq) + pastedText + string(pasteEndSeq))
 	reader := NewBracketedPasteReader(newTestInput(input))
@@ -283,7 +323,7 @@ func TestBracketedPasteReader_OneOverThreshold(t *testing.T) {
 	}
 
 	if !strings.Contains(output, "[pasted") {
-		t.Errorf("expected placeholder for 81 chars, got %q", output)
+		t.Errorf("expected placeholder one rune past the threshold, got %q", output)
 	}
 
 	segments := reader.GetPasteSegments()

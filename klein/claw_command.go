@@ -24,11 +24,11 @@ import (
 	pkgLogger "github.com/fpt/klein-cli/pkg/logger"
 )
 
-// runClawCommand implements `klein claw`, the messaging gateway (formerly the
-// separate klein-claw binary). It reads the "claw" section of settings.json and
-// derives all state (sessions, memory, schedule store) from the shared base dir,
-// so `klein claw --settings other.json` — with a different base_dir and Discord
-// token — runs a fully isolated instance.
+// runClawCommand implements `klein claw`, the messaging gateway. It is a
+// subcommand rather than a binary of its own: it reads the "claw" section of
+// settings.json and derives all state (sessions, memory, schedule store) from
+// the shared base dir, so `klein claw --settings other.json` — with a different
+// base_dir and Discord token — runs a fully isolated instance.
 //
 // By default the gateway starts an embedded in-process agent server; set
 // "agent_addr" in the claw block (or pass --agent-addr) to dial a remote

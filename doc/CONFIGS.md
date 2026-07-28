@@ -439,8 +439,8 @@ disable-model-invocation: false
 
 ## 5. Gateway Configuration (`klein claw`)
 
-The gateway is the `klein claw` subcommand (the former standalone `klein-claw`
-binary is gone). Its configuration is the **`claw` section of `settings.json`**;
+The gateway is the `klein claw` subcommand, not a binary of its own. Its
+configuration is the **`claw` section of `settings.json`**;
 run it with `klein claw` (add `--settings <path>` to select a different file).
 
 By default `klein claw` starts an **embedded, in-process agent server** on an
@@ -504,7 +504,7 @@ klein claw repl --skill code                      # override the session skill (
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `token` | string | Discord bot token (or set `DISCORD_TOKEN` env var) |
+| `token` | string | Discord bot token |
 | `allowed_guild_ids` | array | Guild IDs to respond in; empty = all |
 | `allowed_channel_ids` | array | Channel IDs to respond in; empty = all |
 | `allowed_user_ids` | array | User IDs allowed to interact; empty = all |
@@ -613,7 +613,9 @@ Run it with `klein claw` (embedded agent) — no separate server process needed.
 | `ANTHROPIC_API_KEY` | If `backend=anthropic` | Anthropic API key |
 | `OPENAI_API_KEY` | If `backend=openai` | OpenAI API key |
 | `GEMINI_API_KEY` | If `backend=gemini` | Google Gemini API key |
-| `DISCORD_TOKEN` | If Discord enabled | Discord bot token (alternative to `discord.token` in config) |
+
+> The Discord bot token is **not** read from the environment — set
+> `claw.discord.token` in `settings.json` (see [§5](#5-gateway-configuration-klein-claw)).
 
 ---
 

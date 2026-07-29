@@ -8,7 +8,7 @@ The name KLEIN is inspired by the Klein bottle, a topological surface with no di
 
 ## Features
 
-- **Interactive Mode**: REPL-style interface for continuous interaction with conversation memory
+- **Interactive Mode**: REPL-style interface for continuous interaction with conversation memory. Each run starts a fresh session; `--continue` resumes the most recent one
 - **Multiple LLM Backends**: OpenAI GPT, Anthropic Claude, Google Gemini, plus the codex/appserver whole-agent backends
 - **Simplified ReAct Pattern**: Streamlined reasoning and acting with single-action loops for simplicity
 - **Integrated Tools**: File operations, grep search, bash tools, todo tools, and simple web tools
@@ -74,8 +74,11 @@ go install github.com/fpt/klein-cli/klein@latest
 
 **Interactive Mode (default):**
 ```bash
-# Start the interactive REPL
+# Start the interactive REPL — a fresh session each time
 klein
+
+# Resume this project's most recent session
+klein --continue     # or: klein -c
 
 # Or interactive with Anthropic Claude
 klein -b anthropic

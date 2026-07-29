@@ -120,13 +120,14 @@ $HOME/.klein/
 │   └── {project-name-hash}/    # Each project gets its own directory
 │       ├── project_info.txt   # Original project path and metadata
 │       ├── todos.json         # Project-specific todo list
-│       └── session.json       # Conversation history and context
+│       └── sessions/          # One file per interactive run (see --continue)
+│           └── YYYYMMDDTHHMMSS.ffffff.json
 └── config.json                 # User preferences (future use)
 ```
 
 **Key Features:**
 - **Project Isolation**: Each project gets its own todo list, session data, and storage (interactive mode only)
-- **Session Persistence**: Conversation history is automatically saved and restored between interactive runs (like Claude Code)
+- **Fresh-by-Default Sessions**: Each interactive run starts a new session and writes its own file; `klein --continue` (`-c`) resumes the most recently used one (like Claude Code)
 - **Safe Directory Names**: Project paths are converted to safe directory names with hash suffixes
 - **Mode-Based Persistence**: Interactive mode uses persistent storage, one-shot mode uses in-memory only
 - **Clean Project Structure**: No configuration files clutter your project directories
@@ -142,9 +143,9 @@ Projects are stored in directories using the pattern: `{project-basename}-{path-
 
 **Interactive Mode (`klein` with no arguments):**
 - Creates and uses project directories in `$HOME/.klein/projects/`
-- Saves and restores conversation history between sessions
+- Starts a **fresh** conversation each run; `--continue`/`-c` resumes the most recent one
+- Every run persists to its own file, so starting fresh never overwrites earlier history
 - Maintains persistent todo lists per project
-- Session data preserved across invocations
 
 **One-Shot Mode (`klein "your request"`):**
 - Uses in-memory storage only - no project directories created

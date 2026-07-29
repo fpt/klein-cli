@@ -17,8 +17,9 @@ func TestParseClawConfigDefaults(t *testing.T) {
 	if cfg.AgentAddr != "" {
 		t.Errorf("AgentAddr should be empty (embedded) by default, got %q", cfg.AgentAddr)
 	}
-	if cfg.DefaultSkill != "claw" {
-		t.Errorf("DefaultSkill: got %q want claw", cfg.DefaultSkill)
+	// The gateway's role is fixed, not configurable.
+	if ClawRole != "claw" {
+		t.Errorf("ClawRole: got %q want claw", ClawRole)
 	}
 	if cfg.SessionTimeout != "30m" {
 		t.Errorf("SessionTimeout: got %q want 30m", cfg.SessionTimeout)
@@ -46,7 +47,6 @@ func TestParseClawConfigOverrides(t *testing.T) {
 	base := t.TempDir()
 	raw := []byte(`{
 		"agent_addr": "http://remote:50051",
-		"default_skill": "report",
 		"discord": {"token": "abc", "mention_only": true},
 		"memory": {"max_notes": 10},
 		"schedules": [{"name": "j", "enabled": true, "cron": "0 8 * * *", "timezone": "Asia/Tokyo", "prompt": "go"}]
@@ -57,9 +57,6 @@ func TestParseClawConfigOverrides(t *testing.T) {
 	}
 	if cfg.AgentAddr != "http://remote:50051" {
 		t.Errorf("AgentAddr: got %q", cfg.AgentAddr)
-	}
-	if cfg.DefaultSkill != "report" {
-		t.Errorf("DefaultSkill: got %q", cfg.DefaultSkill)
 	}
 	if !cfg.Discord.MentionOnly || cfg.Discord.Token != "abc" {
 		t.Errorf("Discord not parsed: %+v", cfg.Discord)

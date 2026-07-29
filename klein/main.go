@@ -16,6 +16,7 @@ import (
 	"github.com/fpt/klein-cli/internal/infra"
 	"github.com/fpt/klein-cli/internal/mcp"
 	pluginpkg "github.com/fpt/klein-cli/internal/plugin"
+	"github.com/fpt/klein-cli/internal/skill"
 	"github.com/fpt/klein-cli/internal/tool"
 	"github.com/fpt/klein-cli/internal/tool/memorydb"
 	"github.com/fpt/klein-cli/pkg/agent/domain"
@@ -30,6 +31,34 @@ type stringSliceFlag []string
 func (s *stringSliceFlag) String() string     { return strings.Join(*s, ", ") }
 func (s *stringSliceFlag) Set(v string) error { *s = append(*s, v); return nil }
 
+// defaultRole is the role a session opens with when -r is not given.
+const defaultRole = "code"
+
+// validateRole rejects a -r that is not a role, before any expensive setup
+// (LLM client, MCP servers) happens.
+//
+// Naming a skill is the mistake worth catching: skills and roles share a
+// registry and a prompt format, so "klein -r pdf" would otherwise start
+// perfectly happily on a prompt that was never meant to open a session.
+func validateRole(name, workingDir string) error {
+	roles, err := skill.LoadRoles(workingDir)
+	if err != nil {
+		return fmt.Errorf("failed to load roles: %w", err)
+	}
+	if r, ok := roles[name]; ok && r.IsRole {
+		return nil
+	}
+
+	available := strings.Join(skill.RoleNames(roles), ", ")
+	if skills, err := skill.LoadSkills(workingDir); err == nil {
+		if _, isSkill := skills[name]; isSkill {
+			return fmt.Errorf("%q is a skill, not a role — roles start a session, "+
+				"skills are used within one (roles: %s)", name, available)
+		}
+	}
+	return fmt.Errorf("unknown role %q (roles: %s)", name, available)
+}
+
 // resolveStringFlag returns the non-empty value, preferring short flag over long flag
 func resolveStringFlag(shortVal, longVal string) string {
 	if shortVal != "" {
@@ -39,20 +68,27 @@ func resolveStringFlag(shortVal, longVal string) string {
 }
 
 func printUsage() {
-	fmt.Println("klein - AI-powered coding agent with skill-based tool management")
+	fmt.Println("klein - AI-powered coding agent with role-based startup and skill-based tools")
 	fmt.Println()
-	fmt.Println("Available Skills:")
+	fmt.Println("A role is the startup prompt a session opens with (-r). A skill is a task")
+	fmt.Println("capability used within a session, reached by the model as it works.")
+	fmt.Println()
+	fmt.Println("Available Roles:")
 	fmt.Println("  code                    Comprehensive coding assistant (default)")
+	fmt.Println("  cad                     Fusion / KiCad / Blender CAD and EDA work")
+	fmt.Println("  claw                    Messaging assistant (used by `klein claw`)")
+	fmt.Println("  review                  AI code review (used by `klein review`)")
 	fmt.Println()
-	fmt.Println("Skills are loaded from:")
-	fmt.Println("  Built-in (embedded)     Default skills bundled with the binary")
-	fmt.Println("  .claude/skills/         Project-specific skills")
-	fmt.Println("  ~/.claude/skills/       Personal skills (all projects)")
+	fmt.Println("Roles and skills are loaded from:")
+	fmt.Println("  Built-in (embedded)     Bundled with the binary")
+	fmt.Println("  .claude/roles|skills/   Project-specific")
+	fmt.Println("  ~/.claude/roles|skills/ Personal (all projects)")
 	fmt.Println()
 	fmt.Println("Examples:")
-	fmt.Println("  klein                                    # Interactive mode, fresh session (code skill)")
+	fmt.Println("  klein                                    # Interactive mode, fresh session (code role)")
+	fmt.Println("  klein -r cad                             # Interactive mode in the cad role")
 	fmt.Println("  klein -c                                 # Interactive mode, resume the most recent session")
-	fmt.Println("  klein \"Create a HTTP server\"             # One-shot mode (code skill)")
+	fmt.Println("  klein \"Create a HTTP server\"             # One-shot mode (code role)")
 	fmt.Println("  klein -b anthropic \"Analyze this code\"   # Use Anthropic backend")
 	fmt.Println("  klein -f prompts.txt                     # Multi-turn from file (no memory)")
 	fmt.Println("  klein -v \"Debug this issue\"              # Enable verbose debug logging")
@@ -84,8 +120,8 @@ func main() {
 	var effort = flag.String("effort", "", "Reasoning effort for reasoning-capable models (none|minimal|low|medium|high|xhigh; primarily OpenAI)")
 	var workdir = flag.String("workdir", "", "Working directory")
 	var settingsPath = flag.String("settings", "", "Path to settings file")
-	var skillFlag = flag.String("s", "code", "Skill to use (default: code)")
-	var skillFlagLong = flag.String("skill", "code", "Skill to use (default: code)")
+	var roleFlag = flag.String("r", defaultRole, "Role (startup prompt) to open the session with")
+	var roleFlagLong = flag.String("role", defaultRole, "Role (startup prompt) to open the session with")
 	var showLog = flag.Bool("l", false, "Print conversation message history and exit")
 	var showLogLong = flag.Bool("log", false, "Print conversation message history and exit")
 	var continueSession = flag.Bool("c", false, "Resume this project's most recent session (default: start fresh)")
@@ -126,7 +162,7 @@ func main() {
 	// Resolve long/short flag conflicts (prefer the one that was set)
 	resolvedBackend := resolveStringFlag(*backend, *backendLong)
 	resolvedModel := resolveStringFlag(*model, *modelLong)
-	resolvedSkill := strings.ToLower(resolveStringFlag(*skillFlag, *skillFlagLong))
+	resolvedRole := strings.ToLower(resolveStringFlag(*roleFlag, *roleFlagLong))
 	resolvedShowLog := *showLog || *showLogLong
 	resolvedVerbose := *verbose || *verboseLong
 	// --log prints the conversation history, which can only mean the session it
@@ -199,6 +235,14 @@ func main() {
 		fmt.Printf("Working directory: %s\n", workingDirectory)
 	} else {
 		workingDirectory = "."
+	}
+
+	// Roles are resolved against the working directory, so this has to wait for
+	// it — but it still runs before the LLM client and MCP servers are built, so
+	// a typo costs nothing.
+	if roleErr := validateRole(resolvedRole, workingDirectory); roleErr != nil {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", roleErr)
+		os.Exit(1)
 	}
 
 	// Load plugins. Plugin MCP servers are merged into settings.MCP.Servers
@@ -382,11 +426,11 @@ func main() {
 	}
 
 	// Show which skill is being used
-	fmt.Printf("Using skill: %s\n", resolvedSkill)
+	fmt.Printf("Using role: %s\n", resolvedRole)
 
 	// Handle multi-turn prompt file if specified
 	if *promptFile != "" {
-		executeMultiTurnFile(ctx, a, *promptFile, resolvedSkill)
+		executeMultiTurnFile(ctx, a, *promptFile, resolvedRole)
 		return
 	}
 
@@ -403,9 +447,9 @@ func main() {
 	// Determine if we should run in interactive mode or one-shot mode
 	if len(args) > 0 {
 		userInput := strings.Join(args, " ")
-		executeCommand(ctx, a, userInput, resolvedSkill)
+		executeCommand(ctx, a, userInput, resolvedRole)
 	} else {
-		app.StartInteractiveMode(ctx, a, resolvedSkill)
+		app.StartInteractiveMode(ctx, a, resolvedRole)
 	}
 }
 

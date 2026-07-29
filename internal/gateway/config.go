@@ -15,7 +15,6 @@ import (
 type GatewayConfig struct {
 	AgentAddr      string        `json:"agent_addr"`      // Connect server address; empty = start an embedded in-process server
 	WorkingDir     string        `json:"working_dir"`     // Agent working directory
-	DefaultSkill   string        `json:"default_skill"`   // Default skill (default: "claw")
 	SessionTimeout string        `json:"session_timeout"` // Inactivity timeout for sessions (Go duration, default: "30m")
 	Discord        DiscordConfig `json:"discord"`
 	Memory         MemoryConfig  `json:"memory"` // Only MaxNotes is read from JSON; BaseDir is derived from the shared base dir.
@@ -80,8 +79,14 @@ func (cfg *GatewayConfig) applyBaseDir(baseDir string) {
 // which selects the embedded in-process agent server.
 func DefaultGatewayConfig() *GatewayConfig {
 	return &GatewayConfig{
-		DefaultSkill:   "claw",
 		SessionTimeout: "30m",
 		Memory:         MemoryConfig{MaxNotes: 30},
 	}
 }
+
+// ClawRole is the role every gateway session opens with. It is fixed rather
+// than configurable: the gateway *is* the claw role — memory injection, the
+// 2000-char reply shaping, and the scheduled-run preamble all assume that
+// prompt. A per-message skill (a `/<skill>` command or schedules[].skill) still
+// selects a capability within the session.
+const ClawRole = "claw"

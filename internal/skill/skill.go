@@ -26,6 +26,17 @@ type Skill struct {
 	Content                string // markdown body after frontmatter
 	SourcePath             string // filesystem path or "embedded:<name>"
 	Priority               int    // 0=embedded, 1=project, 2=personal
+
+	// IsRole marks this as a role: the startup prompt a session opens with,
+	// loaded from a ROLE.md rather than a SKILL.md. A role is chosen once (via
+	// -r, or fixed by an entry point like `klein review`) and never switched;
+	// skills are the per-turn capabilities reached from inside a session.
+	//
+	// Roles and skills share this type and one registry, so Invoke and the
+	// tool-filtering path resolve either without caring which it is. The
+	// distinction only matters where a name is *selected* (validated against
+	// roles) or *listed* (roles excluded).
+	IsRole bool
 }
 
 // frontmatter maps YAML frontmatter fields using kebab-case.
@@ -263,14 +274,22 @@ func expandAtFileIncludes(content string, workingDir string) string {
 }
 
 // BuildSkillCatalog generates a concise catalog of available skills for system prompt injection.
+// BuildSkillCatalog renders the skill list injected into the session so the
+// model knows what it can reach with ReadSkill.
+//
+// Roles are left out on purpose: the catalog is about capabilities available
+// mid-session, and a role is the startup prompt the session already opened with
+// — not something to go and read.
 func BuildSkillCatalog(skills SkillMap) string {
-	if len(skills) == 0 {
-		return ""
-	}
-
 	names := make([]string, 0, len(skills))
-	for name := range skills {
+	for name, s := range skills {
+		if s.IsRole {
+			continue
+		}
 		names = append(names, name)
+	}
+	if len(names) == 0 {
+		return ""
 	}
 	sort.Strings(names)
 

@@ -2,13 +2,18 @@
 
 A CLI-based AI coding agent supporting multiple LLM backends, using the ReAct (Reason and Act) pattern and MessageState with compaction to interact with tools while maintaining context.
 
-The default skill focuses on coding tasks with todo management, built-in tools, and user-configured tools via MCP client functionality.
+A session opens in a **role** — the startup prompt that gives it its identity
+(`code` by default; also `cad`, `claw`, `review`). Within a session the agent
+reaches **skills**: task capabilities like `pdf`, `github` or `report`. The
+default `code` role focuses on coding tasks with todo management, built-in
+tools, and user-configured tools via MCP client functionality.
 
 The name KLEIN is inspired by the Klein bottle, a topological surface with no distinct inside or outside — symbolizing the seamless collaboration between human and AI.
 
 ## Features
 
 - **Interactive Mode**: REPL-style interface for continuous interaction with conversation memory. Each run starts a fresh session; `--continue` resumes the most recent one
+- **Roles**: `-r` picks the session's startup prompt — `code` (default), `cad` (Fusion/KiCad/Blender), `claw`, `review`
 - **Multiple LLM Backends**: OpenAI GPT, Anthropic Claude, Google Gemini, plus the codex/appserver whole-agent backends
 - **Simplified ReAct Pattern**: Streamlined reasoning and acting with single-action loops for simplicity
 - **Integrated Tools**: File operations, grep search, bash tools, todo tools, and simple web tools
@@ -74,8 +79,11 @@ go install github.com/fpt/klein-cli/klein@latest
 
 **Interactive Mode (default):**
 ```bash
-# Start the interactive REPL — a fresh session each time
+# Start the interactive REPL — a fresh session each time, in the code role
 klein
+
+# Open the session in a different role
+klein -r cad
 
 # Resume this project's most recent session
 klein --continue     # or: klein -c
@@ -336,7 +344,6 @@ Set `agent_addr` in the `claw` config (or pass `--agent-addr`) to dial a separat
   "llm": { "backend": "anthropic", "model": "claude-sonnet-4-6" },
   "base_dir": "~/.klein",
   "claw": {
-    "default_skill": "claw",
     "discord": {
       "token": "YOUR_DISCORD_BOT_TOKEN",
       "allowed_user_ids": ["YOUR_DISCORD_USER_ID"],

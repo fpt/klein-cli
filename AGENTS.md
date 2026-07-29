@@ -467,20 +467,30 @@ Instructions:
 - Follow existing patterns and conventions
 ```
 
-**Built-in Embedded Skills:**
-Built-in skills are embedded in the binary from `internal/skill/skills/*/SKILL.md`:
-- `code` - Comprehensive coding assistant for all development tasks
-- `respond` - Direct knowledge-based responses and todo management
+**Roles vs Skills:**
+A **role** is the startup prompt a session opens with — picked once via `-r`/`--role`
+(default `code`), or fixed by an entry point (`klein claw` → `claw`, `klein review` →
+`review`). A **skill** is a task capability used inside a session, via `ReadSkill`,
+the gateway's `/<skill>`, or `schedules[].skill`. Passing a skill to `-r` is an error.
 
-**Custom Skills:**
-Custom skills can be placed in well-known directories to extend or override built-in skills:
-- **Project skills**: `.claude/skills/*/SKILL.md` (project-specific, checked into version control)
-- **Personal skills**: `~/.claude/skills/*/SKILL.md` (user-specific, not checked in)
+**Built-in Embedded Roles** (`internal/skill/roles/*/ROLE.md`):
+- `code` - Comprehensive coding assistant for all development tasks (default)
+- `cad` - Fusion / KiCad / Blender CAD and EDA work
+- `claw` - Messaging assistant with memory (used by the gateway)
+- `review` - AI code review (used by `klein review`)
+
+**Built-in Embedded Skills** (`internal/skill/skills/*/SKILL.md`):
+`pdf`, `github`, `web`, `report`, `research-stock`, `market-narratives`, `create-skill`
+
+**Custom Roles and Skills:**
+Both extend or override the built-ins from well-known directories:
+- **Project**: `.claude/roles/*/ROLE.md`, `.claude/skills/*/SKILL.md` (checked in)
+- **Personal**: `~/.claude/roles/*/ROLE.md`, `~/.claude/skills/*/SKILL.md` (not checked in)
 
 **Priority Order:**
-1. Built-in embedded skills (lowest priority)
-2. Project skills in `.claude/skills/` (higher priority)
-3. Personal skills in `~/.claude/skills/` (highest priority - override all others)
+1. Built-in embedded (lowest priority)
+2. Personal `~/.claude/` → `~/.agents/` → `~/.klein/`
+3. Project `.claude/` → `.agents/` (highest priority - override all others)
 
 **Frontmatter Fields:**
 - `name` - Skill identifier (used for invocation)

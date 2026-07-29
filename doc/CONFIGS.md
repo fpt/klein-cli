@@ -9,7 +9,7 @@ All configuration mechanisms in one place — CLI flags, settings files, permiss
 1. [CLI Flags](#1-cli-flags)
 2. [Settings JSON](#2-settings-json)
 3. [Permission Rules](#3-permission-rules)
-4. [SKILL.md Frontmatter](#4-skillmd-frontmatter)
+4. [Roles and Skills](#4-roles-and-skills)
 5. [Gateway Configuration](#5-gateway-configuration)
 6. [Environment Variables](#6-environment-variables)
 7. [User Data Directories](#7-user-data-directories)
@@ -26,7 +26,7 @@ go run klein/main.go [flags] [prompt]
 |------|------|---------|-------------|
 | `-b`, `--backend` | string | `""` | LLM backend: `openai`, `anthropic`, `gemini`, `codex`, `appserver` |
 | `-m`, `--model` | string | `""` | Model name (overrides settings file) |
-| `-s`, `--skill` | string | `"code"` | Skill to invoke |
+| `-r`, `--role` | string | `"code"` | Role (startup prompt) to open the session with: `code`, `cad`, `claw`, `review`. Naming a *skill* is rejected — see [§4](#4-roles-and-skills) |
 | `--workdir` | string | `"."` | Working directory for all file operations |
 | `--settings` | string | `""` | Path to settings JSON file (see [§2](#2-settings-json)) |
 | `--allowed-tools` | string | `""` | Comma-separated tool names, overrides skill's `allowed-tools` |
@@ -257,7 +257,7 @@ format (paste a `mcpServers` block's contents under `mcp`):
 | `args` | array | — | Command-line arguments |
 | `env` | object | — | Environment variables `{ "KEY": "VAL" }` |
 | `url` | string | sse | HTTP/SSE endpoint URL (its presence infers `type: sse`) |
-| `type` | string | — | `stdio` or `sse`; inferred from `command`/`url` when omitted |
+| `type` | string | — | `stdio`, `sse`, or `http`. Inferred from `command`/`url` when omitted — note a bare `url` infers **`sse`**, so a streamable-HTTP server needs `"type": "http"` written out |
 | `enabled` | bool | — | Defaults to **true**; set `false` to keep but disable |
 | `allowed_tools` | array | — | Whitelist of tool names from this server |
 
@@ -274,6 +274,23 @@ klein mcp remove browser-sandbox
 
 `add` edits `~/.klein/settings.json`; everything after `--` is the stdio command
 and its args; `--url` makes an sse server; `-e KEY=VAL` adds env vars.
+
+**CAD servers for the `cad` role.** The `cad` role does not hard-code any MCP
+tool names — it discovers whatever is connected via `ToolSearch`, so it works
+before you configure anything and picks servers up once you do. Autodesk's
+[Fusion MCP server](https://blog.autodesk.io/fusion-mcp-server/) is streamable
+HTTP on port 27182:
+
+```json
+"mcp": {
+  "fusion": { "type": "http", "url": "http://127.0.0.1:27182/mcp" }
+}
+```
+
+Two things to know about it: `"type": "http"` must be explicit (a bare `url`
+infers `sse`), and the server only answers **while Fusion is running** — it
+binds loopback, so reaching an instance on another machine needs an SSH tunnel
+or port-forward to that host.
 
 ### Example settings file
 
@@ -396,13 +413,48 @@ Error format: `SECURITY: Command blocked — contains <reason>.`
 
 ---
 
-## 4. SKILL.md Frontmatter
+## 4. Roles and Skills
 
-Skills are YAML-frontmatter + markdown files. Klein searches in priority order (last wins):
+Klein has two kinds of prompt, in the same format but with different jobs.
 
-1. Built-in skills embedded in the binary (`internal/skill/skills/*/SKILL.md`)
-2. Project skills: `.claude/skills/{name}/SKILL.md`
-3. Personal skills: `~/.claude/skills/{name}/SKILL.md`
+**A role is a startup prompt.** It is chosen once, when a session opens, and
+never switched — it gives the session its identity. Roles are selected with
+`-r`/`--role`, or fixed by an entry point (`klein claw` always opens `claw`;
+`klein review` always opens `review`).
+
+**A skill is a task capability**, reached from *inside* a session: the model
+loads one with `ReadSkill` as it works, the gateway runs one for a single
+message with `/<skill>`, and `schedules[].skill` picks one for a scheduled turn.
+
+| | Role | Skill |
+|---|---|---|
+| File | `roles/{name}/ROLE.md` | `skills/{name}/SKILL.md` |
+| Built-in | `code`, `cad`, `claw`, `review` | `pdf`, `github`, `web`, `report`, `research-stock`, `market-narratives`, `create-skill` |
+| Chosen | Once, at startup | Any time, per turn |
+| Selected by | `-r`, `klein claw`, `klein review` | `ReadSkill`, `/<skill>`, `schedules[].skill` |
+| Listed in `/list` | No | Yes |
+
+Passing a skill to `-r` is an error, since a skill was never written to open a
+session:
+
+```
+$ klein -r pdf
+Error: "pdf" is a skill, not a role — roles start a session, skills are used
+within one (roles: cad, claw, code, review)
+```
+
+Both kinds are searched in the same priority order (last wins), with `roles` or
+`skills` as the directory name:
+
+1. Built-in, embedded in the binary (`internal/skill/roles/*/ROLE.md`, `internal/skill/skills/*/SKILL.md`)
+2. `~/.claude/{roles,skills}/` → `~/.agents/…` → `~/.klein/…` (personal)
+3. `.claude/{roles,skills}/` → `.agents/…` (project — highest)
+
+So a project `.claude/roles/code/ROLE.md` replaces the built-in `code` role.
+
+### Frontmatter fields
+
+Roles and skills share this format; a `ROLE.md` simply lives under `roles/`.
 
 ### Frontmatter fields
 
@@ -420,15 +472,15 @@ disable-model-invocation: false
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
-| `name` | string | directory name | Skill identifier used with `--skill` flag |
+| `name` | string | directory name | Identifier: the name a role is selected by (`-r`), or a skill is invoked by |
 | `description` | string | `""` | Shown in `/help` and skill listings |
 | `allowed-tools` | string | `""` | Tools loaded **up front**. Every skill also gets **`ToolSearch`**: any tool not listed (incl. MCP tools, which can't be enumerated) stays deferred and the model loads it on demand. Omit `allowed-tools` to start from a small default core (Read/LS/Glob/Grep/Write/Edit/Bash/TodoWrite) and search for the rest. (The CLI `--allowed-tools` flag is a hard restriction — no ToolSearch.) |
 | `argument-hint` | string | `""` | Usage hint displayed to the user |
-| `user-invocable` | bool | `true` | Set `false` to hide from user listings (e.g. gateway-only skills) |
-| `model` | string | `""` | Override model for this skill; empty = use settings default |
+| `user-invocable` | bool | `true` | Skills only: set `false` to hide from `/list`. Roles are never listed there |
+| `model` | string | `""` | Override model for this role/skill; empty = use settings default |
 | `disable-model-invocation` | bool | `false` | Skip LLM call entirely (internal/testing use) |
 
-### Template variables in skill content
+### Template variables in role/skill content
 
 | Variable | Replaced with |
 |----------|--------------|
@@ -485,7 +537,7 @@ which a running `klein claw` gateway live-reloads.
 ```bash
 klein claw repl                                  # default instance
 klein claw repl --settings ~/work/settings.json  # a specific instance's tools/data
-klein claw repl --skill code                      # override the session skill (default: claw)
+klein claw repl --role code                       # override the session role (default: claw)
 ```
 
 ### `claw` block fields
@@ -494,7 +546,6 @@ klein claw repl --skill code                      # override the session skill (
 |-------|------|---------|-------------|
 | `agent_addr` | string | `""` (embedded) | Empty = start an embedded in-process agent server; set to dial a remote `klein --serve` |
 | `working_dir` | string | — | Working directory passed to the agent |
-| `default_skill` | string | `"claw"` | Skill used for incoming messages |
 | `session_timeout` | string | `"30m"` | Inactivity timeout (Go duration, e.g. `"1h"`) |
 
 > The LLM **model** and **max_iterations** are owned by the agent via the same
@@ -577,7 +628,6 @@ outputs (market reports, etc.) into daily notes and MEMORY.md:
   "agent": { "max_iterations": 30 },
   "base_dir": "~/.klein",
   "claw": {
-    "default_skill": "claw",
     "session_timeout": "30m",
     "discord": {
       "token": "BOT_TOKEN_HERE",

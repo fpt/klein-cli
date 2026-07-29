@@ -49,7 +49,7 @@ User Request → Skill Assignment → ReAct Execution
 
 **Current Implementation:**
 - **Default Skill**: Uses 'code' skill by default for comprehensive development tasks
-- **Manual Override**: Users can specify skill with `-s` flag (e.g., `-s respond`)
+- **Role Selection**: Users pick the session's startup prompt with `-r` (e.g. `-r cad`); skills are reached from inside the session
 - **Direct Execution**: No complex skill selection logic - simple and reliable
 
 **Available Skills:**
@@ -635,8 +635,8 @@ Test different skills to evaluate the skill-based system:
 
 1. **CODE Skill (Default)**: `go run klein/main.go "Create a new Go HTTP server with health check endpoint"`
 2. **CODE Skill (Tools)**: `go run klein/main.go "List all Go files and analyze their purposes in this project"`
-3. **RESPOND Skill**: `go run klein/main.go -s respond "Explain the difference between channels and mutexes in Go"`
-4. **RESPOND Skill (Knowledge)**: `go run klein/main.go -s respond "What are Go best practices for error handling?"`
+3. **cad role**: `go run klein/main.go -r cad "What does kicad-cli export gerbers need?"`
+4. **Role validation**: `go run klein/main.go -r pdf "x"` must fail — `pdf` is a skill, not a role
 
 ### Security Testing
 

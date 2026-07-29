@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 )
@@ -183,6 +184,45 @@ func TestMigrateLegacySession_KeepsThePreUpgradeConversation(t *testing.T) {
 	}
 	if string(sidecar) != "thread-abc" {
 		t.Errorf("sidecar content: got %q", sidecar)
+	}
+}
+
+// Two klein processes starting at once during the upgrade can both pass the
+// emptiness check and race on the rename. The loser must treat "source already
+// gone" as success: migration failure costs that run its session persistence
+// entirely, since newSharedSessionState falls back to in-memory state.
+func TestMigrateLegacySession_ConcurrentStartupIsBenign(t *testing.T) {
+	t.Parallel()
+	c, workdir := testUserConfig(t)
+	projectDir, err := c.GetProjectDataDir(workdir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeSession(t, filepath.Join(projectDir, "session.json"), time.Now().Add(-time.Hour))
+
+	const racers = 16
+	var wg sync.WaitGroup
+	results := make([]string, racers)
+	errs := make([]error, racers)
+	start := make(chan struct{})
+
+	for i := range racers {
+		wg.Go(func() {
+			<-start // release them together to maximize overlap
+			results[i], errs[i] = c.LatestProjectSessionFile(workdir)
+		})
+	}
+	close(start)
+	wg.Wait()
+
+	want := filepath.Join(projectDir, "sessions", "migrated-session.json")
+	for i := range racers {
+		if errs[i] != nil {
+			t.Errorf("racer %d failed startup: %v", i, errs[i])
+		}
+		if errs[i] == nil && results[i] != want {
+			t.Errorf("racer %d resolved %q, want the migrated session %q", i, results[i], want)
+		}
 	}
 }
 

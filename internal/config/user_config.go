@@ -197,6 +197,14 @@ func (c *UserConfig) LatestProjectSessionFile(projectPath string) (string, error
 //
 // Only ever runs when the sessions directory is empty: once a project has real
 // per-run sessions, a stale session.json must not jump ahead of them.
+//
+// The emptiness check and the rename are separate operations with no lock
+// between them, so two klein processes starting at once during the upgrade can
+// both decide to migrate. That race is benign and must stay that way: the loser
+// finds the source already gone, which means the migration it wanted has
+// happened, so it reports success rather than failing an otherwise valid
+// startup. (An error here costs the run its session persistence entirely —
+// newSharedSessionState falls back to in-memory state.)
 func (c *UserConfig) migrateLegacySession(projectDir, sessionsDir string) error {
 	legacy := filepath.Join(projectDir, "session.json")
 	if !isRegularFile(legacy) || dirHasEntries(sessionsDir) {
@@ -205,6 +213,9 @@ func (c *UserConfig) migrateLegacySession(projectDir, sessionsDir string) error 
 
 	moved := filepath.Join(sessionsDir, "migrated-session"+sessionFileExt)
 	if err := os.Rename(legacy, moved); err != nil {
+		if os.IsNotExist(err) {
+			return nil // another process migrated it first
+		}
 		return fmt.Errorf("failed to migrate legacy session file: %w", err)
 	}
 	// The codex thread sidecar is keyed to the session path, so it has to travel

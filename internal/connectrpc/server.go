@@ -269,11 +269,12 @@ func (s *AgentServer) ListScenarios(ctx context.Context, req *connect.Request[ag
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to load skills: %w", err))
 	}
 
+	// Skills only. Roles are startup prompts, not something `/<name>` can invoke
+	// for a message, so listing them would offer the user something that cannot
+	// be run. LoadSkills already excludes them by reading only skills/.
 	names := make([]string, 0, len(skills))
 	for name, sk := range skills {
-		// claw is gateway-internal (user-invocable:false); still surface it for
-		// the gateway, but skip any other non-invocable skills.
-		if !sk.UserInvocable && name != "claw" {
+		if !sk.UserInvocable {
 			continue
 		}
 		names = append(names, name)

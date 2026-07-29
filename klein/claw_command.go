@@ -141,7 +141,7 @@ func runClawCommand(args []string) int {
 	fmt.Println("klein claw gateway starting...")
 	fmt.Printf("  Base dir: %s\n", baseDir)
 	fmt.Printf("  Agent: %s\n", cfg.AgentAddr)
-	fmt.Printf("  Skill: %s\n", cfg.DefaultSkill)
+	fmt.Printf("  Role: %s\n", gateway.ClawRole)
 	if cfg.Discord.Token != "" {
 		fmt.Println("  Discord: enabled")
 	}
@@ -159,7 +159,7 @@ func runClawCommand(args []string) int {
 
 const clawUsage = `Usage:
   klein claw [--settings <path>] [--agent-addr <addr>] [--serve-addr <addr>]
-  klein claw repl [--settings <path>] [--skill <name>]
+  klein claw repl [--settings <path>] [--role <name>]
 
 Runs the messaging gateway. Configuration lives in the "claw" section of
 settings.json; sessions, memory, and the schedule store are derived from the
@@ -212,7 +212,7 @@ func buildClawToolManagers(ctx context.Context, settings *config.Settings, cfg *
 func runClawREPL(args []string) int {
 	fs := flag.NewFlagSet("claw repl", flag.ContinueOnError)
 	settingsPath := fs.String("settings", "", "Path to settings file (default: .agents/settings.json or ~/.klein/settings.json)")
-	skillFlag := fs.String("skill", "claw", "Skill to use for the session")
+	roleFlag := fs.String("role", gateway.ClawRole, "Role (startup prompt) to open the session with")
 	verbose := fs.Bool("v", false, "Enable verbose (debug) logging")
 	if err := fs.Parse(args); err != nil {
 		return 2
@@ -288,7 +288,7 @@ func runClawREPL(args []string) int {
 	}
 	defer cleanup()
 
-	fmt.Printf("klein claw — interactive (base dir: %s, skill: %s)\n", baseDir, *skillFlag)
-	app.StartInteractiveMode(ctx, a, *skillFlag)
+	fmt.Printf("klein claw — interactive (base dir: %s, role: %s)\n", baseDir, *roleFlag)
+	app.StartInteractiveMode(ctx, a, *roleFlag)
 	return 0
 }

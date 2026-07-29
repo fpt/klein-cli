@@ -537,9 +537,12 @@ func buildAgentTools(opts AgentOptions, skills skill.SkillMap, memoryDir string)
 		fsConfig.AllowedDirectories = append(fsConfig.AllowedDirectories, memoryDir)
 	}
 	// Allow writing to ~/.klein/skills so the create-skill skill can persist new
-	// skills there (the skill loader scans this directory).
+	// skills there, and ~/.klein/roles so a custom role can be added the same way
+	// (both are scanned by the loader).
 	if home, err := os.UserHomeDir(); err == nil {
-		fsConfig.AllowedDirectories = append(fsConfig.AllowedDirectories, filepath.Join(home, ".klein", "skills"))
+		fsConfig.AllowedDirectories = append(fsConfig.AllowedDirectories,
+			filepath.Join(home, ".klein", "skills"),
+			filepath.Join(home, ".klein", "roles"))
 	}
 	filesystemManager := tool.NewFileSystemToolManager(opts.FsRepo, fsConfig, workingDir)
 
@@ -629,10 +632,12 @@ func NewAgentWithOptions(ctx context.Context, opts AgentOptions) (*Agent, func()
 	// Compute memory directory for interactive mode; empty string in one-shot/test mode.
 	memoryDir := computeMemoryDir(isInteractiveMode, workingDir)
 
-	// Load skills (embedded + filesystem) before creating tool managers.
-	skills, err := skill.LoadSkills(workingDir)
+	// Load roles and skills (embedded + filesystem) before creating tool
+	// managers. Both land in one registry: Invoke resolves a name without caring
+	// whether it is the session's startup role or a skill reached mid-session.
+	skills, err := skill.LoadRolesAndSkills(workingDir)
 	if err != nil {
-		logger.Warn("Failed to load skills, using empty fallback", "error", err)
+		logger.Warn("Failed to load roles/skills, using empty fallback", "error", err)
 		skills = make(skill.SkillMap)
 	}
 

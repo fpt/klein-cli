@@ -118,7 +118,7 @@ func (sm *SessionManager) GetOrCreateSession(ctx context.Context, key SessionKey
 	session := &Session{
 		Key:            key,
 		AgentSessionID: resp.Msg.SessionId,
-		Skill:          sm.config.DefaultSkill,
+		Skill:          ClawRole,
 		LastActivity:   time.Now(),
 	}
 

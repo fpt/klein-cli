@@ -224,8 +224,19 @@ This is a Go-based skill-driven coding agent that uses SKILL.md-configured skill
 - `domain.ToolManager` - Interface for tool management with security controls
 - `state.MessageState` - Session persistence and message management
 
-**Direct Skill Execution:**
-The system uses CLI-specified skills with embedded SKILL.md definitions. No AI-powered skill selection - skills are directly specified via command line arguments.
+**Roles and Skills:**
+A **role** is the startup prompt a session opens with — chosen once via `-r`/`--role`
+(default `code`), or fixed by an entry point (`klein claw` → `claw`, `klein review` →
+`review`). A **skill** is a task capability reached from inside a session: the model
+loads one with `ReadSkill`, the gateway runs one for a message via `/<skill>`, and
+`schedules[].skill` picks one for a scheduled turn.
+
+Both use the same frontmatter format and load through the same priority ladder, but
+from different directories: `roles/{name}/ROLE.md` vs `skills/{name}/SKILL.md`. They
+share one registry at runtime, so `Agent.Invoke` resolves either without caring which
+it got; the distinction is enforced where a name is *selected* (validated against
+roles, in `validateRole`) or *listed* (roles excluded from the skill catalog and from
+`ListScenarios`). Passing a skill to `-r` is an error.
 
 **Universal + Filtered Tool Architecture:**
 - **Universal Tools**: Always available (todos, filesystem, bash, grep) via composite manager
@@ -234,8 +245,8 @@ The system uses CLI-specified skills with embedded SKILL.md definitions. No AI-p
 - **Tool Composition**: All tool managers composed at construction, filtered at invoke time per skill
 
 **Simplified Workflow Architecture:**
-1. **CLI Skill Selection** → User specifies skill directly via command line
-2. **SKILL.md Loading** → Load built-in embedded skills + project/personal custom skills
+1. **Role Selection** → User picks the session's startup prompt via `-r` (validated: a skill name is rejected)
+2. **Definition Loading** → Load embedded + project/personal roles (ROLE.md) and skills (SKILL.md) into one registry
 3. **Tool Filtering** → Filter composite tool manager based on skill's `allowed-tools` field
 4. **Prompt Rendering** → Render SKILL.md content with argument variables
 5. **ReAct Execution** → Execute skill with filtered tools and rendered prompt
@@ -320,7 +331,6 @@ Paths are NOT set here — sessions/memory/schedules derive from the top-level
   "llm": { "backend": "anthropic", "model": "claude-sonnet-4-6" },
   "base_dir": "~/.klein",
   "claw": {
-    "default_skill": "claw",
     "discord": {
       "token": "BOT_TOKEN",
       "allowed_guild_ids": ["123"],
@@ -771,21 +781,25 @@ Instructions:
 - Include error handling and tests
 ```
 
-**Built-in Embedded Skills:**
-Built-in skills are embedded in the binary from `internal/skill/skills/*/SKILL.md`:
-- `code` - Comprehensive coding assistant for all development tasks
-- `respond` - Direct knowledge-based responses and todo management
-- `claw` - Personal AI assistant for messaging platforms with memory (used by gateway, not directly CLI-invocable)
+**Built-in Embedded Roles** (`internal/skill/roles/*/ROLE.md`) — startup prompts:
+- `code` - Comprehensive coding assistant for all development tasks (default)
+- `cad` - Fusion / KiCad / Blender CAD and EDA work; finds app MCP tools via ToolSearch
+- `claw` - Personal AI assistant for messaging platforms with memory (used by the gateway)
+- `review` - AI code review (used by `klein review`)
 
-**Custom Skills:**
-You can override or extend built-in skills by placing SKILL.md files in:
-- `.claude/skills/` - Project-specific custom skills
-- `~/.claude/skills/` - Personal custom skills (shared across projects)
+**Built-in Embedded Skills** (`internal/skill/skills/*/SKILL.md`) — task capabilities:
+`pdf`, `github`, `web`, `report`, `research-stock`, `market-narratives`, `create-skill`
+
+**Custom Roles and Skills:**
+Override or extend either by placing files in the matching directory:
+- `.claude/roles/` and `.claude/skills/` - Project-specific
+- `~/.claude/roles/` and `~/.claude/skills/` - Personal (shared across projects)
+  (`~/.agents/…` and `~/.klein/…` are also scanned)
 
 **Priority Order (later overrides earlier):**
-1. Built-in embedded skills (lowest priority)
-2. Project skills in `.claude/skills/` (medium priority)
-3. Personal skills in `~/.claude/skills/` (highest priority)
+1. Built-in embedded (lowest priority)
+2. Personal `~/.claude/` → `~/.agents/` → `~/.klein/`
+3. Project `.claude/` → `.agents/` (highest priority)
 
 **Frontmatter Fields:**
 - `name` - Skill identifier (used for invocation)

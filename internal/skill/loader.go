@@ -3,13 +3,25 @@ package skill
 import (
 	"fmt"
 	"io/fs"
+	"maps"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 )
 
 // SkillMap maps skill name (lowercase) to *Skill.
 type SkillMap map[string]*Skill
+
+// Filenames and directory names for the two kinds of definition. Roles and
+// skills are loaded by the same code with these substituted in; the frontmatter
+// format is identical, only the meaning differs (see Skill.IsRole).
+const (
+	skillFileName = "SKILL.md"
+	roleFileName  = "ROLE.md"
+	skillsDirName = "skills"
+	rolesDirName  = "roles"
+)
 
 // LoadSkills loads all skills with highest-priority-wins ordering. For a given
 // skill name the source with the largest priority value wins:
@@ -21,46 +33,64 @@ type SkillMap map[string]*Skill
 // the embedded built-ins. ~/.klein/skills/ is klein's own personal-skill
 // directory (where the create-skill skill writes new skills).
 func LoadSkills(workingDir string) (SkillMap, error) {
-	result := make(SkillMap)
+	return loadDefinitions(workingDir, skillsDirName, skillFileName, false)
+}
 
-	// 1. Embedded built-in skills (lowest priority)
-	builtins, err := LoadBuiltinSkills()
+// LoadRoles loads all roles — the startup prompts a session can open with —
+// using the same priority ladder as LoadSkills with "roles" in place of
+// "skills", so a project or personal ROLE.md overrides a built-in of the same
+// name exactly as it would for a skill.
+func LoadRoles(workingDir string) (SkillMap, error) {
+	return loadDefinitions(workingDir, rolesDirName, roleFileName, true)
+}
+
+// LoadRolesAndSkills returns one registry holding both, which is what the agent
+// resolves names against. Roles win a name collision: a role has to be
+// selectable by its own name, and shadowing it with a same-named skill would
+// make that startup prompt unreachable.
+func LoadRolesAndSkills(workingDir string) (SkillMap, error) {
+	skills, err := LoadSkills(workingDir)
 	if err != nil {
-		return nil, fmt.Errorf("failed to load built-in skills: %w", err)
+		return nil, err
 	}
-	for name, s := range builtins {
-		result[name] = s
+	roles, err := LoadRoles(workingDir)
+	if err != nil {
+		return nil, err
 	}
+	maps.Copy(skills, roles)
+	return skills, nil
+}
 
-	absWorkDir := workingDir
-	if !filepath.IsAbs(absWorkDir) {
-		if abs, err := filepath.Abs(absWorkDir); err == nil {
-			absWorkDir = abs
+// RoleNames returns the sorted names of the roles in a registry, for error
+// messages that have to tell the user what they could have picked instead.
+func RoleNames(defs SkillMap) []string {
+	names := make([]string, 0, len(defs))
+	for name, s := range defs {
+		if s.IsRole {
+			names = append(names, name)
 		}
 	}
+	sort.Strings(names)
+	return names
+}
 
-	home, _ := os.UserHomeDir()
-
-	dirs := []struct {
-		path     string
-		priority int
-	}{
-		{filepath.Join(home, ".claude", "skills"), 1},
-		{filepath.Join(home, ".agents", "skills"), 2},
-		{filepath.Join(home, ".klein", "skills"), 3}, // klein-native personal skills (where create-skill writes)
-		{filepath.Join(absWorkDir, ".claude", "skills"), 4},
-		{filepath.Join(absWorkDir, ".agents", "skills"), 5},
+// loadDefinitions walks the embedded built-ins and then the five filesystem
+// directories, highest priority winning.
+func loadDefinitions(workingDir, dirName, fileName string, isRole bool) (SkillMap, error) {
+	result, err := loadBuiltins(dirName, fileName, isRole)
+	if err != nil {
+		return nil, fmt.Errorf("failed to load built-in %s: %w", dirName, err)
 	}
 
-	for _, d := range dirs {
+	for _, d := range searchDirs(workingDir, dirName) {
 		if info, err := os.Stat(d.path); err != nil || !info.IsDir() {
 			continue
 		}
-		skills, err := LoadSkillsFromDir(d.path, d.priority)
+		loaded, err := loadFromDir(d.path, d.priority, fileName, isRole)
 		if err != nil {
-			return nil, fmt.Errorf("failed to load skills from %s: %w", d.path, err)
+			return nil, fmt.Errorf("failed to load %s from %s: %w", dirName, d.path, err)
 		}
-		for name, s := range skills {
+		for name, s := range loaded {
 			if existing, ok := result[name]; !ok || s.Priority > existing.Priority {
 				result[name] = s
 			}
@@ -70,14 +100,52 @@ func LoadSkills(workingDir string) (SkillMap, error) {
 	return result, nil
 }
 
+// searchDir is one directory in the priority ladder; a larger priority wins a
+// name collision.
+type searchDir struct {
+	path     string
+	priority int
+}
+
+// searchDirs returns the five filesystem locations scanned for definitions of
+// one kind, lowest priority first. dirName is "roles" or "skills", so the two
+// kinds never read each other's directories.
+func searchDirs(workingDir, dirName string) []searchDir {
+	absWorkDir := workingDir
+	if !filepath.IsAbs(absWorkDir) {
+		if abs, err := filepath.Abs(absWorkDir); err == nil {
+			absWorkDir = abs
+		}
+	}
+	home, _ := os.UserHomeDir()
+
+	return []searchDir{
+		{filepath.Join(home, ".claude", dirName), 1},
+		{filepath.Join(home, ".agents", dirName), 2},
+		{filepath.Join(home, ".klein", dirName), 3}, // klein-native personal defs (where create-skill writes)
+		{filepath.Join(absWorkDir, ".claude", dirName), 4},
+		{filepath.Join(absWorkDir, ".agents", dirName), 5},
+	}
+}
+
 // LoadSkillsFromDir loads SKILL.md files from a directory.
 // Each subdirectory containing a SKILL.md is treated as one skill.
 func LoadSkillsFromDir(dir string, priority int) (SkillMap, error) {
+	return loadFromDir(dir, priority, skillFileName, false)
+}
+
+// LoadRolesFromDir loads ROLE.md files from a directory, one role per
+// subdirectory.
+func LoadRolesFromDir(dir string, priority int) (SkillMap, error) {
+	return loadFromDir(dir, priority, roleFileName, true)
+}
+
+func loadFromDir(dir string, priority int, fileName string, isRole bool) (SkillMap, error) {
 	result := make(SkillMap)
 
 	entries, err := os.ReadDir(dir)
 	if err != nil {
-		return nil, fmt.Errorf("failed to read skills directory %s: %w", dir, err)
+		return nil, fmt.Errorf("failed to read directory %s: %w", dir, err)
 	}
 
 	for _, entry := range entries {
@@ -85,20 +153,20 @@ func LoadSkillsFromDir(dir string, priority int) (SkillMap, error) {
 			continue
 		}
 
-		skillFile := filepath.Join(dir, entry.Name(), "SKILL.md")
-		data, err := os.ReadFile(skillFile)
+		path := filepath.Join(dir, entry.Name(), fileName)
+		data, err := os.ReadFile(path)
 		if err != nil {
-			// No SKILL.md in this subdirectory; skip
+			// No definition file in this subdirectory; skip
 			continue
 		}
 
-		s, err := ParseSkillMD(data, skillFile, priority)
+		s, err := ParseSkillMD(data, path, priority)
 		if err != nil {
-			return nil, fmt.Errorf("failed to parse skill %s: %w", skillFile, err)
+			return nil, fmt.Errorf("failed to parse %s: %w", path, err)
 		}
+		s.IsRole = isRole
 
-		key := strings.ToLower(s.Name)
-		result[key] = s
+		result[strings.ToLower(s.Name)] = s
 	}
 
 	return result, nil
@@ -106,28 +174,41 @@ func LoadSkillsFromDir(dir string, priority int) (SkillMap, error) {
 
 // LoadBuiltinSkills loads embedded built-in skills from the embed.FS.
 func LoadBuiltinSkills() (SkillMap, error) {
-	result := make(SkillMap)
+	return loadBuiltins(skillsDirName, skillFileName, false)
+}
 
-	err := fs.WalkDir(embeddedSkills, "skills", func(path string, d fs.DirEntry, err error) error {
+// LoadBuiltinRoles loads the embedded built-in roles.
+func LoadBuiltinRoles() (SkillMap, error) {
+	return loadBuiltins(rolesDirName, roleFileName, true)
+}
+
+func loadBuiltins(dirName, fileName string, isRole bool) (SkillMap, error) {
+	result := make(SkillMap)
+	source := embeddedSkills
+	if isRole {
+		source = embeddedRoles
+	}
+
+	err := fs.WalkDir(source, dirName, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
-		if d.IsDir() || d.Name() != "SKILL.md" {
+		if d.IsDir() || d.Name() != fileName {
 			return nil
 		}
 
-		data, err := embeddedSkills.ReadFile(path)
+		data, err := source.ReadFile(path)
 		if err != nil {
-			return fmt.Errorf("failed to read embedded skill %s: %w", path, err)
+			return fmt.Errorf("failed to read embedded %s: %w", path, err)
 		}
 
 		s, err := ParseSkillMD(data, "embedded:"+path, 0)
 		if err != nil {
-			return fmt.Errorf("failed to parse embedded skill %s: %w", path, err)
+			return fmt.Errorf("failed to parse embedded %s: %w", path, err)
 		}
+		s.IsRole = isRole
 
-		key := strings.ToLower(s.Name)
-		result[key] = s
+		result[strings.ToLower(s.Name)] = s
 		return nil
 	})
 

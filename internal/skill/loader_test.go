@@ -16,14 +16,14 @@ func TestLoadBuiltinSkills(t *testing.T) {
 	}
 }
 
-func TestLoadBuiltinSkills_HasCodeSkill(t *testing.T) {
-	skills, err := LoadBuiltinSkills()
+func TestLoadBuiltinRoles_HasCodeRole(t *testing.T) {
+	skills, err := LoadBuiltinRoles()
 	if err != nil {
 		t.Fatalf("failed to load built-in skills: %v", err)
 	}
 	code, ok := skills["code"]
 	if !ok {
-		t.Fatal("expected 'code' skill in built-in skills")
+		t.Fatal("expected 'code' role in built-in roles")
 	}
 	if code.Name != "code" {
 		t.Errorf("expected name 'code', got %q", code.Name)
@@ -31,7 +31,7 @@ func TestLoadBuiltinSkills_HasCodeSkill(t *testing.T) {
 	if code.Description == "" {
 		t.Error("expected non-empty description for code skill")
 	}
-	// code skill has explicit allowed-tools including plan mode tools
+	// the code role has explicit allowed-tools including plan mode tools
 	hasPlanMode := false
 	for _, tool := range code.AllowedTools {
 		if tool == "EnterPlanMode" || tool == "ExitPlanMode" {
@@ -100,8 +100,8 @@ Project content.
 	}
 
 	// Should have built-in skills + project skill
-	if _, ok := skills["code"]; !ok {
-		t.Error("expected built-in 'code' skill")
+	if _, ok := skills["pdf"]; !ok {
+		t.Error("expected built-in 'pdf' skill")
 	}
 	if s, ok := skills["my-skill"]; !ok {
 		t.Error("expected project 'my-skill' skill")
@@ -120,8 +120,8 @@ func TestLoadSkills_EmptyDir(t *testing.T) {
 		t.Fatalf("failed to load skills: %v", err)
 	}
 	// Should still have built-in skills
-	if _, ok := skills["code"]; !ok {
-		t.Error("expected built-in 'code' skill even with empty dir")
+	if _, ok := skills["pdf"]; !ok {
+		t.Error("expected built-in 'pdf' skill even with empty dir")
 	}
 }
 

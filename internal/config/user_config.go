@@ -106,7 +106,10 @@ func (c *UserConfig) GetProjectTaskFile(projectPath string) (string, error) {
 	return filepath.Join(projectDir, "tasks.json"), nil
 }
 
-// GetProjectSessionFile returns the session state file path for a specific project
+// GetProjectSessionFile returns the legacy single-session file path for a
+// project. Sessions now live one-file-per-run under GetProjectSessionsDir; this
+// path is only still consulted so an existing conversation survives the upgrade
+// (see migrateLegacySession).
 func (c *UserConfig) GetProjectSessionFile(projectPath string) (string, error) {
 	projectDir, err := c.GetProjectDataDir(projectPath)
 	if err != nil {
@@ -114,6 +117,119 @@ func (c *UserConfig) GetProjectSessionFile(projectPath string) (string, error) {
 	}
 
 	return filepath.Join(projectDir, "session.json"), nil
+}
+
+// sessionFileExt is the suffix identifying a session file inside the sessions
+// directory. Sidecars (e.g. "<session>.json.codex-thread") deliberately do not
+// match it, so they are never mistaken for sessions of their own.
+const sessionFileExt = ".json"
+
+// GetProjectSessionsDir returns the directory holding a project's session files,
+// creating it if needed. Each interactive run writes its own file here, so
+// starting fresh never overwrites a previous conversation.
+func (c *UserConfig) GetProjectSessionsDir(projectPath string) (string, error) {
+	projectDir, err := c.GetProjectDataDir(projectPath)
+	if err != nil {
+		return "", err
+	}
+	sessionsDir := filepath.Join(projectDir, "sessions")
+	if err := os.MkdirAll(sessionsDir, 0755); err != nil {
+		return "", fmt.Errorf("failed to create sessions directory: %w", err)
+	}
+	if err := c.migrateLegacySession(projectDir, sessionsDir); err != nil {
+		return "", err
+	}
+	return sessionsDir, nil
+}
+
+// NewProjectSessionFile returns the path for a fresh session. The file is *not*
+// created here: an interactive run that exits without a single exchange should
+// leave nothing behind, or `--continue` would resume that empty session instead
+// of the real conversation before it.
+func (c *UserConfig) NewProjectSessionFile(projectPath string) (string, error) {
+	sessionsDir, err := c.GetProjectSessionsDir(projectPath)
+	if err != nil {
+		return "", err
+	}
+	// Nanosecond precision so two shells starting in the same second cannot
+	// collide on a name and silently share one file.
+	name := time.Now().Format("20060102T150405.000000000") + sessionFileExt
+	return filepath.Join(sessionsDir, name), nil
+}
+
+// LatestProjectSessionFile returns the most recently modified session file, or
+// "" when the project has none yet.
+//
+// Ordering is by mtime rather than by the timestamp in the name, because what
+// `--continue` should resume is the session most recently *used* — a session
+// resumed yesterday and worked in today is the one you mean, whenever it began.
+func (c *UserConfig) LatestProjectSessionFile(projectPath string) (string, error) {
+	sessionsDir, err := c.GetProjectSessionsDir(projectPath)
+	if err != nil {
+		return "", err
+	}
+	entries, err := os.ReadDir(sessionsDir)
+	if err != nil {
+		return "", fmt.Errorf("failed to read sessions directory %s: %w", sessionsDir, err)
+	}
+
+	var latest string
+	var latestMod time.Time
+	for _, entry := range entries {
+		if entry.IsDir() || filepath.Ext(entry.Name()) != sessionFileExt {
+			continue
+		}
+		info, err := entry.Info()
+		if err != nil {
+			continue // vanished mid-scan; not a reason to fail the whole lookup
+		}
+		if latest == "" || info.ModTime().After(latestMod) {
+			latest, latestMod = filepath.Join(sessionsDir, entry.Name()), info.ModTime()
+		}
+	}
+	return latest, nil
+}
+
+// migrateLegacySession moves a pre-existing single session.json into the
+// sessions directory so the conversation in flight at upgrade time stays
+// resumable with `--continue`. Its mtime is preserved by the rename, which is
+// what LatestProjectSessionFile orders on.
+//
+// Only ever runs when the sessions directory is empty: once a project has real
+// per-run sessions, a stale session.json must not jump ahead of them.
+func (c *UserConfig) migrateLegacySession(projectDir, sessionsDir string) error {
+	legacy := filepath.Join(projectDir, "session.json")
+	if !isRegularFile(legacy) || dirHasEntries(sessionsDir) {
+		return nil
+	}
+
+	moved := filepath.Join(sessionsDir, "migrated-session"+sessionFileExt)
+	if err := os.Rename(legacy, moved); err != nil {
+		return fmt.Errorf("failed to migrate legacy session file: %w", err)
+	}
+	// The codex thread sidecar is keyed to the session path, so it has to travel
+	// with it or a resumed session would start a new codex thread.
+	if err := os.Rename(legacy+".codex-thread", moved+".codex-thread"); err != nil && !os.IsNotExist(err) {
+		pkgLogger.NewComponentLogger("user-config").WarnWithIntention(
+			pkgLogger.IntentionWarning, "Failed to migrate codex thread sidecar", "error", err)
+	}
+	return nil
+}
+
+// isRegularFile reports whether path is an existing non-directory. A stat error
+// of any kind counts as "not there": missing or unreadable, there is nothing
+// here worth migrating.
+func isRegularFile(path string) bool {
+	info, err := os.Stat(path)
+	return err == nil && !info.IsDir()
+}
+
+// dirHasEntries reports whether dir contains anything. A read error counts as
+// "yes" on purpose — that is the conservative direction, skipping the migration
+// rather than letting a legacy file jump ahead of sessions we failed to see.
+func dirHasEntries(dir string) bool {
+	entries, err := os.ReadDir(dir)
+	return err != nil || len(entries) > 0
 }
 
 // GetProjectHistoryFile returns the readline history file path for a specific project

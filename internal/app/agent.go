@@ -395,6 +395,11 @@ type AgentOptions struct {
 
 	SkipSessionRestore bool
 	IsInteractiveMode  bool
+
+	// ContinueSession resumes the project's most recently used session instead of
+	// starting a fresh one (`klein --continue`). Interactive mode only; a fresh
+	// session is the default so a plain `klein` never inherits stale context.
+	ContinueSession bool
 }
 
 // resolveLLMClient returns opts.LLMClient when set, otherwise builds one from the
@@ -428,10 +433,16 @@ func computeMemoryDir(isInteractiveMode bool, workingDir string) string {
 }
 
 // newSharedSessionState creates the shared message state and its session file
-// path. Interactive mode restores from the project session file (unless
-// skipSessionRestore); one-shot/test mode gets a clean in-memory state.
+// path. Interactive mode gets a *fresh* session file per run; it resumes the
+// project's most recently used session only when continueSession is set
+// (`klein --continue`). one-shot/test mode gets a clean in-memory state.
+//
+// Fresh is the default so a plain `klein` never silently inherits context from
+// whatever was being worked on hours earlier. Because each run owns its own
+// file, defaulting to fresh costs nothing: the previous conversation stays on
+// disk and is exactly what `--continue` picks up.
 func newSharedSessionState(
-	isInteractiveMode, skipSessionRestore bool, workingDir string, logger *pkgLogger.Logger,
+	isInteractiveMode, skipSessionRestore, continueSession bool, workingDir string, logger *pkgLogger.Logger,
 ) (domain.State, string) {
 	if !isInteractiveMode {
 		logger.DebugWithIntention(pkgLogger.IntentionStatus, "Starting with clean session", "reason", "one-shot mode")
@@ -443,27 +454,52 @@ func newSharedSessionState(
 		logger.Warn("Could not access user config for session persistence", "error", err)
 		return state.NewMessageState(), ""
 	}
-	sessionFilePath, err := userConfig.GetProjectSessionFile(workingDir)
+
+	// skipSessionRestore (file mode) means "do not inherit history", which is
+	// what a fresh session already is.
+	if continueSession && !skipSessionRestore {
+		if resumed, path := resumeLatestSession(userConfig, workingDir, logger); resumed != nil {
+			return resumed, path
+		}
+	}
+
+	sessionFilePath, err := userConfig.NewProjectSessionFile(workingDir)
 	if err != nil {
 		logger.Warn("Could not get session file path", "error", err)
 		return state.NewMessageState(), ""
 	}
+	logger.DebugWithIntention(pkgLogger.IntentionStatus, "Starting a fresh session",
+		"session_file", sessionFilePath)
+	return state.NewMessageStateWithRepository(infra.NewMessageHistoryRepository(sessionFilePath)), sessionFilePath
+}
 
-	messageRepo := infra.NewMessageHistoryRepository(sessionFilePath)
-	sharedState := state.NewMessageStateWithRepository(messageRepo)
-	if skipSessionRestore {
-		logger.DebugWithIntention(pkgLogger.IntentionStatus, "Starting with clean session",
-			"reason", "session restore skipped for file mode")
-		return sharedState, sessionFilePath
+// resumeLatestSession loads the project's most recently used session. It returns
+// (nil, "") when there is nothing to resume or the file will not load, leaving
+// the caller to start a fresh session instead — `--continue` on a project with
+// no history is a no-op, not an error.
+func resumeLatestSession(
+	userConfig *config.UserConfig, workingDir string, logger *pkgLogger.Logger,
+) (domain.State, string) {
+	latest, err := userConfig.LatestProjectSessionFile(workingDir)
+	if err != nil {
+		logger.Warn("Could not look up previous sessions", "error", err)
+		return nil, ""
 	}
+	if latest == "" {
+		logger.DebugWithIntention(pkgLogger.IntentionStatus, "Starting a fresh session",
+			"reason", "--continue given but this project has no previous session")
+		return nil, ""
+	}
+
+	sharedState := state.NewMessageStateWithRepository(infra.NewMessageHistoryRepository(latest))
 	if err := sharedState.LoadFromFile(); err != nil {
-		logger.DebugWithIntention(pkgLogger.IntentionStatus, "Starting with new session",
-			"reason", "could not load existing session", "error", err)
-	} else {
-		logger.DebugWithIntention(pkgLogger.IntentionStatus, "Restored session state",
-			"message_count", len(sharedState.GetMessages()), "session_file", sessionFilePath)
+		logger.Warn("Could not load previous session; starting fresh",
+			"session_file", latest, "error", err)
+		return nil, ""
 	}
-	return sharedState, sessionFilePath
+	logger.DebugWithIntention(pkgLogger.IntentionStatus, "Resumed previous session",
+		"message_count", len(sharedState.GetMessages()), "session_file", latest)
+	return sharedState, latest
 }
 
 // agentTools bundles the tool managers an Agent keeps references to after
@@ -609,7 +645,8 @@ func NewAgentWithOptions(ctx context.Context, opts AgentOptions) (*Agent, func()
 	tools := buildAgentTools(opts, skills, memoryDir)
 
 	// Create or restore shared message state with session persistence
-	sharedState, sessionFilePath := newSharedSessionState(isInteractiveMode, skipSessionRestore, workingDir, logger)
+	sharedState, sessionFilePath := newSharedSessionState(
+		isInteractiveMode, skipSessionRestore, opts.ContinueSession, workingDir, logger)
 
 	a := &Agent{
 		llmClient:          llmClient,

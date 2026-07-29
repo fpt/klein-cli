@@ -50,7 +50,8 @@ func printUsage() {
 	fmt.Println("  ~/.claude/skills/       Personal skills (all projects)")
 	fmt.Println()
 	fmt.Println("Examples:")
-	fmt.Println("  klein                                    # Interactive mode (code skill)")
+	fmt.Println("  klein                                    # Interactive mode, fresh session (code skill)")
+	fmt.Println("  klein -c                                 # Interactive mode, resume the most recent session")
 	fmt.Println("  klein \"Create a HTTP server\"             # One-shot mode (code skill)")
 	fmt.Println("  klein -b anthropic \"Analyze this code\"   # Use Anthropic backend")
 	fmt.Println("  klein -f prompts.txt                     # Multi-turn from file (no memory)")
@@ -87,6 +88,9 @@ func main() {
 	var skillFlagLong = flag.String("skill", "code", "Skill to use (default: code)")
 	var showLog = flag.Bool("l", false, "Print conversation message history and exit")
 	var showLogLong = flag.Bool("log", false, "Print conversation message history and exit")
+	var continueSession = flag.Bool("c", false, "Resume this project's most recent session (default: start fresh)")
+	var continueSessionLong = flag.Bool("continue", false,
+		"Resume this project's most recent session (default: start fresh)")
 	var promptFile = flag.String("f", "", "File containing multi-turn prompts separated by '----' (no memory between turns)")
 	var verbose = flag.Bool("v", false, "Enable verbose logging (debug level)")
 	var verboseLong = flag.Bool("verbose", false, "Enable verbose logging (debug level)")
@@ -125,6 +129,9 @@ func main() {
 	resolvedSkill := strings.ToLower(resolveStringFlag(*skillFlag, *skillFlagLong))
 	resolvedShowLog := *showLog || *showLogLong
 	resolvedVerbose := *verbose || *verboseLong
+	// --log prints the conversation history, which can only mean the session it
+	// would resume — on a fresh one there is nothing to print.
+	resolvedContinue := *continueSession || *continueSessionLong || resolvedShowLog
 
 	// Get remaining arguments as the command
 	args := flag.Args()
@@ -334,6 +341,7 @@ func main() {
 		FsRepo:             fsRepo,
 		SkipSessionRestore: skipSessionRestore,
 		IsInteractiveMode:  isInteractiveMode,
+		ContinueSession:    resolvedContinue,
 		LLMClient:          llmClient,
 		AgentBackend:       agentserver.Select(settings, logger, backendOpts),
 	})

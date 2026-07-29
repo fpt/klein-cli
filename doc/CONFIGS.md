@@ -32,7 +32,8 @@ go run klein/main.go [flags] [prompt]
 | `--allowed-tools` | string | `""` | Comma-separated tool names, overrides skill's `allowed-tools` |
 | `-f` | string | `""` | File of multi-turn prompts separated by `---` |
 | `-v`, `--verbose` | bool | `false` | Enable debug-level logging |
-| `-l`, `--log` | bool | `false` | Print conversation history and exit |
+| `-c`, `--continue` | bool | `false` | Resume this project's most recently used session. Without it, interactive mode starts a **fresh** session (see [§7](#7-user-data-directories)) |
+| `-l`, `--log` | bool | `false` | Print conversation history and exit (implies `--continue` — the history it prints is the session `--continue` would resume) |
 | `--serve` | bool | `false` | Start Connect-gRPC server (for gateway) |
 | `--serve-addr` | string | `":50051"` | Listen address for Connect server |
 | `--sessions-dir` | string | `""` | Directory for session persistence (default: `<base_dir>/sessions/`) |
@@ -632,19 +633,36 @@ $HOME/.klein/
 │       ├── project_info.txt            # Project path and metadata
 │       ├── todos.json                  # Todo list
 │       ├── tasks.json                  # Task list
-│       ├── session.json                # Conversation history
+│       ├── sessions/                   # One file per interactive run
+│       │   └── YYYYMMDDTHHMMSS.ffffff.json
 │       └── history.txt                 # Readline command history
-└── claw/
-    ├── config.json                      # Gateway config (see §5)
-    ├── sessions/                        # Per-session Connect-gRPC state
-    └── memory/
-        ├── MEMORY.md                    # Long-term memory (manually curated)
-        └── daily/
-            └── YYYY-MM-DD.md           # Daily journal notes
+├── sessions/                            # Per-session Connect-gRPC state (serve mode / gateway)
+└── memory/
+    ├── MEMORY.md                        # Long-term memory
+    ├── daily/
+    │   └── YYYY-MM-DD.md               # Daily journal notes
+    └── runs/
+        └── YYYY-MM-DD.md               # Scheduled-run log
 ```
+
+> The gateway's own paths derive from the top-level `base_dir` (default
+> `~/.klein`), not a `claw/` subdirectory — see [§5](#5-gateway-configuration-klein-claw).
 
 **Project directory naming:** `{basename}-{8-char hash of absolute path}`
 Example: `/Users/you/dev/my-app` → `my-app-a1b2c3d4/`
+
+### Interactive sessions
+
+Each interactive run gets **its own file** under the project's `sessions/`
+directory, so a plain `klein` starts fresh without overwriting what came before.
+`klein --continue` resumes the most recently *used* session — ordering is by
+modification time, so a session started days ago but worked in today is the one
+you get.
+
+A session file is written only once a run has an actual exchange: starting
+`klein` and quitting leaves nothing behind, and so cannot shadow the real
+conversation before it. A pre-existing `session.json` from before per-run
+sessions is migrated into `sessions/` on first use, keeping it resumable.
 
 ### Per-project permission files
 

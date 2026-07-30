@@ -1,7 +1,9 @@
 package app
 
 import (
+	"strings"
 	"testing"
+	"unicode/utf8"
 
 	"github.com/fpt/klein-cli/internal/permission"
 )
@@ -70,6 +72,44 @@ func TestInferPattern_EmptyArg(t *testing.T) {
 func TestInferPattern_UnknownTool(t *testing.T) {
 	if got := inferPattern("unknown_tool", "anything"); got != "*" {
 		t.Errorf("expected * for unknown tool, got %q", got)
+	}
+}
+
+// ---- describePendingToolCall ----
+
+// The prompt must describe the call awaiting approval — the header used to be a
+// hardcoded "About to write file(s)" followed by the *previous* tool result,
+// which for an offloaded result showed a storage path instead of the target.
+func TestDescribePendingToolCall(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		tool, arg string
+		want      string
+	}{
+		{"Write", "src/main.go", "About to write file:\n   ↳ src/main.go"},
+		{"Edit", "doc/README.md", "About to edit file:\n   ↳ doc/README.md"},
+		{"MultiEdit", "a.go", "About to edit file:\n   ↳ a.go"},
+		{"Bash", "go build ./...", "About to run command:\n   ↳ go build ./..."},
+		{"Fetch", "https://example.com", "About to run Fetch:\n   ↳ https://example.com"},
+		{"Write", "", "About to write file:"},
+		{"", "", "About to run a tool (details unavailable):"},
+	}
+	for _, c := range cases {
+		if got := describePendingToolCall(c.tool, c.arg); got != c.want {
+			t.Errorf("describePendingToolCall(%q, %q) = %q, want %q", c.tool, c.arg, got, c.want)
+		}
+	}
+}
+
+func TestDescribePendingToolCall_MultibyteArgIsNotMangled(t *testing.T) {
+	t.Parallel()
+	arg := "cat " + strings.Repeat("研究資料", 100) + ".md"
+	got := describePendingToolCall("Bash", arg)
+	if !utf8.ValidString(got) {
+		t.Error("description contains invalid UTF-8: argument was cut mid-rune")
+	}
+	if !strings.HasPrefix(got, "About to run command:\n   ↳ cat 研究資料") {
+		t.Errorf("unexpected rendering: %q", got)
 	}
 }
 

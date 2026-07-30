@@ -65,6 +65,7 @@ type Agent struct {
 	externalEventHandler events.EventHandler // optional: forward events to external consumers (e.g., Connect server)
 	recentlyReadFiles    []string            // up to 5 most recently read unique file paths
 	memoryDir            string              // $HOME/.klein/projects/<hash>/memory/ (interactive mode only)
+	toolResultsDir       string              // $HOME/.klein/projects/<hash>/tool_results/ (interactive mode only)
 	memoryManager        *memorydb.Manager   // sqlite long-term memory, when wired in (serve/claw); nil otherwise
 
 	// codexBackend, when set (llm.backend == "codex"), routes Invoke to a codex
@@ -432,6 +433,28 @@ func computeMemoryDir(isInteractiveMode bool, workingDir string) string {
 	return dir
 }
 
+// computeToolResultsDir returns the directory where oversized tool results are
+// offloaded, or "" in one-shot/test mode (or when user config is unavailable),
+// which keeps every result inline and in memory.
+//
+// The path is computed here rather than derived from the session file because
+// buildAgentTools needs it: it goes on the filesystem allowlist so the model can
+// read back a result the harness moved out of the conversation.
+func computeToolResultsDir(isInteractiveMode bool, workingDir string) string {
+	if !isInteractiveMode {
+		return ""
+	}
+	userConfig, err := config.DefaultUserConfig()
+	if err != nil {
+		return ""
+	}
+	dir, err := userConfig.GetProjectToolResultsDir(workingDir)
+	if err != nil {
+		return ""
+	}
+	return dir
+}
+
 // newSharedSessionState creates the shared message state and its session file
 // path. Interactive mode gets a *fresh* session file per run; it resumes the
 // project's most recently used session only when continueSession is set
@@ -517,9 +540,10 @@ type agentTools struct {
 }
 
 // buildAgentTools constructs every tool manager (universal + specialized + MCP)
-// and combines them into the composite/deferred views. memoryDir (when non-empty)
-// and ~/.klein/skills are added to the filesystem allowlist.
-func buildAgentTools(opts AgentOptions, skills skill.SkillMap, memoryDir string) agentTools {
+// and combines them into the composite/deferred views. memoryDir and
+// toolResultsDir (when non-empty) and ~/.klein/skills are added to the
+// filesystem allowlist.
+func buildAgentTools(opts AgentOptions, skills skill.SkillMap, memoryDir, toolResultsDir string) agentTools {
 	workingDir := opts.WorkingDir
 
 	var todoToolManager *tool.TodoToolManager
@@ -535,6 +559,13 @@ func buildAgentTools(opts AgentOptions, skills skill.SkillMap, memoryDir string)
 	fsConfig := infra.DefaultFileSystemConfig(workingDir)
 	if memoryDir != "" {
 		fsConfig.AllowedDirectories = append(fsConfig.AllowedDirectories, memoryDir)
+	}
+	// A tool result too large to keep inline is offloaded to a file here and the
+	// model is handed the path, so that path has to be readable — otherwise the
+	// model's only route back to the content is to re-run the tool, get the same
+	// stub, and loop.
+	if toolResultsDir != "" {
+		fsConfig.AllowedDirectories = append(fsConfig.AllowedDirectories, toolResultsDir)
 	}
 	// Allow writing to ~/.klein/skills so the create-skill skill can persist new
 	// skills there, and ~/.klein/roles so a custom role can be added the same way
@@ -629,8 +660,10 @@ func NewAgentWithOptions(ctx context.Context, opts AgentOptions) (*Agent, func()
 		return nil, cleanup, err
 	}
 
-	// Compute memory directory for interactive mode; empty string in one-shot/test mode.
+	// Compute per-project directories for interactive mode; empty strings in
+	// one-shot/test mode (which keeps state in memory).
 	memoryDir := computeMemoryDir(isInteractiveMode, workingDir)
+	toolResultsDir := computeToolResultsDir(isInteractiveMode, workingDir)
 
 	// Load roles and skills (embedded + filesystem) before creating tool
 	// managers. Both land in one registry: Invoke resolves a name without caring
@@ -647,7 +680,7 @@ func NewAgentWithOptions(ctx context.Context, opts AgentOptions) (*Agent, func()
 
 	// Build every tool manager (universal + specialized + MCP) and the
 	// composite/deferred views the ReAct loop binds per skill.
-	tools := buildAgentTools(opts, skills, memoryDir)
+	tools := buildAgentTools(opts, skills, memoryDir, toolResultsDir)
 
 	// Create or restore shared message state with session persistence
 	sharedState, sessionFilePath := newSharedSessionState(
@@ -676,6 +709,7 @@ func NewAgentWithOptions(ctx context.Context, opts AgentOptions) (*Agent, func()
 		sessionRules:       newSessionRules(isInteractiveMode),
 		permRules:          permRules,
 		memoryDir:          memoryDir,
+		toolResultsDir:     toolResultsDir,
 		memoryManager:      findMemoryManager(opts.MCPToolManagers),
 	}
 
@@ -811,10 +845,14 @@ func (a *Agent) Invoke(ctx context.Context, userInput string, skillName string, 
 	// Tool result budgeting: offload large tool results to disk so they don't
 	// permanently consume context window space. Only active in interactive/persistent
 	// sessions where a project directory exists; one-shot mode keeps everything
-	// in memory.
-	if a.sessionFilePath != "" {
-		projectDir := filepath.Dir(a.sessionFilePath)
-		storage := tool.NewToolResultStorage(projectDir)
+	// in memory. The directory is on the filesystem allowlist (see
+	// buildAgentTools), so the model can read back what was offloaded.
+	if a.toolResultsDir != "" {
+		maxRunes := 0 // 0 → tool.DefaultMaxToolResultRunes
+		if a.settings != nil {
+			maxRunes = a.settings.Agent.MaxToolResultRunes
+		}
+		storage := tool.NewToolResultStorage(a.toolResultsDir, maxRunes)
 		reactClient.SetToolResultTransform(storage.MaybeOffload)
 	}
 
@@ -999,18 +1037,15 @@ func (a *Agent) handleApprovalWorkflow(ctx context.Context, reactClient domain.R
 	}
 
 	// 3. Non-interactive stdin (pipe / script): auto-approve.
-	lastMessage := reactClient.GetLastMessage()
 	stat, err := os.Stdin.Stat()
 	if err != nil || (stat.Mode()&os.ModeCharDevice) == 0 {
-		fmt.Fprintf(writer, "\nAbout to write file(s):\n")
-		fmt.Fprintf(writer, "%s\n", lastMessage.TruncatedString())
+		fmt.Fprintf(writer, "\n%s\n", describePendingToolCall(toolName, arg))
 		fmt.Fprintf(writer, "Proceeding (non-interactive mode)...\n\n")
 		return reactClient.Resume(ctx)
 	}
 
 	// 4. Interactive dialog.
-	fmt.Fprintf(writer, "\nAbout to write file(s):\n")
-	fmt.Fprintf(writer, "%s\n\n", lastMessage.TruncatedString())
+	fmt.Fprintf(writer, "\n%s\n\n", describePendingToolCall(toolName, arg))
 
 	items := []string{"Yes", "Always (save to project)", "No"}
 
@@ -1058,18 +1093,54 @@ func (a *Agent) handleApprovalWorkflow(ctx context.Context, reactClient domain.R
 	}
 }
 
+// Tool names that route through the approval workflow (see react.ReAct's
+// requiresApproval check).
+const (
+	toolWrite     = "Write"
+	toolEdit      = "Edit"
+	toolMultiEdit = "MultiEdit"
+	toolBash      = "Bash"
+)
+
+// describePendingToolCall renders the approval prompt header for the tool call
+// awaiting a decision. It deliberately describes the *pending call* — the tool
+// and the target the permission rule would be matched (and saved) against — and
+// not the last message in the conversation, which is the preceding tool result
+// and says nothing about what is about to happen.
+func describePendingToolCall(toolName, arg string) string {
+	var action string
+	switch toolName {
+	case toolWrite:
+		action = "About to write file:"
+	case toolEdit, toolMultiEdit:
+		action = "About to edit file:"
+	case toolBash:
+		action = "About to run command:"
+	case "":
+		return "About to run a tool (details unavailable):"
+	default:
+		action = fmt.Sprintf("About to run %s:", toolName)
+	}
+	if arg == "" {
+		return action
+	}
+	// truncateForDisplay (loop.go) cuts on a rune boundary, so a Japanese path
+	// or command is shortened without being mangled.
+	return fmt.Sprintf("%s\n   ↳ %s", action, truncateForDisplay(arg, 200))
+}
+
 // extractPermissionArg returns the primary argument used for rule pattern matching.
 // For file tools this is the path; for bash this is the command string.
 // MultiEdit carries multiple paths — we return the first one; the caller may
 // want to call Check per-path, but for the initial implementation one suffices.
 func extractPermissionArg(toolName string, args message.ToolArgumentValues) string {
 	switch toolName {
-	case "Write", "Edit":
+	case toolWrite, toolEdit:
 		// Filesystem tools register the parameter as "file_path".
 		if path, ok := args["file_path"].(string); ok {
 			return path
 		}
-	case "MultiEdit":
+	case toolMultiEdit:
 		// edits is []interface{} where each element has "file_path"
 		if edits, ok := args["edits"].([]interface{}); ok && len(edits) > 0 {
 			if edit, ok := edits[0].(map[string]interface{}); ok {
@@ -1078,7 +1149,7 @@ func extractPermissionArg(toolName string, args message.ToolArgumentValues) stri
 				}
 			}
 		}
-	case "Bash":
+	case toolBash:
 		if cmd, ok := args["command"].(string); ok {
 			return cmd
 		}
@@ -1093,7 +1164,7 @@ func newSessionRules(isInteractive bool) *permission.RuleSet {
 	if isInteractive {
 		return &permission.RuleSet{}
 	}
-	tools := []string{"Write", "Edit", "MultiEdit", "Bash"}
+	tools := []string{toolWrite, toolEdit, toolMultiEdit, toolBash}
 	rules := make([]permission.PermissionRule, len(tools))
 	for i, t := range tools {
 		rules[i] = permission.PermissionRule{Tool: t, Pattern: "", Behavior: permission.RuleAllow}
@@ -1112,7 +1183,7 @@ func inferPattern(toolName, arg string) string {
 		return "*"
 	}
 	switch toolName {
-	case "Write", "Edit", "MultiEdit":
+	case toolWrite, toolEdit, toolMultiEdit:
 		// Normalise to forward slashes and strip leading ./
 		arg = strings.TrimPrefix(filepath.ToSlash(arg), "./")
 		if idx := strings.Index(arg, "/"); idx > 0 {
@@ -1123,7 +1194,7 @@ func inferPattern(toolName, arg string) string {
 			return "*" + arg[dot:]
 		}
 		return "*"
-	case "Bash":
+	case toolBash:
 		// Use the first two words if there are at least two, otherwise one word
 		words := strings.Fields(arg)
 		if len(words) >= 2 {

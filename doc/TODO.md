@@ -139,7 +139,9 @@ Severity tiers:
 - [ ] `unsanitizeToolNameFromAnthropic` guesses original names via heuristics —
   keep a per-request sanitized→original map.
 - [ ] Vision media-type sniffing only does PNG vs JPEG (GIF/WebP mislabeled).
-- [ ] `tool_results/` offload dir grows unbounded; stubs reference absolute paths.
+- [ ] `tool_results/` offload dir grows unbounded — nothing prunes it. (The
+  absolute paths in stubs are now readable: the dir moved to the project data dir
+  root and is on the filesystem allowlist.)
 - [ ] `@file` includes (`agent.go:465`, `skill.go:189`) are duplicated and read
   via `os.ReadFile`, bypassing the filesystem allowlist/blacklist (`@/etc/passwd`).
   Route through the secure filesystem manager; extract one helper.

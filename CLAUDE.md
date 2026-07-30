@@ -120,6 +120,8 @@ $HOME/.klein/
 │   └── {project-name-hash}/    # Each project gets its own directory
 │       ├── project_info.txt   # Original project path and metadata
 │       ├── todos.json         # Project-specific todo list
+│       ├── tool_results/      # Tool results too large to keep inline (readable by the agent)
+│       │   └── {tool-use-id}.txt
 │       └── sessions/          # One file per interactive run (see --continue)
 │           └── YYYYMMDDTHHMMSS.ffffff.json
 └── config.json                 # User preferences (future use)

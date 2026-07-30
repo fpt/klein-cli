@@ -2,6 +2,7 @@ package config
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -276,6 +277,14 @@ func indexByte(s string, b byte) int {
 type AgentSettings struct {
 	MaxIterations int    `json:"max_iterations"`
 	LogLevel      string `json:"log_level"`
+
+	// MaxToolResultRunes caps how much of a single tool result stays inline in
+	// the conversation; anything longer is offloaded to a file under the
+	// project's tool_results/ directory and replaced with a stub the model can
+	// read back. Counted in runes, so CJK text gets the same budget as ASCII.
+	// 0 selects tool.DefaultMaxToolResultRunes.
+	//nolint:tagliatelle // snake_case matches the established on-disk settings schema
+	MaxToolResultRunes int `json:"max_tool_result_runes,omitempty"`
 }
 
 // CodexSettings configures the codex app-server backend. Model and effort are
@@ -685,6 +694,11 @@ func ValidateSettings(settings *Settings) error {
 	// Validate Agent settings
 	if settings.Agent.MaxIterations <= 0 {
 		return fmt.Errorf("max_iterations must be positive")
+	}
+	// 0 means "use the built-in default"; a negative budget is a typo, not a
+	// request to keep every result inline.
+	if settings.Agent.MaxToolResultRunes < 0 {
+		return errors.New("max_tool_result_runes must be zero (default) or positive")
 	}
 
 	// Validate MCP server configurations

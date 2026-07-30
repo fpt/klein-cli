@@ -87,6 +87,25 @@ func (c *UserConfig) GetProjectDataDir(projectPath string) (string, error) {
 	return projectDir, nil
 }
 
+// GetProjectToolResultsDir returns the directory holding tool results that were
+// too large to keep inline in the conversation, creating it if needed.
+//
+// It sits at the project data dir root rather than under sessions/ because it is
+// not session state: the path is needed while the tool managers are built (it
+// goes on the filesystem allowlist so the model can read back what was
+// offloaded), which happens before a session file exists.
+func (c *UserConfig) GetProjectToolResultsDir(projectPath string) (string, error) {
+	projectDir, err := c.GetProjectDataDir(projectPath)
+	if err != nil {
+		return "", err
+	}
+	toolResultsDir := filepath.Join(projectDir, "tool_results")
+	if err := os.MkdirAll(toolResultsDir, 0o700); err != nil {
+		return "", fmt.Errorf("failed to create tool results directory: %w", err)
+	}
+	return toolResultsDir, nil
+}
+
 // GetProjectTodoFile returns the todo file path for a specific project
 func (c *UserConfig) GetProjectTodoFile(projectPath string) (string, error) {
 	projectDir, err := c.GetProjectDataDir(projectPath)

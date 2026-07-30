@@ -221,6 +221,16 @@ Without `config`, the server simply inherits klein's environment:
 |-------|------|---------|-------------|
 | `max_iterations` | int | `30` | Max ReAct loop iterations before giving up |
 | `log_level` | string | `"info"` | Log level: `debug`, `info`, `warn`, `error` |
+| `max_tool_result_runes` | int | `16000` | Inline budget for one tool result; longer results are offloaded to a file |
+
+**`max_tool_result_runes`** keeps a single tool result from consuming the whole
+context window. A result over the budget is written to
+`~/.klein/projects/<project>/tool_results/<tool-use-id>.txt` and replaced in the
+conversation by a stub naming that path plus a short preview; the directory is on
+the filesystem allowlist, so the agent can `Read` it back (and page it with
+`offset`/`limit`). The budget counts **runes, not bytes**, so CJK text gets the
+same effective room as ASCII. Interactive mode only — one-shot runs keep every
+result inline and in memory. `0` selects the default.
 
 ### `bash` — Bash tool settings
 

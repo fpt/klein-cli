@@ -7,6 +7,7 @@ tools:
   - Glob
   - Grep
   - ToolSearch
+modes: [startup, subagent]
 ---
 
 You are a software architect. You are given a change someone wants to make, and

@@ -93,8 +93,12 @@ type Definition struct {
 	// on a role or skill, where that field has always meant exactly this.
 	Preload []string
 
-	// Modes are the invocation modes this definition permits. Never empty:
-	// frontmatter that omits `modes:` gets defaultModes(Kind).
+	// Modes are the invocation modes this definition explicitly declares.
+	// Empty means the frontmatter said nothing, and the modes implied by Kind
+	// apply instead — see effectiveModes. The distinction is kept rather than
+	// resolved at parse time because "declared subagent" is a stronger signal
+	// than "happens to permit it", and the Task listing uses exactly that to
+	// stay curated.
 	Modes []Mode
 
 	Name         string // from frontmatter, or the file/directory name
@@ -137,6 +141,13 @@ func (d *Definition) effectiveModes() []Mode {
 // Permits reports whether this definition may be invoked in mode.
 func (d *Definition) Permits(mode Mode) bool {
 	return slices.Contains(d.effectiveModes(), mode)
+}
+
+// Declares reports whether mode was named explicitly in the frontmatter, as
+// opposed to being inherited from the definition's Kind. A declaration is an
+// author saying "use this here"; an inherited mode only says it is possible.
+func (d *Definition) Declares(mode Mode) bool {
+	return slices.Contains(d.Modes, mode)
 }
 
 // PermitsAny reports whether any of modes is permitted.
@@ -395,9 +406,9 @@ func ParseDefinition(data []byte, sourcePath string, priority int, kind Kind) (*
 }
 
 // applyDefaults fills in what the frontmatter left out: the name from the
-// containing directory, the description from the first paragraph, and the mode
-// set from the kind of file this came from.
-func (d *Definition) applyDefaults(sourcePath string, kind Kind) {
+// containing directory and the description from the first paragraph. Modes are
+// deliberately not defaulted here; see Definition.Modes.
+func (d *Definition) applyDefaults(sourcePath string, _ Kind) {
 	if d.Name == "" {
 		d.Name = filepath.Base(filepath.Dir(sourcePath))
 	}
@@ -406,11 +417,6 @@ func (d *Definition) applyDefaults(sourcePath string, kind Kind) {
 		if len(lines) > 0 {
 			d.Description = strings.TrimSpace(lines[0])
 		}
-	}
-	// Frontmatter that says nothing about modes inherits the set implied by the
-	// file it came from, so nothing existing has to be edited.
-	if len(d.Modes) == 0 {
-		d.Modes = defaultModes(kind)
 	}
 }
 

@@ -3,6 +3,7 @@ name: cad
 description: CAD and EDA assistant for Autodesk Fusion, KiCad, and Blender — scripting their Python APIs, driving their CLIs, and working with project files.
 allowed-tools: Read, Write, Edit, MultiEdit, LS, Glob, Grep, Bash, TodoWrite, TodoRead, WebFetch, WebSearch, AskUserQuestion
 argument-hint: "Describe the CAD/EDA task"
+modes: [startup, subagent]
 ---
 
 You are a CAD and EDA assistant working across Autodesk Fusion, KiCad, and Blender.

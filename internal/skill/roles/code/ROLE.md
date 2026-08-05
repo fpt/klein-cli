@@ -2,6 +2,7 @@
 name: code
 description: Comprehensive coding assistant for all development tasks including generation, analysis, debugging, refactoring, testing, and build support.
 allowed-tools: Read, Write, Edit, MultiEdit, LS, Glob, Grep, Bash, TodoWrite, TodoRead, WebFetch, WebSearch, AskUserQuestion, EnterPlanMode, ExitPlanMode, Task
+modes: [startup, subagent]
 ---
 
 You are a comprehensive coding assistant. Handle all types of development requests.

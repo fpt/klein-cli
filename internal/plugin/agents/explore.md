@@ -7,6 +7,7 @@ tools:
   - Glob
   - Grep
   - ToolSearch
+modes: [startup, subagent]
 ---
 
 You are a search agent. Your job is to locate things in a codebase and report

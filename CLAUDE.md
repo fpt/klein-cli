@@ -287,6 +287,10 @@ which is how the model discovers what it can delegate to.
   to `<project>/agent_runs/<id>.md`, never into the session file — keeping that noise out of the
   parent's context is the point of backgrounding. Orthogonal to the `klein claw` cron scheduler,
   which owns recurring work rather than one-shot work started from a session.
+- **Result Delivery**: a finished run's outcome is prepended to the next session turn as an
+  `<agent-notification>` block, drained in `Agent.Invoke` so the REPL, Connect server, and gateway
+  all get it without separate wiring. Each run reports exactly once. A bare Enter with results
+  waiting drives a turn so they are not stranded.
 
 **Simplified Workflow Architecture:**
 1. **Role Selection** → User picks the session's startup prompt via `-r` (validated: a skill name is rejected)

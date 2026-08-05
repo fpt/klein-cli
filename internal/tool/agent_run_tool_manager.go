@@ -106,10 +106,11 @@ func (m *AgentRunToolManager) registerTools() {
 		nil, m.handleList)
 
 	m.RegisterTool("AgentOutput",
-		"Read a background agent's result and transcript by id. Set block=true to wait for it to finish "+
-			"(up to timeout_seconds) instead of returning whatever it has so far. Prefer reading the result "+
-			"once it has completed rather than polling a running agent — the transcript is its tool noise, "+
-			"which is what backgrounding kept out of your context.",
+		"Read a background agent's result and transcript by id. A finished agent's result reaches you "+
+			"on its own as an <agent-notification> at the start of a later turn, so this is for checking "+
+			"early, not for collecting results. Set block=true to wait for it to finish (up to "+
+			"timeout_seconds). Avoid polling a running agent: the transcript is its tool noise, which is "+
+			"what backgrounding kept out of your context.",
 		[]message.ToolArgument{
 			{
 				Name:        "agent_id",

@@ -304,9 +304,12 @@ func formatBackgroundLaunch(info RunInfo) string {
 	if info.OutputPath != "" {
 		fmt.Fprintf(&b, "transcript_file: %s\n", info.OutputPath)
 	}
-	b.WriteString("No result yet. Read it later with AgentOutput(agent_id: \"" + info.ID + "\"), " +
-		"or AgentStop to cancel. Tell the user what you launched and end your response — " +
-		"do not predict or fabricate what it will find.")
+	b.WriteString("No result yet. It will be delivered to you automatically in a later " +
+		"turn as an <agent-notification>; you do not need to poll for it. " +
+		"AgentOutput(agent_id: \"" + info.ID + "\") checks early, AgentStop cancels.\n" +
+		"Tell the user what you launched and end your response. Do not predict or " +
+		"fabricate what it will find — if the user asks before it lands, say it is " +
+		"still running and give status, not a guess.")
 	return b.String()
 }
 
@@ -762,11 +765,32 @@ func (a *Agent) Invoke(ctx context.Context, userInput string, skillName string, 
 		return nil, fmt.Errorf("skill '%s' not found", skillName)
 	}
 
+	// Deliver any background agent that finished since the last turn. Draining
+	// here rather than in each front end means the REPL, the Connect server and
+	// the gateway all get it without three separate chances to forget.
+	//
+	// The claim is provisional until the message actually reaches the
+	// conversation. Invoke has several error returns below, and a turn the user
+	// interrupts with Ctrl+C is the common one; without the release a finished
+	// agent's result would be marked delivered, never shown, and skipped by
+	// every later drain.
+	userInput, releaseNotifications := a.prependAgentNotifications(userInput)
+	notificationsDelivered := false
+	defer func() {
+		if !notificationsDelivered {
+			releaseNotifications()
+		}
+	}()
+
 	// Codex backend: route the whole turn to a codex thread instead of the
 	// ReAct loop. The skill still resolves (its prompt steers codex), but klein's
 	// tool managers/ReAct are bypassed.
 	if a.codexBackend != nil {
-		return a.invokeCodex(ctx, activeSkill, userInput)
+		resp, err := a.invokeCodex(ctx, activeSkill, userInput)
+		// invokeCodex records the exchange in session state only on success, so
+		// a failed turn leaves the notifications for the next one.
+		notificationsDelivered = err == nil
+		return resp, err
 	}
 
 	// Reset plan mode at the start of each invocation
@@ -946,6 +970,11 @@ func (a *Agent) Invoke(ctx context.Context, userInput string, skillName string, 
 		}
 	}
 
+	// Run adds the user message to the conversation before the first model
+	// call, so once it is entered the notifications have landed even if the
+	// turn later fails or is interrupted. Re-delivering them then would
+	// duplicate what the model already has.
+	notificationsDelivered = true
 	result, err := reactClient.Run(ctx, userPrompt, images...)
 
 	// Handle multiple approval workflows in sequence

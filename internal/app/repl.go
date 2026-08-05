@@ -460,7 +460,13 @@ func StartInteractiveMode(ctx context.Context, a *Agent, skillName string) {
 		// VisiblePrompt shows highlights, RawPrompt embeds file content
 
 		if userInput == "" {
-			continue
+			// A bare Enter normally does nothing, but if a background agent
+			// finished it is also the cheapest way to ask "anything back yet?".
+			// Invoke drains the notifications, so a turn with no user text
+			// still has something to say.
+			if !a.HasPendingAgentNotifications() {
+				continue
+			}
 		}
 
 		// Execute one agent turn (shared cancellable path).

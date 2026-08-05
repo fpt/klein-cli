@@ -125,7 +125,7 @@ func LoadPlugin(root, nameHint string) (*Plugin, error) {
 		Root:     absRoot,
 		Commands: make(map[string]*Command),
 		Agents:   make(map[string]*Agent),
-		Skills:   make(skill.SkillMap),
+		Skills:   make(skill.DefinitionMap),
 	}
 
 	// .claude-plugin/plugin.json — optional. If missing, we still try to

@@ -52,15 +52,15 @@ func newTestAgent(t *testing.T) *Agent {
 
 	allManagers := tool.NewCompositeToolManager(todoManager, filesystemManager, bashManager, searchManager, webManager)
 
-	skills := skill.SkillMap{
-		"code": &skill.Skill{
+	skills := skill.DefinitionMap{
+		"code": &skill.Definition{
 			Name:    "code",
 			Content: "Code skill: $ARGUMENTS\nDir: {{workingDir}}",
 		},
-		"respond": &skill.Skill{
-			Name:         "respond",
-			AllowedTools: []string{"Read", "Glob", "TodoWrite"},
-			Content:      "Respond skill",
+		"respond": &skill.Definition{
+			Name:    "respond",
+			Preload: []string{"Read", "Glob", "TodoWrite"},
+			Content: "Respond skill",
 		},
 	}
 
@@ -70,7 +70,7 @@ func newTestAgent(t *testing.T) *Agent {
 		todoToolManager: todoManager,
 		sharedState:     state.NewMessageState(),
 		workingDir:      workingDir,
-		skills:          skills,
+		definitions:     skills,
 		sessionFilePath: "",
 	}
 }

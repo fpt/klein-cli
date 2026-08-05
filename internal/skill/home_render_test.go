@@ -11,7 +11,7 @@ func TestRenderContentExpandsHome(t *testing.T) {
 	if err != nil {
 		t.Skip("no home dir")
 	}
-	s := &Skill{Content: "Save to {{home}}/.klein/skills/x/SKILL.md"}
+	s := &Definition{Content: "Save to {{home}}/.klein/skills/x/SKILL.md"}
 	got := s.RenderContent("", "/work")
 	want := home + "/.klein/skills/x/SKILL.md"
 	if !strings.Contains(got, want) {

@@ -9,18 +9,18 @@ import (
 	"github.com/fpt/klein-cli/pkg/message"
 )
 
-func newTestSkillMap() skill.SkillMap {
-	return skill.SkillMap{
+func newTestSkillMap() skill.DefinitionMap {
+	return skill.DefinitionMap{
 		"code": {
 			Name:        "code",
 			Description: "Comprehensive coding assistant",
 			Content:     "You are a coding assistant.\n\nWorking Directory: {{workingDir}}",
 		},
 		"respond": {
-			Name:         "respond",
-			Description:  "Direct knowledge-based responses",
-			AllowedTools: []string{"Read", "Write", "ReadSkill"},
-			Content:      "Provide a direct response.",
+			Name:        "respond",
+			Description: "Direct knowledge-based responses",
+			Preload:     []string{"Read", "Write", "ReadSkill"},
+			Content:     "Provide a direct response.",
 		},
 	}
 }

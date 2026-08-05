@@ -38,16 +38,16 @@ func TestSkillBasedToolSelection(t *testing.T) {
 	allManagers := tool.NewCompositeToolManager(todoManager, filesystemManager, bashManager, searchManager, webManager)
 
 	// Create skills with different tool scopes
-	skills := skill.SkillMap{
-		"code": &skill.Skill{
-			Name:         "code",
-			AllowedTools: nil, // all tools
-			Content:      "Code skill",
+	skills := skill.DefinitionMap{
+		"code": &skill.Definition{
+			Name:    "code",
+			Preload: nil, // all tools
+			Content: "Code skill",
 		},
-		"readonly": &skill.Skill{
-			Name:         "readonly",
-			AllowedTools: []string{"Read", "Glob", "Grep"},
-			Content:      "Read-only skill",
+		"readonly": &skill.Definition{
+			Name:    "readonly",
+			Preload: []string{"Read", "Glob", "Grep"},
+			Content: "Read-only skill",
 		},
 	}
 
@@ -57,11 +57,11 @@ func TestSkillBasedToolSelection(t *testing.T) {
 		todoToolManager: todoManager,
 		sharedState:     state.NewMessageState(),
 		workingDir:      workingDir,
-		skills:          skills,
+		definitions:     skills,
 	}
 
 	t.Run("code skill has all tools", func(t *testing.T) {
-		codeSkill := agent.skills["code"]
+		codeSkill := agent.definitions["code"]
 		toolManager := codeSkill.FilterTools(agent.allToolManagers)
 		tools := toolManager.GetTools()
 
@@ -75,7 +75,7 @@ func TestSkillBasedToolSelection(t *testing.T) {
 	})
 
 	t.Run("readonly skill has limited tools", func(t *testing.T) {
-		readonlySkill := agent.skills["readonly"]
+		readonlySkill := agent.definitions["readonly"]
 		toolManager := readonlySkill.FilterTools(agent.allToolManagers)
 		tools := toolManager.GetTools()
 

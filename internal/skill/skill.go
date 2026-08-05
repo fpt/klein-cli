@@ -1,3 +1,5 @@
+// Package skill loads and renders the three kinds of definition klein runs:
+// skills, roles, and agents.
 package skill
 
 import (
@@ -14,44 +16,103 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// Skill represents a parsed SKILL.md file following the Claude Code standard.
-type Skill struct {
-	Name                   string   // from frontmatter or directory name
-	Description            string   // from frontmatter
-	AllowedTools           []string // from "allowed-tools" (empty = all tools)
-	ArgumentHint           string
+// Kind records which file a definition was loaded from. It is not a behavioral
+// switch in itself; it decides how the legacy `allowed-tools` field is
+// interpreted (see Definition.Tools/Preload) and gates where a name may be
+// resolved. A later step replaces those gates with declared invocation modes.
+type Kind int
+
+// The three kinds of definition file. KindSkill is the zero value, so a bare
+// Definition{} behaves as a skill — which is what the previous Skill type did.
+const (
+	KindSkill Kind = iota // skills/{name}/SKILL.md — reached from inside a session
+	KindRole              // roles/{name}/ROLE.md — the startup prompt a session opens with
+	KindAgent             // agents/{name}.md — a delegation target for the Task tool
+)
+
+// Definition is a parsed skill, role, or agent. All three are the same object —
+// a named, purpose-specific prompt plus a tool policy — differing only in who
+// invokes them and where their output goes, so they share one type and one
+// registry.
+type Definition struct {
+	// Tools is a hard allowlist: when non-empty the definition can reach
+	// nothing outside it, in any mode. Comes from `tools:`, and from
+	// `allowed-tools:` on an agent, where that field has always been a cap.
+	Tools []string
+
+	// DisallowedTools is a denylist applied after Tools. Parsed but not yet
+	// enforced (#78).
+	DisallowedTools []string
+
+	// Preload lists the tools exposed up front in the deferred/ToolSearch view.
+	// It is a visibility hint, NOT a security boundary — the model can still
+	// reach unexposed tools via ToolSearch, which is what lets the cad role
+	// discover app MCP tools. Comes from `preload:`, and from `allowed-tools:`
+	// on a role or skill, where that field has always meant exactly this.
+	Preload []string
+
+	Name         string // from frontmatter, or the file/directory name
+	Description  string // from frontmatter
+	Content      string // markdown body after the frontmatter; the system prompt
+	SourcePath   string // filesystem path or "embedded:<name>"
+	PluginName   string // owning plugin; empty for built-in and project/user definitions
+	Model        string
+	ArgumentHint string
+	Color        string
+
+	Priority int  // ladder position; larger wins a name collision
+	Kind     Kind // which file this came from
+
 	DisableModelInvocation bool
 	UserInvocable          bool // default true
-	Model                  string
-	Content                string // markdown body after frontmatter
-	SourcePath             string // filesystem path or "embedded:<name>"
-	Priority               int    // 0=embedded, 1=project, 2=personal
-
-	// IsRole marks this as a role: the startup prompt a session opens with,
-	// loaded from a ROLE.md rather than a SKILL.md. A role is chosen once (via
-	// -r, or fixed by an entry point like `klein review`) and never switched;
-	// skills are the per-turn capabilities reached from inside a session.
-	//
-	// Roles and skills share this type and one registry, so Invoke and the
-	// tool-filtering path resolve either without caring which it is. The
-	// distinction only matters where a name is *selected* (validated against
-	// roles) or *listed* (roles excluded).
-	IsRole bool
+	Background             bool // load-only; sub-agents run synchronously today
 }
 
-// frontmatter maps YAML frontmatter fields using kebab-case.
+// IsRole reports whether this definition is a startup prompt.
+func (d *Definition) IsRole() bool { return d.Kind == KindRole }
+
+// IsAgent reports whether this definition is a Task delegation target.
+func (d *Definition) IsAgent() bool { return d.Kind == KindAgent }
+
+// EffectiveTools returns the definition's declared tool list: Tools when set,
+// otherwise Preload. It is used as a hard cap when the definition runs with its
+// own tool manager, and as the list ReadSkill shows the model.
 //
-// AllowedTools is decoded into `any` because Claude Code's SKILL.md format
-// accepts both a YAML sequence (`["Read", "Write"]` or block form) and a
-// comma-separated string. parseAllowedTools normalises both shapes.
+// The Preload fallback is what preserves behavior: spawn_agent has always
+// treated a skill's allowed-tools as a cap, even though the same field is only
+// a visibility hint on the startup path.
+func (d *Definition) EffectiveTools() []string {
+	if len(d.Tools) > 0 {
+		return d.Tools
+	}
+	return d.Preload
+}
+
+// frontmatter maps YAML frontmatter fields, accepting both the skill/role
+// schema (`allowed-tools`) and the agent schema (`tools`, `disallowedTools`).
+//
+// The tool lists are decoded into `any` because the format accepts both a YAML
+// sequence (`["Read", "Write"]` or block form) and a comma-separated string.
+// parseAllowedTools normalises both shapes.
 type frontmatter struct {
-	Name                   string `yaml:"name"`
-	Description            string `yaml:"description"`
-	AllowedTools           any    `yaml:"allowed-tools"`
-	ArgumentHint           string `yaml:"argument-hint"`
-	DisableModelInvocation bool   `yaml:"disable-model-invocation"`
-	UserInvocable          *bool  `yaml:"user-invocable"`
-	Model                  string `yaml:"model"`
+	AllowedTools    any `yaml:"allowed-tools"`
+	Tools           any `yaml:"tools"`
+	DisallowedTools any `yaml:"disallowedTools"`
+	Preload         any `yaml:"preload"`
+
+	UserInvocable *bool `yaml:"user-invocable"`
+
+	Name         string `yaml:"name"`
+	Description  string `yaml:"description"`
+	ArgumentHint string `yaml:"argument-hint"`
+	Model        string `yaml:"model"`
+	Color        string `yaml:"color"`
+	// Accepted but not enforced today.
+	PermissionMode string `yaml:"permissionMode"`
+
+	MaxTurns               int  `yaml:"maxTurns"`
+	DisableModelInvocation bool `yaml:"disable-model-invocation"`
+	Background             bool `yaml:"background"`
 }
 
 // parseAllowedTools normalises the `allowed-tools` frontmatter field. The
@@ -95,14 +156,57 @@ func parseAllowedTools(v any) []string {
 	}
 }
 
-// ParseSkillMD parses a SKILL.md file content into a Skill.
-// Format: optional YAML frontmatter between "---" delimiters, then markdown body.
-func ParseSkillMD(data []byte, sourcePath string, priority int) (*Skill, error) {
+// applyFrontmatter copies parsed frontmatter onto the definition, routing the
+// tool lists by kind.
+func (d *Definition) applyFrontmatter(fm *frontmatter, kind Kind) {
+	d.Name = fm.Name
+	d.Description = fm.Description
+	d.ArgumentHint = fm.ArgumentHint
+	d.DisableModelInvocation = fm.DisableModelInvocation
+	d.Model = fm.Model
+	d.Background = fm.Background
+	d.Color = fm.Color
+
+	if fm.UserInvocable != nil {
+		d.UserInvocable = *fm.UserInvocable
+	}
+
+	d.Tools = parseAllowedTools(fm.Tools)
+	d.Preload = parseAllowedTools(fm.Preload)
+	d.DisallowedTools = parseAllowedTools(fm.DisallowedTools)
+
+	// Legacy `allowed-tools:` lands in whichever field reproduces the behavior
+	// that file type already had: a hard cap on an agent, a visibility hint on
+	// a role or skill. Explicit `tools:`/`preload:` win when both are present.
+	legacy := parseAllowedTools(fm.AllowedTools)
+	switch {
+	case len(legacy) == 0:
+	case kind == KindAgent && len(d.Tools) == 0:
+		d.Tools = legacy
+	case kind != KindAgent && len(d.Preload) == 0:
+		d.Preload = legacy
+	}
+}
+
+// ParseSkillMD parses a SKILL.md file into a Definition.
+func ParseSkillMD(data []byte, sourcePath string, priority int) (*Definition, error) {
+	return ParseDefinition(data, sourcePath, priority, KindSkill)
+}
+
+// ParseDefinition parses a skill, role, or agent file. Format: optional YAML
+// frontmatter between "---" delimiters, then the markdown body.
+//
+// kind decides how a legacy `allowed-tools:` list is interpreted, which is the
+// one place the three file types have historically disagreed: on an agent it
+// has always been a hard cap, on a role or skill only a visibility hint. See
+// Definition.Tools and Definition.Preload.
+func ParseDefinition(data []byte, sourcePath string, priority int, kind Kind) (*Definition, error) {
 	content := string(data)
-	s := &Skill{
+	s := &Definition{
 		UserInvocable: true,
 		SourcePath:    sourcePath,
 		Priority:      priority,
+		Kind:          kind,
 	}
 
 	// Check for frontmatter
@@ -141,18 +245,7 @@ func ParseSkillMD(data []byte, sourcePath string, priority int) (*Skill, error) 
 			if err := yaml.Unmarshal([]byte(yamlBlock), &fm); err != nil {
 				return nil, fmt.Errorf("failed to parse SKILL.md frontmatter: %w", err)
 			}
-
-			s.Name = fm.Name
-			s.Description = fm.Description
-			s.ArgumentHint = fm.ArgumentHint
-			s.DisableModelInvocation = fm.DisableModelInvocation
-			s.Model = fm.Model
-
-			if fm.UserInvocable != nil {
-				s.UserInvocable = *fm.UserInvocable
-			}
-
-			s.AllowedTools = parseAllowedTools(fm.AllowedTools)
+			s.applyFrontmatter(&fm, kind)
 		}
 	} else {
 		// No frontmatter
@@ -181,8 +274,8 @@ var positionalArgRe = regexp.MustCompile(`\$(?:ARGUMENTS\[(\d+)\]|(\d+))`)
 
 // RenderContent substitutes variables in the skill's markdown content.
 // Supported: $ARGUMENTS, $ARGUMENTS[N], $N, {{workingDir}}, @filename includes.
-func (s *Skill) RenderContent(arguments string, workingDir string) string {
-	result := s.Content
+func (d *Definition) RenderContent(arguments string, workingDir string) string {
+	result := d.Content
 
 	// Track whether any argument placeholder appears in the content
 	hasArguments := strings.Contains(result, "$ARGUMENTS") || positionalArgRe.MatchString(result)
@@ -258,7 +351,8 @@ func expandAtFileIncludes(content string, workingDir string) string {
 				fullPath = filepath.Join(workingDir, rel)
 			}
 			if data, err := os.ReadFile(fullPath); err == nil {
-				out = append(out,
+				out = append(
+					out,
 					"----- BEGIN "+rel+" -----",
 					string(data),
 					"----- END "+rel+" -----",
@@ -280,10 +374,12 @@ func expandAtFileIncludes(content string, workingDir string) string {
 // Roles are left out on purpose: the catalog is about capabilities available
 // mid-session, and a role is the startup prompt the session already opened with
 // — not something to go and read.
-func BuildSkillCatalog(skills SkillMap) string {
+func BuildSkillCatalog(skills DefinitionMap) string {
 	names := make([]string, 0, len(skills))
 	for name, s := range skills {
-		if s.IsRole {
+		// Roles and agents are both left out: the catalog is about capabilities
+		// to read mid-session, not startup prompts or delegation targets.
+		if s.IsRole() || s.IsAgent() {
 			continue
 		}
 		names = append(names, name)
@@ -307,13 +403,14 @@ func BuildSkillCatalog(skills SkillMap) string {
 	return b.String()
 }
 
-// FilterTools returns a ToolManager filtered by the skill's AllowedTools.
-// If AllowedTools is empty, returns the source manager unchanged.
-func (s *Skill) FilterTools(source domain.ToolManager) domain.ToolManager {
-	if len(s.AllowedTools) == 0 {
+// FilterTools returns a ToolManager hard-capped to the definition's tool list.
+// An empty list returns the source manager unchanged.
+func (d *Definition) FilterTools(source domain.ToolManager) domain.ToolManager {
+	names := d.EffectiveTools()
+	if len(names) == 0 {
 		return source
 	}
-	return NewFilteredToolManager(source, s.AllowedTools)
+	return NewFilteredToolManager(source, names)
 }
 
 // FilteredToolManager wraps a ToolManager and only exposes a subset of tools by name.
@@ -334,6 +431,7 @@ func NewFilteredToolManager(source domain.ToolManager, allowedNames []string) *F
 	}
 }
 
+// GetTools returns every tool the filter exposes.
 func (f *FilteredToolManager) GetTools() map[message.ToolName]message.Tool {
 	all := f.source.GetTools()
 	filtered := make(map[message.ToolName]message.Tool)
@@ -345,13 +443,17 @@ func (f *FilteredToolManager) GetTools() map[message.ToolName]message.Tool {
 	return filtered
 }
 
-func (f *FilteredToolManager) CallTool(ctx context.Context, name message.ToolName, args message.ToolArgumentValues) (message.ToolResult, error) {
+// CallTool invokes an exposed tool by name.
+func (f *FilteredToolManager) CallTool(
+	ctx context.Context, name message.ToolName, args message.ToolArgumentValues,
+) (message.ToolResult, error) {
 	if !f.allowedSet[name] {
 		return message.NewToolResultError(fmt.Sprintf("tool '%s' is not allowed by the active skill", name)), nil
 	}
 	return f.source.CallTool(ctx, name, args)
 }
 
+// RegisterTool registers a tool on the underlying manager.
 func (f *FilteredToolManager) RegisterTool(name message.ToolName, description message.ToolDescription, arguments []message.ToolArgument, handler func(ctx context.Context, args message.ToolArgumentValues) (message.ToolResult, error)) {
 	panic("FilteredToolManager does not support RegisterTool; register on the underlying manager")
 }

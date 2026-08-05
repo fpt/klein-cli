@@ -17,16 +17,19 @@ import (
 // Tool names are constants because goconst counts string literals across the
 // whole package and these already appear in other app tests.
 const (
-	catToolRead = "Read"
-	catToolGrep = "Grep"
-	catToolGlob = "Glob"
+	catToolRead  = "Read"
+	catToolGrep  = "Grep"
+	catToolGlob  = "Glob"
+	catNameRole  = "code"
+	catNameSkill = "pdf"
+	catNameAgent = "explore"
 )
 
 // newCatalogTestAgent returns an Agent with just enough state for
 // RegisterPlugins to run: the skill map must be non-nil because plugin skills
 // are merged into it.
 func newCatalogTestAgent() *Agent {
-	return &Agent{skills: skill.SkillMap{}}
+	return &Agent{definitions: skill.DefinitionMap{}}
 }
 
 // agentsNamed builds an agents map keyed by name, deriving each definition's
@@ -35,6 +38,7 @@ func agentsNamed(pluginName string, names ...string) map[string]*pluginpkg.Agent
 	out := make(map[string]*pluginpkg.Agent, len(names))
 	for _, n := range names {
 		out[n] = &pluginpkg.Agent{
+			Kind:        skill.KindAgent,
 			Name:        n,
 			PluginName:  pluginName,
 			Description: pluginName + " " + n,
@@ -58,6 +62,7 @@ func TestAgentCatalog_PrefersBareNameAndDeduplicates(t *testing.T) {
 	a.RegisterPlugins([]*pluginpkg.Plugin{
 		plug("docs-for-ai", map[string]*pluginpkg.Agent{
 			searcher: {
+				Kind:        skill.KindAgent,
 				Name:        searcher,
 				PluginName:  "docs-for-ai",
 				Description: descr,
@@ -133,10 +138,10 @@ func TestAgentCatalog_SortedForStableToolDescription(t *testing.T) {
 func TestRegisterPlugins_LocalAgentBeatsPluginOnBareName(t *testing.T) {
 	t.Parallel()
 
-	const contested = "explore"
-	local := &pluginpkg.Agent{Name: contested, Description: "built-in explore"}
+	const contested = catNameAgent
+	local := &pluginpkg.Agent{Kind: skill.KindAgent, Name: contested, Description: "built-in explore"}
 	a := newCatalogTestAgent()
-	a.pluginAgents = map[string]*pluginpkg.Agent{contested: local}
+	a.definitions = map[string]*pluginpkg.Agent{contested: local}
 	a.RegisterPlugins([]*pluginpkg.Plugin{
 		plug("someplugin", agentsNamed("someplugin", contested)),
 	})
@@ -224,5 +229,106 @@ func TestBuiltInAgentsReachTheTaskToolDescription(t *testing.T) {
 	// explore's read-only tool set must survive into the listing.
 	if !strings.Contains(desc, "(Tools: Read, LS, Glob, Grep, ToolSearch)") {
 		t.Errorf("explore's tool restriction not shown in the listing:\n%s", desc)
+	}
+}
+
+// Roles, skills, and agents share one map now, so the gates that keep them
+// apart are lookupInvocable and ResolveAgent rather than separate registries.
+func TestRegistry_KindGatesLookup(t *testing.T) {
+	t.Parallel()
+
+	a := newCatalogTestAgent()
+	a.definitions = skill.DefinitionMap{
+		catNameRole:  {Name: catNameRole, Kind: skill.KindRole},
+		catNameSkill: {Name: catNameSkill, Kind: skill.KindSkill},
+		catNameAgent: {Name: catNameAgent, Kind: skill.KindAgent},
+	}
+
+	cases := []struct {
+		name          string
+		wantInvocable bool
+		wantAgent     bool
+	}{
+		{catNameRole, true, false},  // a role runs via Invoke, not via Task
+		{catNameSkill, true, false}, // ditto a skill
+		{catNameAgent, false, true}, // an agent is reachable only via Task
+	}
+	for _, tt := range cases {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			if _, ok := a.lookupInvocable(tt.name); ok != tt.wantInvocable {
+				t.Errorf("lookupInvocable(%q) = %v, want %v", tt.name, ok, tt.wantInvocable)
+			}
+			ag, _ := a.ResolveAgent(tt.name)
+			if (ag != nil) != tt.wantAgent {
+				t.Errorf("ResolveAgent(%q) found = %v, want %v", tt.name, ag != nil, tt.wantAgent)
+			}
+		})
+	}
+}
+
+// One namespace means a name claimed twice needs a defined winner rather than
+// a coin flip.
+func TestMergeDefinitions_CollisionHasADefinedWinner(t *testing.T) {
+	t.Parallel()
+
+	logger := pkgLogger.NewLogger(pkgLogger.LogLevelError)
+
+	t.Run("higher priority agent wins", func(t *testing.T) {
+		t.Parallel()
+
+		merged := mergeDefinitions(
+			logger,
+			skill.DefinitionMap{"x": {Name: "x", Kind: skill.KindSkill, Priority: 0}},
+			pluginpkg.AgentMap{"x": {Name: "x", Kind: skill.KindAgent, Priority: 4}},
+		)
+		if !merged["x"].IsAgent() {
+			t.Error("higher-priority agent should win the name")
+		}
+	})
+
+	t.Run("tie keeps the non-agent", func(t *testing.T) {
+		t.Parallel()
+
+		merged := mergeDefinitions(
+			logger,
+			skill.DefinitionMap{"x": {Name: "x", Kind: skill.KindSkill, Priority: 4}},
+			pluginpkg.AgentMap{"x": {Name: "x", Kind: skill.KindAgent, Priority: 4}},
+		)
+		if merged["x"].IsAgent() {
+			t.Error("on a tie the role/skill keeps the name, preserving Invoke behavior")
+		}
+	})
+
+	t.Run("no collision keeps both", func(t *testing.T) {
+		t.Parallel()
+
+		merged := mergeDefinitions(
+			logger,
+			skill.DefinitionMap{"a": {Name: "a", Kind: skill.KindSkill}},
+			pluginpkg.AgentMap{"b": {Name: "b", Kind: skill.KindAgent}},
+		)
+		if len(merged) != 2 {
+			t.Errorf("got %d entries, want both kept", len(merged))
+		}
+	})
+}
+
+// The Task listing must show agents only — the registry now also holds every
+// role and skill.
+func TestAgentCatalog_ExcludesRolesAndSkills(t *testing.T) {
+	t.Parallel()
+
+	a := newCatalogTestAgent()
+	a.definitions = skill.DefinitionMap{
+		catNameRole:  {Name: catNameRole, Description: "coding role", Kind: skill.KindRole},
+		catNameSkill: {Name: catNameSkill, Description: "pdf skill", Kind: skill.KindSkill},
+		catNameAgent: {Name: catNameAgent, Description: "search agent", Kind: skill.KindAgent},
+	}
+
+	entries := a.AgentCatalog()
+	if len(entries) != 1 || entries[0].Name != catNameAgent {
+		t.Errorf("catalog = %+v, want only the agent", entries)
 	}
 }

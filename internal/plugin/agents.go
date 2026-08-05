@@ -21,9 +21,6 @@ var embeddedAgents embed.FS
 // priority ladder, and the directory the built-ins are embedded from.
 const agentsDirName = "agents"
 
-// AgentMap maps an agent's bare name to its definition.
-type AgentMap map[string]*Agent
-
 // LoadAgents loads every non-plugin agent — built-in, personal, and
 // project-local — with highest-priority-wins ordering. For a given agent name
 // the source with the largest priority value wins:

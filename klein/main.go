@@ -45,7 +45,7 @@ func validateRole(name, workingDir string) error {
 	if err != nil {
 		return fmt.Errorf("failed to load roles: %w", err)
 	}
-	if r, ok := roles[name]; ok && r.IsRole {
+	if r, ok := roles[name]; ok && r.IsRole() {
 		return nil
 	}
 

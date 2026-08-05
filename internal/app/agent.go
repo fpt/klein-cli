@@ -50,7 +50,7 @@ type Agent struct {
 	fsRepo               repository.FilesystemRepository // Shared filesystem repository instance
 	workingDir           string
 	sharedState          domain.State
-	skills               skill.SkillMap
+	definitions          skill.DefinitionMap
 	sessionFilePath      string
 	settings             *config.Settings
 	logger               *pkgLogger.Logger
@@ -81,7 +81,6 @@ type Agent struct {
 	// dispatch time.
 	plugins           []*pluginpkg.Plugin
 	pluginCommands    map[string]*pluginpkg.Command
-	pluginAgents      map[string]*pluginpkg.Agent
 	ambiguousCommands map[string]bool
 	ambiguousAgents   map[string]bool
 }
@@ -157,7 +156,7 @@ func (a *Agent) SpawnSubAgent(ctx context.Context, task string, skillName string
 	if skillName == "" {
 		skillName = "code"
 	}
-	activeSkill, exists := a.skills[skillName]
+	activeSkill, exists := a.lookupInvocable(skillName)
 	if !exists {
 		return "", fmt.Errorf("sub-agent skill %q not found", skillName)
 	}
@@ -166,7 +165,7 @@ func (a *Agent) SpawnSubAgent(ctx context.Context, task string, skillName string
 	var subToolManager domain.ToolManager
 	effectiveAllowed := allowedTools
 	if len(effectiveAllowed) == 0 {
-		effectiveAllowed = activeSkill.AllowedTools
+		effectiveAllowed = activeSkill.EffectiveTools()
 	}
 	if len(effectiveAllowed) > 0 {
 		filtered := make([]string, 0, len(effectiveAllowed))
@@ -281,8 +280,8 @@ func (a *Agent) RunPluginAgent(ctx context.Context, agentName, task string) (str
 	fmt.Fprintf(writer, "  [agent:%s] Starting: %s\n", label, truncate(task, 80))
 
 	subState := state.NewMessageState()
-	if ag.Body != "" {
-		subState.AddMessage(message.NewSystemMessage(ag.Body))
+	if ag.Content != "" {
+		subState.AddMessage(message.NewSystemMessage(ag.Content))
 	}
 
 	llmWithTools, err := client.NewClientWithToolManager(a.llmClient, subToolManager)
@@ -543,7 +542,7 @@ type agentTools struct {
 // and combines them into the composite/deferred views. memoryDir and
 // toolResultsDir (when non-empty) and ~/.klein/skills are added to the
 // filesystem allowlist.
-func buildAgentTools(opts AgentOptions, skills skill.SkillMap, memoryDir, toolResultsDir string) agentTools {
+func buildAgentTools(opts AgentOptions, skills skill.DefinitionMap, memoryDir, toolResultsDir string) agentTools {
 	workingDir := opts.WorkingDir
 
 	var todoToolManager *tool.TodoToolManager
@@ -671,15 +670,15 @@ func NewAgentWithOptions(ctx context.Context, opts AgentOptions) (*Agent, func()
 	skills, err := skill.LoadRolesAndSkills(workingDir)
 	if err != nil {
 		logger.Warn("Failed to load roles/skills, using empty fallback", "error", err)
-		skills = make(skill.SkillMap)
+		skills = make(skill.DefinitionMap)
 	}
 
 	// Load subagents (embedded built-ins + personal + project). Plugin agents
 	// are merged on top later by RegisterPlugins, which also indexes them under
 	// their scoped "<plugin>:<agent>" name.
-	localAgents, err := pluginpkg.LoadAgents(workingDir)
-	if err != nil {
-		logger.Warn("Failed to load agents, using empty fallback", "error", err)
+	localAgents, agentsErr := pluginpkg.LoadAgents(workingDir)
+	if agentsErr != nil {
+		logger.Warn("Failed to load agents, using empty fallback", "error", agentsErr)
 		localAgents = make(pluginpkg.AgentMap)
 	}
 
@@ -693,7 +692,8 @@ func NewAgentWithOptions(ctx context.Context, opts AgentOptions) (*Agent, func()
 
 	// Create or restore shared message state with session persistence
 	sharedState, sessionFilePath := newSharedSessionState(
-		isInteractiveMode, skipSessionRestore, opts.ContinueSession, workingDir, logger)
+		isInteractiveMode, skipSessionRestore, opts.ContinueSession, workingDir, logger,
+	)
 
 	a := &Agent{
 		llmClient:          llmClient,
@@ -709,7 +709,7 @@ func NewAgentWithOptions(ctx context.Context, opts AgentOptions) (*Agent, func()
 		fsRepo:             fsRepo,
 		workingDir:         workingDir,
 		sharedState:        sharedState,
-		skills:             skills,
+		definitions:        mergeDefinitions(logger, skills, localAgents),
 		sessionFilePath:    sessionFilePath,
 		settings:           settings,
 		logger:             logger.WithComponent("agent"),
@@ -717,7 +717,6 @@ func NewAgentWithOptions(ctx context.Context, opts AgentOptions) (*Agent, func()
 		router:             NewSkillsRouter(),
 		sessionRules:       newSessionRules(isInteractiveMode),
 		permRules:          permRules,
-		pluginAgents:       localAgents,
 		ambiguousAgents:    make(map[string]bool),
 		memoryDir:          memoryDir,
 		toolResultsDir:     toolResultsDir,
@@ -758,7 +757,8 @@ func (a *Agent) wireToolsAndBackend(
 	tools.spawnAgent.SetCallback(
 		func(ctx context.Context, task, skillName string, allowedTools []string, maxIterations int) (string, error) {
 			return a.SpawnSubAgent(ctx, task, skillName, allowedTools, maxIterations)
-		})
+		},
+	)
 
 	// Wire Task callback for plugin-defined subagents. The catalog provider is
 	// evaluated lazily on each Description() because plugins are registered
@@ -785,7 +785,7 @@ func (a *Agent) wireToolsAndBackend(
 // that get attached to the user message for vision-capable models.
 func (a *Agent) Invoke(ctx context.Context, userInput string, skillName string, images ...string) (message.Message, error) {
 	skillName = strings.ToLower(skillName)
-	activeSkill, exists := a.skills[skillName]
+	activeSkill, exists := a.lookupInvocable(skillName)
 	if !exists {
 		return nil, fmt.Errorf("skill '%s' not found", skillName)
 	}
@@ -807,19 +807,7 @@ func (a *Agent) Invoke(ctx context.Context, userInput string, skillName string, 
 	// up front, and everything else — including MCP tools, which can't be named
 	// in allowed-tools — stays deferred and loadable on demand via ToolSearch.
 	// The CLI --allowed-tools override remains a HARD restriction (no ToolSearch).
-	var filteredTools domain.ToolManager
-	usingDeferred := false
-	switch {
-	case len(a.allowedToolsOverride) > 0:
-		filteredTools = skill.NewFilteredToolManager(a.allToolManagers, a.allowedToolsOverride)
-	case a.deferredTools != nil:
-		a.deferredTools.SetCore(activeSkill.AllowedTools) // empty → default core
-		filteredTools = a.deferredTools
-		usingDeferred = true
-	default:
-		// Fallback for agents built without the constructor (tests).
-		filteredTools = activeSkill.FilterTools(a.allToolManagers)
-	}
+	filteredTools, usingDeferred := a.selectToolManager(activeSkill)
 
 	// Wrap with plan mode guard to block destructive operations during planning
 	guard := tool.NewPlanModeGuard(filteredTools, a.planMode)
@@ -893,7 +881,7 @@ func (a *Agent) Invoke(ctx context.Context, userInput string, skillName string, 
 	}
 
 	// Inject skill catalog into system prompt
-	catalogContent := skill.BuildSkillCatalog(a.skills)
+	catalogContent := skill.BuildSkillCatalog(a.definitions)
 	if catalogContent != "" {
 		catalogMarker := "[[SKILL_CATALOG]]\n"
 		catalogCandidate := catalogMarker + catalogContent
@@ -954,7 +942,8 @@ func (a *Agent) Invoke(ctx context.Context, userInput string, skillName string, 
 					fullPath = filepath.Join(a.workingDir, rel)
 				}
 				if data, err := os.ReadFile(fullPath); err == nil {
-					out = append(out,
+					out = append(
+						out,
 						"----- BEGIN "+rel+" -----",
 						string(data),
 						"----- END "+rel+" -----",
@@ -1392,7 +1381,8 @@ func (a *Agent) InjectContextFile() {
 		return
 	}
 	a.sharedState.AddMessage(message.NewSystemMessage(
-		"# Project Context\n\n" + content))
+		"# Project Context\n\n" + content,
+	))
 }
 
 // setupEventHandlers configures event handlers to convert events back to output format.
@@ -1401,7 +1391,9 @@ func (a *Agent) InjectContextFile() {
 // the turn prompt (any memory context is already prepended by the gateway). The
 // session↔thread mapping is persisted next to the session file so a resumed
 // session continues the same codex thread.
-func (a *Agent) invokeCodex(ctx context.Context, activeSkill *skill.Skill, userInput string) (message.Message, error) {
+func (a *Agent) invokeCodex(
+	ctx context.Context, activeSkill *skill.Definition, userInput string,
+) (message.Message, error) {
 	threadID := a.loadCodexThreadID()
 	devInstr := activeSkill.RenderContent("", a.workingDir)
 
@@ -1645,7 +1637,8 @@ func (a *Agent) postCompactRestore(ctx context.Context) {
 			continue
 		}
 		msg := message.NewSituationSystemMessage(
-			fmt.Sprintf("# Recently-read file (restored after compaction): %s\n%s", path, content))
+			fmt.Sprintf("# Recently-read file (restored after compaction): %s\n%s", path, content),
+		)
 		a.sharedState.AddMessage(msg)
 		budget -= tokens
 		count++

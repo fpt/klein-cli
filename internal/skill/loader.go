@@ -10,8 +10,8 @@ import (
 	"strings"
 )
 
-// SkillMap maps skill name (lowercase) to *Skill.
-type SkillMap map[string]*Skill
+// DefinitionMap maps skill name (lowercase) to *Definition.
+type DefinitionMap map[string]*Definition
 
 // Filenames and directory names for the two kinds of definition. Roles and
 // skills are loaded by the same code with these substituted in; the frontmatter
@@ -32,7 +32,7 @@ const (
 // In other words, project-local skills override personal skills, which override
 // the embedded built-ins. ~/.klein/skills/ is klein's own personal-skill
 // directory (where the create-skill skill writes new skills).
-func LoadSkills(workingDir string) (SkillMap, error) {
+func LoadSkills(workingDir string) (DefinitionMap, error) {
 	return loadDefinitions(workingDir, skillsDirName, skillFileName, false)
 }
 
@@ -40,7 +40,7 @@ func LoadSkills(workingDir string) (SkillMap, error) {
 // using the same priority ladder as LoadSkills with "roles" in place of
 // "skills", so a project or personal ROLE.md overrides a built-in of the same
 // name exactly as it would for a skill.
-func LoadRoles(workingDir string) (SkillMap, error) {
+func LoadRoles(workingDir string) (DefinitionMap, error) {
 	return loadDefinitions(workingDir, rolesDirName, roleFileName, true)
 }
 
@@ -48,7 +48,7 @@ func LoadRoles(workingDir string) (SkillMap, error) {
 // resolves names against. Roles win a name collision: a role has to be
 // selectable by its own name, and shadowing it with a same-named skill would
 // make that startup prompt unreachable.
-func LoadRolesAndSkills(workingDir string) (SkillMap, error) {
+func LoadRolesAndSkills(workingDir string) (DefinitionMap, error) {
 	skills, err := LoadSkills(workingDir)
 	if err != nil {
 		return nil, err
@@ -61,12 +61,21 @@ func LoadRolesAndSkills(workingDir string) (SkillMap, error) {
 	return skills, nil
 }
 
+// kindFor maps the loader's isRole switch onto a Definition.Kind. Agents are
+// loaded by a separate path and never reach here.
+func kindFor(isRole bool) Kind {
+	if isRole {
+		return KindRole
+	}
+	return KindSkill
+}
+
 // RoleNames returns the sorted names of the roles in a registry, for error
 // messages that have to tell the user what they could have picked instead.
-func RoleNames(defs SkillMap) []string {
+func RoleNames(defs DefinitionMap) []string {
 	names := make([]string, 0, len(defs))
 	for name, s := range defs {
-		if s.IsRole {
+		if s.IsRole() {
 			names = append(names, name)
 		}
 	}
@@ -76,7 +85,7 @@ func RoleNames(defs SkillMap) []string {
 
 // loadDefinitions walks the embedded built-ins and then the five filesystem
 // directories, highest priority winning.
-func loadDefinitions(workingDir, dirName, fileName string, isRole bool) (SkillMap, error) {
+func loadDefinitions(workingDir, dirName, fileName string, isRole bool) (DefinitionMap, error) {
 	result, err := loadBuiltins(dirName, fileName, isRole)
 	if err != nil {
 		return nil, fmt.Errorf("failed to load built-in %s: %w", dirName, err)
@@ -130,18 +139,18 @@ func searchDirs(workingDir, dirName string) []searchDir {
 
 // LoadSkillsFromDir loads SKILL.md files from a directory.
 // Each subdirectory containing a SKILL.md is treated as one skill.
-func LoadSkillsFromDir(dir string, priority int) (SkillMap, error) {
+func LoadSkillsFromDir(dir string, priority int) (DefinitionMap, error) {
 	return loadFromDir(dir, priority, skillFileName, false)
 }
 
 // LoadRolesFromDir loads ROLE.md files from a directory, one role per
 // subdirectory.
-func LoadRolesFromDir(dir string, priority int) (SkillMap, error) {
+func LoadRolesFromDir(dir string, priority int) (DefinitionMap, error) {
 	return loadFromDir(dir, priority, roleFileName, true)
 }
 
-func loadFromDir(dir string, priority int, fileName string, isRole bool) (SkillMap, error) {
-	result := make(SkillMap)
+func loadFromDir(dir string, priority int, fileName string, isRole bool) (DefinitionMap, error) {
+	result := make(DefinitionMap)
 
 	entries, err := os.ReadDir(dir)
 	if err != nil {
@@ -164,7 +173,7 @@ func loadFromDir(dir string, priority int, fileName string, isRole bool) (SkillM
 		if err != nil {
 			return nil, fmt.Errorf("failed to parse %s: %w", path, err)
 		}
-		s.IsRole = isRole
+		s.Kind = kindFor(isRole)
 
 		result[strings.ToLower(s.Name)] = s
 	}
@@ -173,17 +182,17 @@ func loadFromDir(dir string, priority int, fileName string, isRole bool) (SkillM
 }
 
 // LoadBuiltinSkills loads embedded built-in skills from the embed.FS.
-func LoadBuiltinSkills() (SkillMap, error) {
+func LoadBuiltinSkills() (DefinitionMap, error) {
 	return loadBuiltins(skillsDirName, skillFileName, false)
 }
 
 // LoadBuiltinRoles loads the embedded built-in roles.
-func LoadBuiltinRoles() (SkillMap, error) {
+func LoadBuiltinRoles() (DefinitionMap, error) {
 	return loadBuiltins(rolesDirName, roleFileName, true)
 }
 
-func loadBuiltins(dirName, fileName string, isRole bool) (SkillMap, error) {
-	result := make(SkillMap)
+func loadBuiltins(dirName, fileName string, isRole bool) (DefinitionMap, error) {
+	result := make(DefinitionMap)
 	source := embeddedSkills
 	if isRole {
 		source = embeddedRoles
@@ -206,12 +215,11 @@ func loadBuiltins(dirName, fileName string, isRole bool) (SkillMap, error) {
 		if err != nil {
 			return fmt.Errorf("failed to parse embedded %s: %w", path, err)
 		}
-		s.IsRole = isRole
+		s.Kind = kindFor(isRole)
 
 		result[strings.ToLower(s.Name)] = s
 		return nil
 	})
-
 	if err != nil {
 		return nil, err
 	}

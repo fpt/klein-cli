@@ -34,11 +34,11 @@ Second paragraph.
 	if s.Description != "A test skill" {
 		t.Errorf("expected description 'A test skill', got %q", s.Description)
 	}
-	if len(s.AllowedTools) != 3 {
-		t.Fatalf("expected 3 allowed tools, got %d", len(s.AllowedTools))
+	if len(s.Preload) != 3 {
+		t.Fatalf("expected 3 allowed tools, got %d", len(s.Preload))
 	}
-	if s.AllowedTools[0] != "Read" || s.AllowedTools[1] != "Write" || s.AllowedTools[2] != "Grep" {
-		t.Errorf("unexpected allowed tools: %v", s.AllowedTools)
+	if s.Preload[0] != "Read" || s.Preload[1] != "Write" || s.Preload[2] != "Grep" {
+		t.Errorf("unexpected allowed tools: %v", s.Preload)
 	}
 	if s.ArgumentHint != "[filename]" {
 		t.Errorf("expected argument hint '[filename]', got %q", s.ArgumentHint)
@@ -70,8 +70,8 @@ func TestParseSkillMD_NoFrontmatter(t *testing.T) {
 	if s.Content != "Just plain markdown content.\n\nSecond paragraph." {
 		t.Errorf("unexpected content: %q", s.Content)
 	}
-	if len(s.AllowedTools) != 0 {
-		t.Errorf("expected no allowed tools, got %v", s.AllowedTools)
+	if len(s.Preload) != 0 {
+		t.Errorf("expected no allowed tools, got %v", s.Preload)
 	}
 }
 
@@ -87,8 +87,8 @@ Content here.
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if len(s.AllowedTools) != 0 {
-		t.Errorf("expected no allowed tools, got %v", s.AllowedTools)
+	if len(s.Preload) != 0 {
+		t.Errorf("expected no allowed tools, got %v", s.Preload)
 	}
 }
 
@@ -144,7 +144,7 @@ Content.
 }
 
 func TestSkill_RenderContent_Arguments(t *testing.T) {
-	s := &Skill{Content: "Process $ARGUMENTS now."}
+	s := &Definition{Content: "Process $ARGUMENTS now."}
 	result := s.RenderContent("file.go", "/work")
 	if result != "Process file.go now." {
 		t.Errorf("unexpected result: %q", result)
@@ -152,7 +152,7 @@ func TestSkill_RenderContent_Arguments(t *testing.T) {
 }
 
 func TestSkill_RenderContent_PositionalArgs(t *testing.T) {
-	s := &Skill{Content: "Migrate $0 from $1 to $2."}
+	s := &Definition{Content: "Migrate $0 from $1 to $2."}
 	result := s.RenderContent("SearchBar React Vue", "/work")
 	if result != "Migrate SearchBar from React to Vue." {
 		t.Errorf("unexpected result: %q", result)
@@ -160,7 +160,7 @@ func TestSkill_RenderContent_PositionalArgs(t *testing.T) {
 }
 
 func TestSkill_RenderContent_ArgumentsBracket(t *testing.T) {
-	s := &Skill{Content: "First: $ARGUMENTS[0], second: $ARGUMENTS[1]."}
+	s := &Definition{Content: "First: $ARGUMENTS[0], second: $ARGUMENTS[1]."}
 	result := s.RenderContent("hello world", "/work")
 	if result != "First: hello, second: world." {
 		t.Errorf("unexpected result: %q", result)
@@ -168,7 +168,7 @@ func TestSkill_RenderContent_ArgumentsBracket(t *testing.T) {
 }
 
 func TestSkill_RenderContent_WorkingDir(t *testing.T) {
-	s := &Skill{Content: "Dir: {{workingDir}}"}
+	s := &Definition{Content: "Dir: {{workingDir}}"}
 	result := s.RenderContent("", "/my/project")
 	if result != "Dir: /my/project" {
 		t.Errorf("unexpected result: %q", result)
@@ -176,7 +176,7 @@ func TestSkill_RenderContent_WorkingDir(t *testing.T) {
 }
 
 func TestSkill_RenderContent_AppendArguments(t *testing.T) {
-	s := &Skill{Content: "No placeholder here."}
+	s := &Definition{Content: "No placeholder here."}
 	result := s.RenderContent("extra args", "/work")
 	expected := "No placeholder here.\nARGUMENTS: extra args"
 	if result != expected {
@@ -185,7 +185,7 @@ func TestSkill_RenderContent_AppendArguments(t *testing.T) {
 }
 
 func TestSkill_RenderContent_NoAppendWhenEmpty(t *testing.T) {
-	s := &Skill{Content: "No placeholder here."}
+	s := &Definition{Content: "No placeholder here."}
 	result := s.RenderContent("", "/work")
 	if result != "No placeholder here." {
 		t.Errorf("unexpected result: %q", result)
@@ -196,9 +196,9 @@ func TestSkill_RenderContent_AtFileExpansion(t *testing.T) {
 	// Create a temp file
 	tmpDir := t.TempDir()
 	testFile := filepath.Join(tmpDir, "test.md")
-	os.WriteFile(testFile, []byte("file content here"), 0644)
+	os.WriteFile(testFile, []byte("file content here"), 0o644)
 
-	s := &Skill{Content: "Before\n@test.md\nAfter"}
+	s := &Definition{Content: "Before\n@test.md\nAfter"}
 	result := s.RenderContent("", tmpDir)
 	if result != "Before\n----- BEGIN test.md -----\nfile content here\n----- END test.md -----\nAfter" {
 		t.Errorf("unexpected result: %q", result)
@@ -206,7 +206,7 @@ func TestSkill_RenderContent_AtFileExpansion(t *testing.T) {
 }
 
 func TestSkill_RenderContent_AtFileMissing(t *testing.T) {
-	s := &Skill{Content: "Before\n@nonexistent.md\nAfter"}
+	s := &Definition{Content: "Before\n@nonexistent.md\nAfter"}
 	result := s.RenderContent("", "/tmp")
 	if result != "Before\nAfter" {
 		t.Errorf("expected missing file to be dropped, got: %q", result)
@@ -214,14 +214,14 @@ func TestSkill_RenderContent_AtFileMissing(t *testing.T) {
 }
 
 func TestBuildSkillCatalog_Empty(t *testing.T) {
-	result := BuildSkillCatalog(SkillMap{})
+	result := BuildSkillCatalog(DefinitionMap{})
 	if result != "" {
 		t.Errorf("expected empty string for empty skills, got %q", result)
 	}
 }
 
 func TestBuildSkillCatalog_Multiple(t *testing.T) {
-	skills := SkillMap{
+	skills := DefinitionMap{
 		"code": {Name: "code", Description: "Coding assistant"},
 		"claw": {Name: "claw", Description: "Messaging assistant"},
 	}
@@ -244,7 +244,7 @@ func TestBuildSkillCatalog_Multiple(t *testing.T) {
 }
 
 func TestBuildSkillCatalog_NoDescription(t *testing.T) {
-	skills := SkillMap{
+	skills := DefinitionMap{
 		"empty": {Name: "empty", Description: ""},
 	}
 	result := BuildSkillCatalog(skills)
@@ -262,6 +262,7 @@ func (m *mockToolManager) GetTools() map[message.ToolName]message.Tool { return 
 func (m *mockToolManager) CallTool(_ context.Context, name message.ToolName, _ message.ToolArgumentValues) (message.ToolResult, error) {
 	return message.ToolResult{Text: "called:" + string(name)}, nil
 }
+
 func (m *mockToolManager) RegisterTool(message.ToolName, message.ToolDescription, []message.ToolArgument, func(context.Context, message.ToolArgumentValues) (message.ToolResult, error)) {
 }
 
@@ -286,7 +287,7 @@ func newMockToolManager(names ...string) *mockToolManager {
 }
 
 func TestFilteredToolManager_AllTools(t *testing.T) {
-	s := &Skill{AllowedTools: nil} // empty = all tools
+	s := &Definition{Preload: nil} // empty = all tools
 	source := newMockToolManager("Read", "Write", "Grep")
 	result := s.FilterTools(source)
 	if result != source {

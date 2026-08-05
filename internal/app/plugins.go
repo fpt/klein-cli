@@ -67,20 +67,34 @@ func (a *Agent) RegisterPlugins(plugins []*pluginpkg.Plugin) {
 			}
 		}
 
-		// Index agents.
-		for name, ag := range p.Agents {
-			scoped := p.Name + ":" + name
-			a.pluginAgents[scoped] = ag
+		a.indexPluginAgents(p)
+	}
+}
 
-			if a.ambiguousAgents[name] {
-				continue
-			}
-			if existing, ok := a.pluginAgents[name]; ok && existing != ag {
-				delete(a.pluginAgents, name)
-				a.ambiguousAgents[name] = true
-			} else {
-				a.pluginAgents[name] = ag
-			}
+// indexPluginAgents registers one plugin's agents. Each is always reachable
+// under its scoped "<plugin>:<agent>" name; the bare name is contested and may
+// end up owned by someone else.
+func (a *Agent) indexPluginAgents(p *pluginpkg.Plugin) {
+	for name, ag := range p.Agents {
+		a.pluginAgents[p.Name+":"+name] = ag
+
+		if a.ambiguousAgents[name] {
+			continue
+		}
+		existing, ok := a.pluginAgents[name]
+		switch {
+		case !ok || existing == ag:
+			a.pluginAgents[name] = ag
+		case existing.PluginName == "":
+			// A built-in or project/user agent already owns this bare name. It
+			// wins — the same precedence as skills, where a local definition
+			// overrides a plugin's — and the plugin's agent stays reachable as
+			// "<plugin>:<agent>". Not ambiguous: there is a defined winner.
+		default:
+			// Two plugins claim the same bare name; neither wins and the
+			// caller must scope it.
+			delete(a.pluginAgents, name)
+			a.ambiguousAgents[name] = true
 		}
 	}
 }

@@ -119,3 +119,37 @@ func TestSkillToolManager_ReadSkill_AllowedToolsShown(t *testing.T) {
 		t.Error("expected allowed tools listed for respond skill")
 	}
 }
+
+// The registry holds startup prompts and delegation targets too. ReadSkill must
+// say what a name actually is rather than reporting "not found" for something
+// that plainly exists.
+func TestSkillToolManager_RejectsNonInlineWithARealMessage(t *testing.T) {
+	t.Parallel()
+
+	const (
+		inlineName  = "inline-def"
+		startupName = "startup-def"
+	)
+	mgr := NewSkillToolManager(skill.DefinitionMap{
+		inlineName:  {Name: inlineName, Content: "body", Kind: skill.KindSkill},
+		startupName: {Name: startupName, Content: "body", Kind: skill.KindRole},
+	}, t.TempDir())
+
+	res, err := mgr.CallTool(context.Background(), "ReadSkill",
+		message.ToolArgumentValues{"name": startupName})
+	if err != nil {
+		t.Fatalf("CallTool: %v", err)
+	}
+	if res.Error == "" {
+		t.Fatal("reading a startup prompt as a skill should fail")
+	}
+	for _, want := range []string{startupName, "startup", inlineName} {
+		if !strings.Contains(res.Error, want) {
+			t.Errorf("error %q should mention %q", res.Error, want)
+		}
+	}
+	// The suggestion list must not name something the next call would reject.
+	if strings.Contains(res.Error, "Available skills: "+startupName) {
+		t.Errorf("non-inline name offered as a suggestion: %q", res.Error)
+	}
+}

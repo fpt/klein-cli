@@ -15,14 +15,14 @@ import (
 )
 
 // allSubAgentDispatch reports whether every call in the batch is a sub-agent
-// dispatcher (Task or spawn_agent). Such tools are safe to parallelize
+// dispatcher (Task). Such tools are safe to parallelize
 // because each one spawns its own isolated ReAct/state/tool-manager. Other
 // tool combinations stay sequential to avoid races on shared state
 // (TodoWrite, Write to the same path, sequential Bash commands, etc.).
 func allSubAgentDispatch(calls []*message.ToolCallMessage) bool {
 	for _, c := range calls {
 		name := string(c.ToolName())
-		if name != "Task" && name != "spawn_agent" {
+		if name != "Task" {
 			return false
 		}
 	}
@@ -474,7 +474,7 @@ func (r *ReAct) processResponse(ctx context.Context, currentIter int, resp messa
 	case *message.ToolCallBatchMessage:
 		// Execute multiple tools within a single model turn to reduce loops.
 		//
-		// Sub-agent dispatchers (Task / spawn_agent) are inherently isolated
+		// Sub-agent dispatchers (Task) are inherently isolated
 		// — each spawns its own ReAct loop, state, and tool manager — so
 		// when the entire batch consists of such calls we run them in
 		// parallel goroutines. This is what lets a docs-for-ai/search-docs-

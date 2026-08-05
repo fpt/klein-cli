@@ -41,22 +41,41 @@ const defaultRole = "code"
 // registry and a prompt format, so "klein -r pdf" would otherwise start
 // perfectly happily on a prompt that was never meant to open a session.
 func validateRole(name, workingDir string) error {
-	roles, err := skill.LoadRoles(workingDir)
+	defs, err := loadAllDefinitions(workingDir)
 	if err != nil {
-		return fmt.Errorf("failed to load roles: %w", err)
+		return err
 	}
-	if r, ok := roles[name]; ok && r.IsRole() {
-		return nil
+	if d, ok := defs[name]; ok {
+		if d.Permits(skill.ModeStartup) {
+			return nil
+		}
+		// The name exists; say what it actually is rather than "unknown".
+		return fmt.Errorf("%q cannot start a session — it permits: %s (startup: %s)",
+			name, strings.Join(d.ModeNames(), ", "),
+			strings.Join(skill.NamesPermitting(defs, skill.ModeStartup), ", "))
 	}
+	return fmt.Errorf("unknown agent %q (startup: %s)",
+		name, strings.Join(skill.NamesPermitting(defs, skill.ModeStartup), ", "))
+}
 
-	available := strings.Join(skill.RoleNames(roles), ", ")
-	if skills, err := skill.LoadSkills(workingDir); err == nil {
-		if _, isSkill := skills[name]; isSkill {
-			return fmt.Errorf("%q is a skill, not a role — roles start a session, "+
-				"skills are used within one (roles: %s)", name, available)
+// loadAllDefinitions loads roles, skills, and agents into one map, matching
+// what the running agent resolves against. Validation has to see all three now
+// that any of them may declare startup mode.
+func loadAllDefinitions(workingDir string) (skill.DefinitionMap, error) {
+	defs, err := skill.LoadRolesAndSkills(workingDir)
+	if err != nil {
+		return nil, fmt.Errorf("failed to load roles/skills: %w", err)
+	}
+	agents, err := pluginpkg.LoadAgents(workingDir)
+	if err != nil {
+		return nil, fmt.Errorf("failed to load agents: %w", err)
+	}
+	for name, ag := range agents {
+		if _, clash := defs[name]; !clash {
+			defs[name] = ag
 		}
 	}
-	return fmt.Errorf("unknown role %q (roles: %s)", name, available)
+	return defs, nil
 }
 
 // resolveStringFlag returns the non-empty value, preferring short flag over long flag

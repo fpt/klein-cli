@@ -95,7 +95,7 @@ func TestPluginsWireUpEndToEnd(t *testing.T) {
 		"docs-for-ai:repo-searcher",
 	} {
 		t.Run(scoped, func(t *testing.T) {
-			ag, ambiguous := a.ResolveAgent(scoped)
+			ag, ambiguous := a.ResolveSubagent(scoped)
 			if ambiguous {
 				t.Errorf("agent %s ambiguous", scoped)
 				return

@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 
@@ -30,6 +31,47 @@ const (
 	KindAgent             // agents/{name}.md — a delegation target for the Task tool
 )
 
+// Mode is how a definition is being invoked. It is a property of the *call*,
+// not of the file: the caller picks a mode, and the definition only says which
+// ones it permits. That is what lets one definition be both a startup prompt
+// and a delegation target.
+type Mode string
+
+const (
+	// ModeStartup opens a session with this definition as its prompt. Shared
+	// state; output goes to the user; the conversation continues.
+	ModeStartup Mode = "startup"
+	// ModeSubagent runs the definition in its own ReAct loop with fresh state
+	// and returns its final text to the caller as a tool result.
+	ModeSubagent Mode = "subagent"
+	// ModeInline injects the definition into the running session's context,
+	// which is what ReadSkill does.
+	ModeInline Mode = "inline"
+)
+
+// ValidModes lists every mode name accepted in frontmatter.
+var ValidModes = []Mode{ModeStartup, ModeSubagent, ModeInline}
+
+// defaultModes returns the modes a definition permits when its frontmatter does
+// not say. Derived from the file it came from, so every existing role, skill,
+// and agent keeps working untouched and `modes:` is only needed to widen.
+//
+// Skills permit subagent as well as inline because that is what spawn_agent
+// already did: it ran a skill in its own loop with fresh state. Folding that
+// tool into Task must not quietly drop the capability.
+func defaultModes(kind Kind) []Mode {
+	switch kind {
+	case KindRole:
+		return []Mode{ModeStartup}
+	case KindAgent:
+		return []Mode{ModeSubagent}
+	case KindSkill:
+		return []Mode{ModeInline, ModeSubagent}
+	default:
+		return []Mode{ModeInline}
+	}
+}
+
 // Definition is a parsed skill, role, or agent. All three are the same object —
 // a named, purpose-specific prompt plus a tool policy — differing only in who
 // invokes them and where their output goes, so they share one type and one
@@ -51,6 +93,10 @@ type Definition struct {
 	// on a role or skill, where that field has always meant exactly this.
 	Preload []string
 
+	// Modes are the invocation modes this definition permits. Never empty:
+	// frontmatter that omits `modes:` gets defaultModes(Kind).
+	Modes []Mode
+
 	Name         string // from frontmatter, or the file/directory name
 	Description  string // from frontmatter
 	Content      string // markdown body after the frontmatter; the system prompt
@@ -68,11 +114,62 @@ type Definition struct {
 	Background             bool // load-only; sub-agents run synchronously today
 }
 
-// IsRole reports whether this definition is a startup prompt.
+// IsRole reports whether this definition was loaded from a ROLE.md. Prefer
+// Permits(ModeStartup) when the question is what a caller may do with it;
+// this is for messages and listings that are about the file, not the call.
 func (d *Definition) IsRole() bool { return d.Kind == KindRole }
 
-// IsAgent reports whether this definition is a Task delegation target.
+// IsAgent reports whether this definition was loaded from an agents/*.md.
 func (d *Definition) IsAgent() bool { return d.Kind == KindAgent }
+
+// effectiveModes returns the permitted modes, falling back to the defaults for
+// the definition's Kind when Modes is unset. The parser always populates Modes,
+// so the fallback is for definitions built as struct literals — without it a
+// bare Definition{} would permit nothing at all, which is a trap rather than a
+// useful default.
+func (d *Definition) effectiveModes() []Mode {
+	if len(d.Modes) > 0 {
+		return d.Modes
+	}
+	return defaultModes(d.Kind)
+}
+
+// Permits reports whether this definition may be invoked in mode.
+func (d *Definition) Permits(mode Mode) bool {
+	return slices.Contains(d.effectiveModes(), mode)
+}
+
+// PermitsAny reports whether any of modes is permitted.
+func (d *Definition) PermitsAny(modes ...Mode) bool {
+	for _, m := range modes {
+		if d.Permits(m) {
+			return true
+		}
+	}
+	return false
+}
+
+// ModeNames returns the permitted modes as strings, for error messages.
+func (d *Definition) ModeNames() []string {
+	modes := d.effectiveModes()
+	out := make([]string, 0, len(modes))
+	for _, m := range modes {
+		out = append(out, string(m))
+	}
+	return out
+}
+
+// NamesPermitting returns the sorted names in defs that permit mode.
+func NamesPermitting(defs DefinitionMap, mode Mode) []string {
+	names := make([]string, 0, len(defs))
+	for name, d := range defs {
+		if d.Permits(mode) {
+			names = append(names, name)
+		}
+	}
+	sort.Strings(names)
+	return names
+}
 
 // EffectiveTools returns the definition's declared tool list: Tools when set,
 // otherwise Preload. It is used as a hard cap when the definition runs with its
@@ -99,6 +196,7 @@ type frontmatter struct {
 	Tools           any `yaml:"tools"`
 	DisallowedTools any `yaml:"disallowedTools"`
 	Preload         any `yaml:"preload"`
+	Modes           any `yaml:"modes"`
 
 	UserInvocable *bool `yaml:"user-invocable"`
 
@@ -156,9 +254,39 @@ func parseAllowedTools(v any) []string {
 	}
 }
 
+// parseModes normalises the `modes:` frontmatter field, accepting the same
+// shapes as the tool lists. An unrecognized name is an error rather than a
+// silent drop: a typo would otherwise leave the definition with its defaults
+// and the author no way to tell.
+func parseModes(v any) ([]Mode, error) {
+	raw := parseAllowedTools(v)
+	if len(raw) == 0 {
+		return nil, nil
+	}
+	out := make([]Mode, 0, len(raw))
+	for _, s := range raw {
+		m := Mode(strings.ToLower(s))
+		if !slices.Contains(ValidModes, m) {
+			return nil, fmt.Errorf("unknown mode %q (valid: %s)", s, joinModes(ValidModes))
+		}
+		if !slices.Contains(out, m) {
+			out = append(out, m)
+		}
+	}
+	return out, nil
+}
+
+func joinModes(modes []Mode) string {
+	names := make([]string, len(modes))
+	for i, m := range modes {
+		names[i] = string(m)
+	}
+	return strings.Join(names, ", ")
+}
+
 // applyFrontmatter copies parsed frontmatter onto the definition, routing the
 // tool lists by kind.
-func (d *Definition) applyFrontmatter(fm *frontmatter, kind Kind) {
+func (d *Definition) applyFrontmatter(fm *frontmatter, kind Kind) error {
 	d.Name = fm.Name
 	d.Description = fm.Description
 	d.ArgumentHint = fm.ArgumentHint
@@ -186,6 +314,13 @@ func (d *Definition) applyFrontmatter(fm *frontmatter, kind Kind) {
 	case kind != KindAgent && len(d.Preload) == 0:
 		d.Preload = legacy
 	}
+
+	modes, err := parseModes(fm.Modes)
+	if err != nil {
+		return err
+	}
+	d.Modes = modes
+	return nil
 }
 
 // ParseSkillMD parses a SKILL.md file into a Definition.
@@ -245,28 +380,38 @@ func ParseDefinition(data []byte, sourcePath string, priority int, kind Kind) (*
 			if err := yaml.Unmarshal([]byte(yamlBlock), &fm); err != nil {
 				return nil, fmt.Errorf("failed to parse SKILL.md frontmatter: %w", err)
 			}
-			s.applyFrontmatter(&fm, kind)
+			if err := s.applyFrontmatter(&fm, kind); err != nil {
+				return nil, fmt.Errorf("invalid frontmatter in %s: %w", sourcePath, err)
+			}
 		}
 	} else {
 		// No frontmatter
 		s.Content = content
 	}
 
-	// Default name from directory name
-	if s.Name == "" {
-		dir := filepath.Dir(sourcePath)
-		s.Name = filepath.Base(dir)
-	}
-
-	// Default description from first paragraph
-	if s.Description == "" && s.Content != "" {
-		lines := strings.SplitN(strings.TrimSpace(s.Content), "\n\n", 2)
-		if len(lines) > 0 {
-			s.Description = strings.TrimSpace(lines[0])
-		}
-	}
+	s.applyDefaults(sourcePath, kind)
 
 	return s, nil
+}
+
+// applyDefaults fills in what the frontmatter left out: the name from the
+// containing directory, the description from the first paragraph, and the mode
+// set from the kind of file this came from.
+func (d *Definition) applyDefaults(sourcePath string, kind Kind) {
+	if d.Name == "" {
+		d.Name = filepath.Base(filepath.Dir(sourcePath))
+	}
+	if d.Description == "" && d.Content != "" {
+		lines := strings.SplitN(strings.TrimSpace(d.Content), "\n\n", 2)
+		if len(lines) > 0 {
+			d.Description = strings.TrimSpace(lines[0])
+		}
+	}
+	// Frontmatter that says nothing about modes inherits the set implied by the
+	// file it came from, so nothing existing has to be edited.
+	if len(d.Modes) == 0 {
+		d.Modes = defaultModes(kind)
+	}
 }
 
 // positionalArgRe matches $ARGUMENTS[N] and $N patterns.

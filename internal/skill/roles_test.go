@@ -181,18 +181,18 @@ func TestBuildSkillCatalog_RolesOnlyIsEmpty(t *testing.T) {
 	}
 }
 
-// RoleNames feeds the "roles: …" list in the -r error message.
-func TestRoleNames_SortedRolesOnly(t *testing.T) {
+// NamesPermitting feeds the "startup: …" list in the -r error message.
+func TestNamesPermitting_SortedStartupOnly(t *testing.T) {
 	t.Parallel()
 
 	defs, err := LoadRolesAndSkills(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}
-	got := RoleNames(defs)
+	got := NamesPermitting(defs, ModeStartup)
 	want := []string{roleCAD, roleClaw, "code", "review"}
 	if !slices.Equal(got, want) {
-		t.Errorf("RoleNames = %v, want %v", got, want)
+		t.Errorf("NamesPermitting(startup) = %v, want %v", got, want)
 	}
 }
 

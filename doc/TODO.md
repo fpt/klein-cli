@@ -163,4 +163,4 @@ Severity tiers:
 - [ ] Remove or substantiate the "99% coverage" claim in CLAUDE.md; add
   serve-mode and gateway smoke tests.
 - [ ] Sweep for other lowercase tool-name remnants after the PascalCase rename
-  (`spawn_agent` is still snake_case — confirm intentional).
+  (`spawn_agent` was removed; `Task` is the only dispatcher.)

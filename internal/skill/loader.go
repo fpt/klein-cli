@@ -6,7 +6,6 @@ import (
 	"maps"
 	"os"
 	"path/filepath"
-	"sort"
 	"strings"
 )
 
@@ -61,26 +60,15 @@ func LoadRolesAndSkills(workingDir string) (DefinitionMap, error) {
 	return skills, nil
 }
 
-// kindFor maps the loader's isRole switch onto a Definition.Kind. Agents are
+// kindFor maps the loader's isRole switch onto a Definition.Kind. It is passed
+// into the parser rather than patched on afterwards, because Kind decides the
+// default mode set and how a legacy allowed-tools list is routed. Agents are
 // loaded by a separate path and never reach here.
 func kindFor(isRole bool) Kind {
 	if isRole {
 		return KindRole
 	}
 	return KindSkill
-}
-
-// RoleNames returns the sorted names of the roles in a registry, for error
-// messages that have to tell the user what they could have picked instead.
-func RoleNames(defs DefinitionMap) []string {
-	names := make([]string, 0, len(defs))
-	for name, s := range defs {
-		if s.IsRole() {
-			names = append(names, name)
-		}
-	}
-	sort.Strings(names)
-	return names
 }
 
 // loadDefinitions walks the embedded built-ins and then the five filesystem
@@ -169,11 +157,10 @@ func loadFromDir(dir string, priority int, fileName string, isRole bool) (Defini
 			continue
 		}
 
-		s, err := ParseSkillMD(data, path, priority)
+		s, err := ParseDefinition(data, path, priority, kindFor(isRole))
 		if err != nil {
 			return nil, fmt.Errorf("failed to parse %s: %w", path, err)
 		}
-		s.Kind = kindFor(isRole)
 
 		result[strings.ToLower(s.Name)] = s
 	}
@@ -211,11 +198,10 @@ func loadBuiltins(dirName, fileName string, isRole bool) (DefinitionMap, error) 
 			return fmt.Errorf("failed to read embedded %s: %w", path, err)
 		}
 
-		s, err := ParseSkillMD(data, "embedded:"+path, 0)
+		s, err := ParseDefinition(data, "embedded:"+path, 0, kindFor(isRole))
 		if err != nil {
 			return fmt.Errorf("failed to parse embedded %s: %w", path, err)
 		}
-		s.Kind = kindFor(isRole)
 
 		result[strings.ToLower(s.Name)] = s
 		return nil

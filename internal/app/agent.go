@@ -674,6 +674,15 @@ func NewAgentWithOptions(ctx context.Context, opts AgentOptions) (*Agent, func()
 		skills = make(skill.SkillMap)
 	}
 
+	// Load subagents (embedded built-ins + personal + project). Plugin agents
+	// are merged on top later by RegisterPlugins, which also indexes them under
+	// their scoped "<plugin>:<agent>" name.
+	localAgents, err := pluginpkg.LoadAgents(workingDir)
+	if err != nil {
+		logger.Warn("Failed to load agents, using empty fallback", "error", err)
+		localAgents = make(pluginpkg.AgentMap)
+	}
+
 	// Load persistent permission rules (user + project + local); missing files are
 	// silently ignored, never fatal.
 	permRules := permission.LoadForProject(workingDir)
@@ -708,6 +717,8 @@ func NewAgentWithOptions(ctx context.Context, opts AgentOptions) (*Agent, func()
 		router:             NewSkillsRouter(),
 		sessionRules:       newSessionRules(isInteractiveMode),
 		permRules:          permRules,
+		pluginAgents:       localAgents,
+		ambiguousAgents:    make(map[string]bool),
 		memoryDir:          memoryDir,
 		toolResultsDir:     toolResultsDir,
 		memoryManager:      findMemoryManager(opts.MCPToolManagers),

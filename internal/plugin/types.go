@@ -76,10 +76,13 @@ type Command struct {
 	SourcePath   string
 }
 
-// Agent is a subagent loaded from <plugin>/agents/*.md or .claude/agents/*.md.
+// Agent is a subagent definition. It comes from one of three places, all using
+// the same file format: <plugin>/agents/*.md (loaded by Plugin.loadAgents),
+// the embedded built-ins, or a personal/project agents/ directory (both loaded
+// by LoadAgents).
 type Agent struct {
 	Name        string   // from frontmatter (required); falls back to filename
-	PluginName  string   // owning plugin's name; empty for project/user agents
+	PluginName  string   // owning plugin's name; empty for built-in and project/user agents
 	Description string   // from frontmatter — used by the parent to decide when to delegate
 	Tools       []string // empty = inherit all
 	Model       string   // sonnet/opus/haiku/fable/<full-id>/inherit
@@ -87,6 +90,9 @@ type Agent struct {
 	Color       string
 	Body        string // system-prompt body
 	SourcePath  string
+	// Priority orders the LoadAgents ladder; larger wins a name collision.
+	// Always 0 for plugin agents, which are merged by a separate path.
+	Priority int
 }
 
 // Marketplace is a collection of plugins discovered via

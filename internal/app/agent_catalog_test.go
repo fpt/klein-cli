@@ -1,10 +1,17 @@
 package app
 
 import (
+	"context"
+	"io"
+	"strings"
 	"testing"
 
+	"github.com/fpt/klein-cli/internal/config"
+	"github.com/fpt/klein-cli/internal/infra"
 	pluginpkg "github.com/fpt/klein-cli/internal/plugin"
 	"github.com/fpt/klein-cli/internal/skill"
+	"github.com/fpt/klein-cli/pkg/agent/domain"
+	pkgLogger "github.com/fpt/klein-cli/pkg/logger"
 )
 
 // Tool names are constants because goconst counts string literals across the
@@ -121,11 +128,101 @@ func TestAgentCatalog_SortedForStableToolDescription(t *testing.T) {
 	}
 }
 
+// A built-in or project agent owns its bare name outright: a plugin claiming
+// the same name must not turn it ambiguous and make it unreachable.
+func TestRegisterPlugins_LocalAgentBeatsPluginOnBareName(t *testing.T) {
+	t.Parallel()
+
+	const contested = "explore"
+	local := &pluginpkg.Agent{Name: contested, Description: "built-in explore"}
+	a := newCatalogTestAgent()
+	a.pluginAgents = map[string]*pluginpkg.Agent{contested: local}
+	a.RegisterPlugins([]*pluginpkg.Plugin{
+		plug("someplugin", agentsNamed("someplugin", contested)),
+	})
+
+	got, ambiguous := a.ResolveAgent(contested)
+	if ambiguous {
+		t.Fatal("bare name reported ambiguous; the local agent should win outright")
+	}
+	if got != local {
+		t.Errorf("bare %q resolved to %+v, want the local definition", contested, got)
+	}
+	// The plugin's agent is still reachable, just only when scoped.
+	scoped, ambiguous := a.ResolveAgent("someplugin:" + contested)
+	if ambiguous || scoped == nil {
+		t.Error("plugin agent unreachable under its scoped name")
+	}
+	if scoped == local {
+		t.Error("scoped name resolved to the local agent, not the plugin's")
+	}
+}
+
+// Two plugins claiming one bare name still has no defined winner.
+func TestRegisterPlugins_TwoPluginsStillAmbiguous(t *testing.T) {
+	t.Parallel()
+
+	const contested = "watcher"
+	a := newCatalogTestAgent()
+	a.RegisterPlugins([]*pluginpkg.Plugin{
+		plug("alpha", agentsNamed("alpha", contested)),
+		plug("beta", agentsNamed("beta", contested)),
+	})
+
+	if _, ambiguous := a.ResolveAgent(contested); !ambiguous {
+		t.Error("bare name contested by two plugins should be ambiguous")
+	}
+}
+
 func TestAgentCatalog_EmptyWithoutPlugins(t *testing.T) {
 	t.Parallel()
 
 	a := newCatalogTestAgent()
 	if entries := a.AgentCatalog(); len(entries) != 0 {
 		t.Errorf("got %+v, want no entries", entries)
+	}
+}
+
+// The whole chain, with no stubs between the loader and the model-facing text:
+// LoadAgents finds the embedded built-ins, the constructor stores them, and the
+// Task tool's description lists them for the model to pick from.
+//
+//nolint:paralleltest // t.Setenv isolates HOME, which forbids t.Parallel
+func TestBuiltInAgentsReachTheTaskToolDescription(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+
+	a, cleanup, err := NewAgentWithOptions(context.Background(), AgentOptions{
+		Settings:           config.GetDefaultSettings(),
+		WorkingDir:         t.TempDir(),
+		MCPToolManagers:    map[string]domain.ToolManager{},
+		Logger:             pkgLogger.NewLogger(pkgLogger.LogLevelError),
+		Out:                io.Discard,
+		FsRepo:             infra.NewOSFilesystemRepository(),
+		SkipSessionRestore: true,
+		IsInteractiveMode:  false,
+		LLMClient:          &stubLLM{}, // no provider API key needed
+	})
+	if err != nil {
+		t.Fatalf("NewAgentWithOptions: %v", err)
+	}
+	defer cleanup()
+
+	taskTool, ok := a.allToolManagers.GetTool("Task")
+	if !ok {
+		t.Fatal("Task tool not registered")
+	}
+	desc := string(taskTool.Description())
+
+	if strings.Contains(desc, "No subagents are currently loaded") {
+		t.Fatalf("Task reports no agents even though built-ins ship in the binary:\n%s", desc)
+	}
+	for _, name := range []string{"explore", "plan", "general-purpose"} {
+		if !strings.Contains(desc, "- "+name+": ") {
+			t.Errorf("built-in agent %q missing from the Task description:\n%s", name, desc)
+		}
+	}
+	// explore's read-only tool set must survive into the listing.
+	if !strings.Contains(desc, "(Tools: Read, LS, Glob, Grep, ToolSearch)") {
+		t.Errorf("explore's tool restriction not shown in the listing:\n%s", desc)
 	}
 }

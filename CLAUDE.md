@@ -226,19 +226,31 @@ This is a Go-based skill-driven coding agent that uses SKILL.md-configured skill
 - `domain.ToolManager` - Interface for tool management with security controls
 - `state.MessageState` - Session persistence and message management
 
-**Roles and Skills:**
+**Roles, Skills, and Agents:**
 A **role** is the startup prompt a session opens with — chosen once via `-r`/`--role`
 (default `code`), or fixed by an entry point (`klein claw` → `claw`, `klein review` →
 `review`). A **skill** is a task capability reached from inside a session: the model
 loads one with `ReadSkill`, the gateway runs one for a message via `/<skill>`, and
-`schedules[].skill` picks one for a scheduled turn.
+`schedules[].skill` picks one for a scheduled turn. An **agent** (subagent) is a
+delegate: the model dispatches to one by name with the `Task` tool, and it runs in its
+own ReAct loop with its own message state, returning only a final text answer.
 
-Both use the same frontmatter format and load through the same priority ladder, but
-from different directories: `roles/{name}/ROLE.md` vs `skills/{name}/SKILL.md`. They
-share one registry at runtime, so `Agent.Invoke` resolves either without caring which
-it got; the distinction is enforced where a name is *selected* (validated against
-roles, in `validateRole`) or *listed* (roles excluded from the skill catalog and from
-`ListScenarios`). Passing a skill to `-r` is an error.
+Roles and skills use the same frontmatter format and load through the same priority
+ladder, but from different directories: `roles/{name}/ROLE.md` vs
+`skills/{name}/SKILL.md`. They share one registry at runtime, so `Agent.Invoke`
+resolves either without caring which it got; the distinction is enforced where a name
+is *selected* (validated against roles, in `validateRole`) or *listed* (roles excluded
+from the skill catalog and from `ListScenarios`). Passing a skill to `-r` is an error.
+
+Agents are a separate registry with the same ladder but a flat file layout —
+`agents/{name}.md`, one file per agent, matching Claude Code's `.claude/agents/`
+convention. `plugin.LoadAgents` handles the embedded/personal/project tiers;
+plugin-supplied agents are merged on top by `Agent.RegisterPlugins`, which also
+indexes them under a scoped `<plugin>:<agent>` name. On a bare-name collision a
+built-in or project agent wins outright and the plugin's stays reachable when scoped;
+two plugins claiming one name makes it ambiguous and the caller must scope it. The
+loaded set is rendered into the `Task` tool's description by `Agent.AgentCatalog`,
+which is how the model discovers what it can delegate to.
 
 **Universal + Filtered Tool Architecture:**
 - **Universal Tools**: Always available (todos, filesystem, bash, grep) via composite manager
@@ -792,10 +804,15 @@ Instructions:
 **Built-in Embedded Skills** (`internal/skill/skills/*/SKILL.md`) — task capabilities:
 `pdf`, `github`, `web`, `report`, `research-stock`, `market-narratives`, `create-skill`
 
-**Custom Roles and Skills:**
-Override or extend either by placing files in the matching directory:
-- `.claude/roles/` and `.claude/skills/` - Project-specific
-- `~/.claude/roles/` and `~/.claude/skills/` - Personal (shared across projects)
+**Built-in Embedded Agents** (`internal/plugin/agents/*.md`) — delegation targets:
+- `explore` - Read-only fan-out search; reports `file:line` references, cannot mutate
+- `plan` - Read-only architect; returns a step-by-step implementation plan
+- `general-purpose` - Catch-all for open-ended multi-step research (inherits all tools)
+
+**Custom Roles, Skills, and Agents:**
+Override or extend any of them by placing files in the matching directory:
+- `.claude/roles/`, `.claude/skills/`, `.claude/agents/` - Project-specific
+- `~/.claude/roles/`, `~/.claude/skills/`, `~/.claude/agents/` - Personal (shared across projects)
   (`~/.agents/…` and `~/.klein/…` are also scanned)
 
 **Priority Order (later overrides earlier):**

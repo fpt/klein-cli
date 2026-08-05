@@ -749,10 +749,13 @@ func (a *Agent) wireToolsAndBackend(
 			return a.SpawnSubAgent(ctx, task, skillName, allowedTools, maxIterations)
 		})
 
-	// Wire Task callback for plugin-defined subagents.
+	// Wire Task callback for plugin-defined subagents. The catalog provider is
+	// evaluated lazily on each Description() because plugins are registered
+	// after the agent is constructed.
 	tools.taskAgent.SetCallback(func(ctx context.Context, subagentType, prompt string) (string, error) {
 		return a.RunPluginAgent(ctx, subagentType, prompt)
 	})
+	tools.taskAgent.SetCatalogProvider(a.AgentCatalog)
 
 	// Provision the whole-agent backend (e.g. codex), if one was injected. This
 	// may start an external process; its cleanup is folded into the returned func.

@@ -11,10 +11,9 @@ import (
 func TestTaskAgentTool_CallsCallback(t *testing.T) {
 	mgr := NewTaskAgentToolManager()
 
-	var gotSubagent, gotPrompt string
-	mgr.SetCallback(func(_ context.Context, subagent, prompt string) (string, error) {
-		gotSubagent = subagent
-		gotPrompt = prompt
+	var got TaskRequest
+	mgr.SetCallback(func(_ context.Context, req TaskRequest) (string, error) {
+		got = req
 		return "subagent-response-text", nil
 	})
 
@@ -32,17 +31,20 @@ func TestTaskAgentTool_CallsCallback(t *testing.T) {
 	if res.Text != "subagent-response-text" {
 		t.Errorf("text: got %q want %q", res.Text, "subagent-response-text")
 	}
-	if gotSubagent != "docs-for-ai:repo-searcher" {
-		t.Errorf("subagent_type: got %q", gotSubagent)
+	if got.SubagentType != "docs-for-ai:repo-searcher" {
+		t.Errorf("subagent_type: got %q", got.SubagentType)
 	}
-	if gotPrompt != "Find auth model in docs_for_ai/cart-service" {
-		t.Errorf("prompt: got %q", gotPrompt)
+	if got.Prompt != "Find auth model in docs_for_ai/cart-service" {
+		t.Errorf("prompt: got %q", got.Prompt)
+	}
+	if got.Background {
+		t.Error("Background should default to false")
 	}
 }
 
 func TestTaskAgentTool_RequiresArgs(t *testing.T) {
 	mgr := NewTaskAgentToolManager()
-	mgr.SetCallback(func(context.Context, string, string) (string, error) {
+	mgr.SetCallback(func(context.Context, TaskRequest) (string, error) {
 		t.Fatal("callback should not run when args invalid")
 		return "", nil
 	})
@@ -172,5 +174,29 @@ func TestTaskAgentTool_UnwiredCallback(t *testing.T) {
 	})
 	if !strings.Contains(res.Error, "not available") {
 		t.Errorf("expected 'not available' error, got %q", res.Error)
+	}
+}
+
+// run_in_background must reach the dispatcher; without it the flag would be
+// silently dropped and every request would run in the foreground.
+func TestTaskAgentTool_ForwardsRunInBackground(t *testing.T) {
+	t.Parallel()
+
+	mgr := NewTaskAgentToolManager()
+	var got TaskRequest
+	mgr.SetCallback(func(_ context.Context, req TaskRequest) (string, error) {
+		got = req
+		return "launched", nil
+	})
+
+	if _, err := mgr.CallTool(context.Background(), "Task", message.ToolArgumentValues{
+		"subagent_type":     "pr-watcher",
+		"prompt":            "watch PR 42",
+		"run_in_background": true,
+	}); err != nil {
+		t.Fatalf("CallTool: %v", err)
+	}
+	if !got.Background {
+		t.Error("run_in_background did not reach the dispatcher")
 	}
 }

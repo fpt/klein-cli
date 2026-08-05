@@ -8,10 +8,23 @@ import (
 	"github.com/fpt/klein-cli/pkg/message"
 )
 
-// TaskCallback runs the agent identified by subagentType with the given prompt
-// and returns the agent's final text. The implementation is provided by the
-// owning *app.Agent via SetCallback.
-type TaskCallback func(ctx context.Context, subagentType, prompt string) (string, error)
+// argRunInBackground is the Task argument that detaches a run.
+const argRunInBackground = "run_in_background"
+
+// TaskRequest is one Task dispatch. It is a struct rather than positional
+// arguments so a new option does not churn every implementation.
+type TaskRequest struct {
+	SubagentType string
+	Prompt       string
+	// Background detaches the run: the call returns an id immediately and the
+	// agent keeps going after the turn ends.
+	Background bool
+}
+
+// TaskCallback runs the requested agent and returns its final text, or — for a
+// background request — the id to read it back with. The implementation is
+// provided by the owning *app.Agent via SetCallback.
+type TaskCallback func(ctx context.Context, req TaskRequest) (string, error)
 
 // AgentCatalogEntry describes one dispatchable subagent for the Task tool's
 // description. Name is the identifier the model must pass as subagent_type —
@@ -142,19 +155,28 @@ func (t *taskAgentTool) Arguments() []message.ToolArgument {
 				"\"Available agents\" in this tool's description. Names containing a " +
 				"colon are the scoped \"<plugin>:<agent>\" form and must be passed in full.",
 			Required: true,
-			Type:     "string",
+			Type:     argTypeString,
 		},
 		{
 			Name:        "description",
 			Description: "A short (3-5 word) description of the task for display.",
 			Required:    false,
-			Type:        "string",
+			Type:        argTypeString,
 		},
 		{
 			Name:        "prompt",
 			Description: "The full task prompt for the subagent.",
 			Required:    true,
-			Type:        "string",
+			Type:        argTypeString,
+		},
+		{
+			Name: argRunInBackground,
+			Description: "Run detached and return an id immediately instead of waiting. " +
+				"Use it when the work is slow and unrelated to your next step; read the " +
+				"answer later with AgentOutput. Do not guess what a running agent will " +
+				"find — if asked before it finishes, say it is still running.",
+			Required: false,
+			Type:     argTypeBoolean,
 		},
 	}
 }
@@ -163,6 +185,7 @@ func (t *taskAgentTool) Handler() func(ctx context.Context, args message.ToolArg
 	return func(ctx context.Context, args message.ToolArgumentValues) (message.ToolResult, error) {
 		agentName, _ := args["subagent_type"].(string)
 		prompt, _ := args["prompt"].(string)
+		background, _ := args[argRunInBackground].(bool)
 		if agentName == "" {
 			return message.NewToolResultError("Task: 'subagent_type' is required"), nil
 		}
@@ -173,7 +196,9 @@ func (t *taskAgentTool) Handler() func(ctx context.Context, args message.ToolArg
 			return message.NewToolResultError("Task: not available in this context (no agents loaded)"), nil
 		}
 
-		result, err := t.manager.callback(ctx, agentName, prompt)
+		result, err := t.manager.callback(ctx, TaskRequest{
+			SubagentType: agentName, Prompt: prompt, Background: background,
+		})
 		if err != nil {
 			return message.NewToolResultError(fmt.Sprintf("Task: subagent %q failed: %v", agentName, err)), nil
 		}

@@ -281,6 +281,12 @@ which is how the model discovers what it can delegate to.
 - **Security-First Design**: Read→write semantics, directory allowlists, file blacklists
 - **Tool Composition**: All tool managers composed at construction, filtered at invoke time per skill
 - **One Dispatcher**: `Task` is the only subagent dispatcher; `spawn_agent` was folded into it
+- **Background Runs**: `Task(run_in_background: true)` (or `background: true` frontmatter) detaches a
+  subagent; `AgentList` / `AgentOutput` / `AgentStop` inspect and cancel it. Runs survive `/clear`
+  (work in flight is not conversation state) but not process exit, which cancels them. Transcripts go
+  to `<project>/agent_runs/<id>.md`, never into the session file — keeping that noise out of the
+  parent's context is the point of backgrounding. Orthogonal to the `klein claw` cron scheduler,
+  which owns recurring work rather than one-shot work started from a session.
 
 **Simplified Workflow Architecture:**
 1. **Role Selection** → User picks the session's startup prompt via `-r` (validated: a skill name is rejected)

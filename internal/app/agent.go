@@ -82,6 +82,7 @@ type Agent struct {
 	pluginCommands    map[string]*pluginpkg.Command
 	ambiguousCommands map[string]bool
 	ambiguousAgents   map[string]bool
+	agentRuns         *agentRunRegistry
 }
 
 // WorkingDir returns the agent's working directory.
@@ -158,6 +159,30 @@ func (a *Agent) SetPlanApprovalHandler(h tool.PlanApprovalHandler) {
 func (a *Agent) RunSubagent(
 	ctx context.Context, def *skill.Definition, task string, toolsOverride []string, maxIterations int,
 ) (string, error) {
+	return a.runSubagent(ctx, def, task, subagentOptions{
+		ToolsOverride: toolsOverride,
+		MaxIterations: maxIterations,
+		Writer:        a.OutWriter(),
+	})
+}
+
+// subagentOptions configures one subagent run.
+type subagentOptions struct {
+	// Writer receives the run's progress. A foreground run shares the parent's
+	// writer; a background run gets its own, so its tool noise does not
+	// interleave with whatever the user is typing.
+	Writer        io.Writer
+	ToolsOverride []string
+	MaxIterations int
+	// SkipApproval forces auto-approval. Background runs set it because there
+	// is no one at the prompt to answer.
+	SkipApproval bool
+}
+
+func (a *Agent) runSubagent(
+	ctx context.Context, def *skill.Definition, task string, opts subagentOptions,
+) (string, error) {
+	toolsOverride, maxIterations := opts.ToolsOverride, opts.MaxIterations
 	if def == nil {
 		return "", errors.New("subagent: nil definition")
 	}
@@ -180,7 +205,10 @@ func (a *Agent) RunSubagent(
 	if def.PluginName != "" {
 		label = def.PluginName + ":" + def.Name
 	}
-	writer := a.OutWriter()
+	writer := opts.Writer
+	if writer == nil {
+		writer = a.OutWriter()
+	}
 	fmt.Fprintf(writer, "  [agent:%s] Starting: %s\n", label, truncate(task, 80))
 
 	// Fresh conversation state — isolated from the parent.
@@ -200,10 +228,11 @@ func (a *Agent) RunSubagent(
 	if a.settings != nil {
 		reactClient.SetBashWhitelist(a.settings.Bash.WhitelistedCommands)
 	}
-	// Background agents auto-approve every tool call. The user opted in by
-	// enabling this agent, and its frontmatter tool list is the surface area;
-	// we trust that declaration. Foreground agents keep the normal workflow.
-	if def.Background {
+	// Auto-approve every tool call when the definition declares itself a
+	// background agent, or when this run is detached and nobody is at the
+	// prompt to answer. The frontmatter tool list is the surface area the user
+	// opted into; foreground runs keep the normal approval workflow.
+	if def.Background || opts.SkipApproval {
 		reactClient.SetSkipApproval(true)
 	}
 
@@ -241,7 +270,8 @@ func (a *Agent) RunSubagent(
 // DispatchTask resolves a name for the Task tool and runs it as a subagent.
 // Any definition permitting subagent mode is reachable, not only agent-kind
 // ones — which is what lets Task absorb the deleted spawn_agent tool.
-func (a *Agent) DispatchTask(ctx context.Context, name, task string) (string, error) {
+func (a *Agent) DispatchTask(ctx context.Context, req tool.TaskRequest) (string, error) {
+	name, task := req.SubagentType, req.Prompt
 	def, ambiguous := a.ResolveSubagent(name)
 	if ambiguous {
 		return "", fmt.Errorf("agent name %q is ambiguous — scope it as <plugin>:<name>", name)
@@ -253,7 +283,31 @@ func (a *Agent) DispatchTask(ctx context.Context, name, task string) (string, er
 		}
 		return "", fmt.Errorf("agent %q not found", name)
 	}
+	// A definition marked `background: true` detaches by default; the caller
+	// can also ask for it per dispatch.
+	if req.Background || def.Background {
+		info, err := a.StartBackgroundAgent(def, task)
+		if err != nil {
+			return "", err
+		}
+		return formatBackgroundLaunch(info), nil
+	}
 	return a.RunSubagent(ctx, def, task, nil, 0)
+}
+
+// formatBackgroundLaunch is what the model sees the instant a detached agent
+// starts. It states plainly that no result exists yet, because the failure mode
+// here is the model inventing one rather than saying it launched something.
+func formatBackgroundLaunch(info RunInfo) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "Launched %s in the background as %s.\n", info.Label, info.ID)
+	if info.OutputPath != "" {
+		fmt.Fprintf(&b, "transcript_file: %s\n", info.OutputPath)
+	}
+	b.WriteString("No result yet. Read it later with AgentOutput(agent_id: \"" + info.ID + "\"), " +
+		"or AgentStop to cancel. Tell the user what you launched and end your response — " +
+		"do not predict or fabricate what it will find.")
+	return b.String()
 }
 
 // buildSubAgentToolManager constructs a filtered tool manager for sub-agents:
@@ -455,6 +509,7 @@ type agentTools struct {
 	planMode    *tool.PlanModeState
 	plan        *tool.PlanToolManager
 	taskAgent   *tool.TaskAgentToolManager
+	agentRuns   *tool.AgentRunToolManager
 	all         *tool.CompositeToolManager
 	deferred    *tool.DeferredToolManager
 }
@@ -507,6 +562,7 @@ func buildAgentTools(opts AgentOptions, skills skill.DefinitionMap, memoryDir, t
 	planModeState := new(tool.PlanModeState) // starts as PlanModeOff
 	planToolManager := tool.NewPlanToolManager(planModeState)
 	taskAgentManager := tool.NewTaskAgentToolManager()
+	agentRunManager := tool.NewAgentRunToolManager()
 
 	// Combine ALL tool managers into one composite.
 	managers := []domain.ToolManager{
@@ -514,7 +570,7 @@ func buildAgentTools(opts AgentOptions, skills skill.DefinitionMap, memoryDir, t
 		tool.NewSearchToolManager(tool.SearchConfig{WorkingDir: workingDir}),
 		tool.NewWebToolManager(), tool.NewPDFToolManager(workingDir), tool.NewMarketToolManager(),
 		tool.NewSkillToolManager(skills, workingDir), askQuestionManager, planToolManager,
-		taskAgentManager, tool.NewResearcherToolManager(),
+		taskAgentManager, agentRunManager, tool.NewResearcherToolManager(),
 	}
 	for _, mcpManager := range opts.MCPToolManagers {
 		managers = append(managers, mcpManager)
@@ -528,6 +584,7 @@ func buildAgentTools(opts AgentOptions, skills skill.DefinitionMap, memoryDir, t
 		planMode:    planModeState,
 		plan:        planToolManager,
 		taskAgent:   taskAgentManager,
+		agentRuns:   agentRunManager,
 		all:         allToolManagers,
 		deferred:    tool.NewDeferredToolManager(allToolManagers),
 	}
@@ -636,6 +693,7 @@ func NewAgentWithOptions(ctx context.Context, opts AgentOptions) (*Agent, func()
 		sessionRules:       newSessionRules(isInteractiveMode),
 		permRules:          permRules,
 		ambiguousAgents:    make(map[string]bool),
+		agentRuns:          newAgentRunRegistry(),
 		memoryDir:          memoryDir,
 		toolResultsDir:     toolResultsDir,
 		memoryManager:      findMemoryManager(opts.MCPToolManagers),
@@ -676,6 +734,11 @@ func (a *Agent) wireToolsAndBackend(
 	// constructed.
 	tools.taskAgent.SetCallback(a.DispatchTask)
 	tools.taskAgent.SetCatalogProvider(a.AgentCatalog)
+	tools.agentRuns.SetCallbacks(tool.AgentRunCallbacks{
+		List:   a.ListAgentRuns,
+		Output: a.AgentRunOutput,
+		Stop:   a.StopAgentRun,
+	})
 
 	// Provision the whole-agent backend (e.g. codex), if one was injected. This
 	// may start an external process; its cleanup is folded into the returned func.

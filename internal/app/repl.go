@@ -269,6 +269,15 @@ func showCommandSelector(a *Agent) bool {
 
 // StartInteractiveMode runs the readline-based REPL
 func StartInteractiveMode(ctx context.Context, a *Agent, skillName string) {
+	// Background agents outlive the turn that started them but not the process:
+	// leaving one running past exit would keep billing model calls with nobody
+	// to read the answer.
+	defer func() {
+		if n := a.CancelBackgroundAgents(); n > 0 {
+			fmt.Printf("⏹  Stopped %d background agent(s) still running.\n", n)
+		}
+	}()
+
 	// Configure readline with enhanced features
 	// Context display
 	contextDisplay := NewContextDisplay()

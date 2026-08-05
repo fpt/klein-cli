@@ -32,9 +32,9 @@ type Plugin struct {
 	// dispatch time.
 	Agents map[string]*Agent
 
-	// Skills loaded from this plugin's skills/ tree. Use them with skill.SkillMap-
+	// Skills loaded from this plugin's skills/ tree. Use them with skill.DefinitionMap-
 	// compatible APIs.
-	Skills skill.SkillMap
+	Skills skill.DefinitionMap
 
 	// MCPServers parsed from the plugin's .mcp.json. Names are taken from the
 	// JSON keys. Configurations are returned with Enabled=true since the
@@ -80,20 +80,15 @@ type Command struct {
 // the same file format: <plugin>/agents/*.md (loaded by Plugin.loadAgents),
 // the embedded built-ins, or a personal/project agents/ directory (both loaded
 // by LoadAgents).
-type Agent struct {
-	Name        string   // from frontmatter (required); falls back to filename
-	PluginName  string   // owning plugin's name; empty for built-in and project/user agents
-	Description string   // from frontmatter — used by the parent to decide when to delegate
-	Tools       []string // empty = inherit all
-	Model       string   // sonnet/opus/haiku/fable/<full-id>/inherit
-	Background  bool     // load-only; klein currently runs sub-agents synchronously
-	Color       string
-	Body        string // system-prompt body
-	SourcePath  string
-	// Priority orders the LoadAgents ladder; larger wins a name collision.
-	// Always 0 for plugin agents, which are merged by a separate path.
-	Priority int
-}
+//
+// An agent, a role, and a skill are the same object — a named prompt plus a
+// tool policy — differing only in who invokes them and where the output goes,
+// so this is an alias for the shared type rather than a struct of its own.
+// The alias keeps the ~40 existing `plugin.Agent` references compiling.
+type Agent = skill.Definition
+
+// AgentMap maps an agent's bare name to its definition.
+type AgentMap = skill.DefinitionMap
 
 // Marketplace is a collection of plugins discovered via
 // .claude-plugin/marketplace.json.

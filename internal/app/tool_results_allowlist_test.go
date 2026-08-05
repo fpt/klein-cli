@@ -32,7 +32,7 @@ func TestBuildAgentTools_ToolResultsDirIsReadable(t *testing.T) {
 		FsRepo:     infra.NewOSFilesystemRepository(),
 		WorkingDir: workingDir,
 	}
-	tools := buildAgentTools(opts, skill.SkillMap{}, "", toolResultsDir)
+	tools := buildAgentTools(opts, skill.DefinitionMap{}, "", toolResultsDir)
 
 	result, err := tools.all.CallTool(context.Background(), "Read",
 		message.ToolArgumentValues{"file_path": offloaded})
@@ -68,7 +68,7 @@ func TestBuildAgentTools_ToolResultsGrantIsScoped(t *testing.T) {
 		FsRepo:     infra.NewOSFilesystemRepository(),
 		WorkingDir: workingDir,
 	}
-	tools := buildAgentTools(opts, skill.SkillMap{}, "", toolResultsDir)
+	tools := buildAgentTools(opts, skill.DefinitionMap{}, "", toolResultsDir)
 
 	result, err := tools.all.CallTool(context.Background(), "Read",
 		message.ToolArgumentValues{"file_path": sibling})

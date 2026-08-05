@@ -56,7 +56,7 @@ func TestLoadAgents_BuiltInsArePresent(t *testing.T) {
 		if ag.Description == "" {
 			t.Errorf("agent %q has no description; it would render blank in the Task listing", name)
 		}
-		if ag.Body == "" {
+		if ag.Content == "" {
 			t.Errorf("agent %q has an empty body; it would have no system prompt", name)
 		}
 		if ag.PluginName != "" {

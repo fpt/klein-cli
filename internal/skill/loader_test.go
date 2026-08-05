@@ -33,14 +33,14 @@ func TestLoadBuiltinRoles_HasCodeRole(t *testing.T) {
 	}
 	// the code role has explicit allowed-tools including plan mode tools
 	hasPlanMode := false
-	for _, tool := range code.AllowedTools {
+	for _, tool := range code.Preload {
 		if tool == "EnterPlanMode" || tool == "ExitPlanMode" {
 			hasPlanMode = true
 			break
 		}
 	}
-	if len(code.AllowedTools) > 0 && !hasPlanMode {
-		t.Errorf("expected code skill allowed-tools to include plan mode tools, got %v", code.AllowedTools)
+	if len(code.Preload) > 0 && !hasPlanMode {
+		t.Errorf("expected code skill allowed-tools to include plan mode tools, got %v", code.Preload)
 	}
 	if code.Content == "" {
 		t.Error("expected non-empty content for code skill")
@@ -51,7 +51,7 @@ func TestLoadSkillsFromDir(t *testing.T) {
 	// Create temp directory with a skill
 	tmpDir := t.TempDir()
 	skillDir := filepath.Join(tmpDir, "test-skill")
-	os.MkdirAll(skillDir, 0755)
+	os.MkdirAll(skillDir, 0o755)
 	os.WriteFile(filepath.Join(skillDir, "SKILL.md"), []byte(`---
 name: test-skill
 description: A test skill
@@ -59,7 +59,7 @@ allowed-tools: Read
 ---
 
 Test content.
-`), 0644)
+`), 0o644)
 
 	skills, err := LoadSkillsFromDir(tmpDir, 1)
 	if err != nil {
@@ -75,8 +75,8 @@ Test content.
 	if s.Priority != 1 {
 		t.Errorf("expected priority 1, got %d", s.Priority)
 	}
-	if len(s.AllowedTools) != 1 || s.AllowedTools[0] != "Read" {
-		t.Errorf("unexpected allowed tools: %v", s.AllowedTools)
+	if len(s.Preload) != 1 || s.Preload[0] != "Read" {
+		t.Errorf("unexpected allowed tools: %v", s.Preload)
 	}
 }
 
@@ -84,14 +84,14 @@ func TestLoadSkills_PriorityOverride(t *testing.T) {
 	// Create project skills dir
 	tmpDir := t.TempDir()
 	projectDir := filepath.Join(tmpDir, ".claude", "skills", "my-skill")
-	os.MkdirAll(projectDir, 0755)
+	os.MkdirAll(projectDir, 0o755)
 	os.WriteFile(filepath.Join(projectDir, "SKILL.md"), []byte(`---
 name: my-skill
 description: Project version
 ---
 
 Project content.
-`), 0644)
+`), 0o644)
 
 	// LoadSkills uses workingDir to find .claude/skills/
 	skills, err := LoadSkills(tmpDir)
@@ -129,8 +129,8 @@ func TestLoadSkillsFromDir_SkipNonSkillDirs(t *testing.T) {
 	tmpDir := t.TempDir()
 
 	// Create a dir without SKILL.md
-	os.MkdirAll(filepath.Join(tmpDir, "not-a-skill"), 0755)
-	os.WriteFile(filepath.Join(tmpDir, "not-a-skill", "README.md"), []byte("not a skill"), 0644)
+	os.MkdirAll(filepath.Join(tmpDir, "not-a-skill"), 0o755)
+	os.WriteFile(filepath.Join(tmpDir, "not-a-skill", "README.md"), []byte("not a skill"), 0o644)
 
 	skills, err := LoadSkillsFromDir(tmpDir, 1)
 	if err != nil {

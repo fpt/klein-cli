@@ -43,7 +43,7 @@ func TestLoadBuiltinRoles_AreTheFourEntryPoints(t *testing.T) {
 			t.Errorf("built-in role %q missing", want)
 			continue
 		}
-		if !r.IsRole {
+		if !r.IsRole() {
 			t.Errorf("role %q is not marked IsRole", want)
 		}
 		if r.Description == "" {
@@ -137,10 +137,10 @@ func TestLoadRolesAndSkills_HoldsBoth(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadRolesAndSkills: %v", err)
 	}
-	if r := defs[roleCAD]; r == nil || !r.IsRole {
+	if r := defs[roleCAD]; r == nil || !r.IsRole() {
 		t.Error("expected the cad role in the combined registry")
 	}
-	if s := defs["pdf"]; s == nil || s.IsRole {
+	if s := defs["pdf"]; s == nil || s.IsRole() {
 		t.Error("expected the pdf skill in the combined registry, not marked as a role")
 	}
 }

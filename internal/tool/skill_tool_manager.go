@@ -14,12 +14,12 @@ import (
 // SkillToolManager provides the ReadSkill tool for proactive skill discovery.
 type SkillToolManager struct {
 	tools      map[message.ToolName]message.Tool
-	skills     skill.SkillMap
+	skills     skill.DefinitionMap
 	workingDir string
 }
 
 // NewSkillToolManager creates a new skill tool manager.
-func NewSkillToolManager(skills skill.SkillMap, workingDir string) *SkillToolManager {
+func NewSkillToolManager(skills skill.DefinitionMap, workingDir string) *SkillToolManager {
 	m := &SkillToolManager{
 		tools:      make(map[message.ToolName]message.Tool),
 		skills:     skills,
@@ -64,8 +64,8 @@ func (m *SkillToolManager) handleReadSkill(_ context.Context, args message.ToolA
 	if s.Description != "" {
 		result.WriteString(fmt.Sprintf("Description: %s\n", s.Description))
 	}
-	if len(s.AllowedTools) > 0 {
-		result.WriteString(fmt.Sprintf("Allowed Tools: %s\n", strings.Join(s.AllowedTools, ", ")))
+	if len(s.EffectiveTools()) > 0 {
+		result.WriteString(fmt.Sprintf("Allowed Tools: %s\n", strings.Join(s.EffectiveTools(), ", ")))
 	}
 	result.WriteString("\n---\n\n")
 	result.WriteString(rendered)

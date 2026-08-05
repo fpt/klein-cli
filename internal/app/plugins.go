@@ -3,13 +3,16 @@ package app
 import (
 	"context"
 	"fmt"
+	"maps"
 	"sort"
 	"strings"
 
 	"github.com/fpt/klein-cli/internal/permission"
 	pluginpkg "github.com/fpt/klein-cli/internal/plugin"
+	"github.com/fpt/klein-cli/internal/skill"
 	"github.com/fpt/klein-cli/internal/tool"
 	"github.com/fpt/klein-cli/pkg/agent/domain"
+	pkgLogger "github.com/fpt/klein-cli/pkg/logger"
 	"github.com/fpt/klein-cli/pkg/message"
 )
 
@@ -27,8 +30,8 @@ func (a *Agent) RegisterPlugins(plugins []*pluginpkg.Plugin) {
 	if a.pluginCommands == nil {
 		a.pluginCommands = make(map[string]*pluginpkg.Command)
 	}
-	if a.pluginAgents == nil {
-		a.pluginAgents = make(map[string]*pluginpkg.Agent)
+	if a.definitions == nil {
+		a.definitions = make(skill.DefinitionMap)
 	}
 	if a.ambiguousCommands == nil {
 		a.ambiguousCommands = make(map[string]bool)
@@ -46,8 +49,8 @@ func (a *Agent) RegisterPlugins(plugins []*pluginpkg.Plugin) {
 		// Merge skills (do not override existing entries — project/user
 		// scopes already loaded by skill.LoadSkills win).
 		for name, s := range p.Skills {
-			if _, exists := a.skills[name]; !exists {
-				a.skills[name] = s
+			if _, exists := a.definitions[name]; !exists {
+				a.definitions[name] = s
 			}
 		}
 
@@ -76,24 +79,25 @@ func (a *Agent) RegisterPlugins(plugins []*pluginpkg.Plugin) {
 // end up owned by someone else.
 func (a *Agent) indexPluginAgents(p *pluginpkg.Plugin) {
 	for name, ag := range p.Agents {
-		a.pluginAgents[p.Name+":"+name] = ag
+		a.definitions[p.Name+":"+name] = ag
 
 		if a.ambiguousAgents[name] {
 			continue
 		}
-		existing, ok := a.pluginAgents[name]
+		existing, ok := a.definitions[name]
 		switch {
 		case !ok || existing == ag:
-			a.pluginAgents[name] = ag
+			a.definitions[name] = ag
 		case existing.PluginName == "":
-			// A built-in or project/user agent already owns this bare name. It
-			// wins — the same precedence as skills, where a local definition
-			// overrides a plugin's — and the plugin's agent stays reachable as
-			// "<plugin>:<agent>". Not ambiguous: there is a defined winner.
+			// A built-in or project/user definition — agent, role, or skill —
+			// already owns this bare name. It wins, the same precedence skills
+			// use where a local definition overrides a plugin's, and the
+			// plugin's agent stays reachable as "<plugin>:<agent>". Not
+			// ambiguous: there is a defined winner.
 		default:
 			// Two plugins claim the same bare name; neither wins and the
 			// caller must scope it.
-			delete(a.pluginAgents, name)
+			delete(a.definitions, name)
 			a.ambiguousAgents[name] = true
 		}
 	}
@@ -118,13 +122,81 @@ func (a *Agent) ResolveCommand(name string) (*pluginpkg.Command, bool) {
 	return nil, false
 }
 
-// ResolveAgent looks up a plugin/agent definition the same way ResolveCommand
-// resolves commands.
+// mergeDefinitions folds roles, skills, and agents into the single registry the
+// agent resolves against. Which names a caller may reach is decided by Kind at
+// lookup time (lookupInvocable vs ResolveAgent), not by keeping separate maps.
+//
+// Roles, skills, and agents occupy one namespace now, so a name claimed by two
+// of them has to have a winner: higher Priority wins, and on a tie the
+// non-agent keeps the name, which is what preserves today's Invoke behavior.
+// No built-in collides; a user-authored one is logged loudly because half of
+// what they wrote will be unreachable until #84 makes the two one definition.
+func mergeDefinitions(
+	logger *pkgLogger.Logger, defs skill.DefinitionMap, agents pluginpkg.AgentMap,
+) skill.DefinitionMap {
+	merged := make(skill.DefinitionMap, len(defs)+len(agents))
+	maps.Copy(merged, defs)
+
+	for name, ag := range agents {
+		existing, clash := merged[name]
+		if !clash {
+			merged[name] = ag
+			continue
+		}
+		if ag.Priority > existing.Priority {
+			merged[name] = ag
+		}
+		logger.Warn("name claimed by both an agent and a role/skill; one of them is unreachable",
+			"name", name, "agent", ag.SourcePath, "other", existing.SourcePath,
+			"winner", merged[name].SourcePath)
+	}
+
+	return merged
+}
+
+// selectToolManager picks the tool view a definition runs with, and reports
+// whether that view is the deferred/ToolSearch one.
+//
+// The three cases are ordered by how hard a restriction they are. A CLI
+// --allowed-tools override outranks everything. An explicit `tools:` list is a
+// hard cap in every mode, so it *replaces* the deferred view rather than
+// seeding it — seeding would let ToolSearch hand back exactly what the cap
+// excluded. Otherwise `preload:` only decides what is visible up front, and
+// anything else stays reachable through ToolSearch, which is what lets the cad
+// role discover app MCP tools.
+func (a *Agent) selectToolManager(def *skill.Definition) (domain.ToolManager, bool) {
+	switch {
+	case len(a.allowedToolsOverride) > 0:
+		return skill.NewFilteredToolManager(a.allToolManagers, a.allowedToolsOverride), false
+	case len(def.Tools) > 0:
+		return skill.NewFilteredToolManager(a.allToolManagers, def.Tools), false
+	case a.deferredTools != nil:
+		a.deferredTools.SetCore(def.Preload) // empty → default core
+		return a.deferredTools, true
+	default:
+		// Fallback for agents built without the constructor (tests).
+		return def.FilterTools(a.allToolManagers), false
+	}
+}
+
+// lookupInvocable resolves a name that Invoke may run: a role or a skill, never
+// an agent. Agents are reachable only through the Task tool until invocation
+// modes land.
+func (a *Agent) lookupInvocable(name string) (*skill.Definition, bool) {
+	d, ok := a.definitions[name]
+	if !ok || d.IsAgent() {
+		return nil, false
+	}
+	return d, true
+}
+
+// ResolveAgent looks up an agent definition the same way ResolveCommand
+// resolves commands. Roles and skills are not reachable here.
 func (a *Agent) ResolveAgent(name string) (*pluginpkg.Agent, bool) {
 	if name == "" {
 		return nil, false
 	}
-	if ag, ok := a.pluginAgents[name]; ok {
+	if ag, ok := a.definitions[name]; ok && ag.IsAgent() {
 		return ag, false
 	}
 	if a.ambiguousAgents[name] {
@@ -136,15 +208,19 @@ func (a *Agent) ResolveAgent(name string) (*pluginpkg.Agent, bool) {
 // AgentCatalog returns one entry per loaded subagent, for the Task tool's
 // available-agents listing.
 //
-// pluginAgents indexes most agents twice (scoped and bare), so entries are
+// The registry holds roles and skills too, so only agent-kind definitions are
+// listed. Agents are indexed twice (scoped and bare), so entries are
 // deduplicated by definition pointer and reported under the name the model
 // should actually pass: the bare name when it is unambiguous, otherwise the
 // scoped "<plugin>:<agent>" form, which is all that survives indexing for a
 // contested name. The result is sorted so the tool description — and thus the
 // prompt cache — is stable across runs.
 func (a *Agent) AgentCatalog() []tool.AgentCatalogEntry {
-	preferred := make(map[*pluginpkg.Agent]string, len(a.pluginAgents))
-	for name, ag := range a.pluginAgents {
+	preferred := make(map[*pluginpkg.Agent]string, len(a.definitions))
+	for name, ag := range a.definitions {
+		if !ag.IsAgent() {
+			continue
+		}
 		current, seen := preferred[ag]
 		if !seen || (strings.Contains(current, ":") && !strings.Contains(name, ":")) {
 			preferred[ag] = name

@@ -31,8 +31,8 @@ type stringSliceFlag []string
 func (s *stringSliceFlag) String() string     { return strings.Join(*s, ", ") }
 func (s *stringSliceFlag) Set(v string) error { *s = append(*s, v); return nil }
 
-// defaultRole is the role a session opens with when -r is not given.
-const defaultRole = "code"
+// defaultAgent is the definition a session opens with when none is named.
+const defaultAgent = "code"
 
 // validateRole rejects a -r that is not a role, before any expensive setup
 // (LLM client, MCP servers) happens.
@@ -78,12 +78,15 @@ func loadAllDefinitions(workingDir string) (skill.DefinitionMap, error) {
 	return defs, nil
 }
 
-// resolveStringFlag returns the non-empty value, preferring short flag over long flag
-func resolveStringFlag(shortVal, longVal string) string {
-	if shortVal != "" {
-		return shortVal
+// resolveStringFlag returns the first non-empty value, so aliases for one
+// setting can be listed in precedence order.
+func resolveStringFlag(values ...string) string {
+	for _, v := range values {
+		if v != "" {
+			return v
+		}
 	}
-	return longVal
+	return ""
 }
 
 func printUsage() {
@@ -139,8 +142,13 @@ func main() {
 	var effort = flag.String("effort", "", "Reasoning effort for reasoning-capable models (none|minimal|low|medium|high|xhigh; primarily OpenAI)")
 	var workdir = flag.String("workdir", "", "Working directory")
 	var settingsPath = flag.String("settings", "", "Path to settings file")
-	var roleFlag = flag.String("r", defaultRole, "Role (startup prompt) to open the session with")
-	var roleFlagLong = flag.String("role", defaultRole, "Role (startup prompt) to open the session with")
+	// Empty defaults, not defaultAgent: with a default on every alias every one
+	// of them is always "set", so the first-non-empty rule below could never see
+	// which the user actually passed. That is why --role was silently ignored
+	// whenever -r carried its default. defaultAgent is applied after resolution.
+	var agentFlag = flag.String("agent", "", "Agent to open the session with (its startup prompt)")
+	var roleFlag = flag.String("r", "", "Alias for --agent")
+	var roleFlagLong = flag.String("role", "", "Alias for --agent")
 	var showLog = flag.Bool("l", false, "Print conversation message history and exit")
 	var showLogLong = flag.Bool("log", false, "Print conversation message history and exit")
 	var continueSession = flag.Bool("c", false, "Resume this project's most recent session (default: start fresh)")
@@ -181,7 +189,10 @@ func main() {
 	// Resolve long/short flag conflicts (prefer the one that was set)
 	resolvedBackend := resolveStringFlag(*backend, *backendLong)
 	resolvedModel := resolveStringFlag(*model, *modelLong)
-	resolvedRole := strings.ToLower(resolveStringFlag(*roleFlag, *roleFlagLong))
+	resolvedRole := strings.ToLower(resolveStringFlag(*agentFlag, *roleFlag, *roleFlagLong))
+	if resolvedRole == "" {
+		resolvedRole = defaultAgent
+	}
 	resolvedShowLog := *showLog || *showLogLong
 	resolvedVerbose := *verbose || *verboseLong
 	// --log prints the conversation history, which can only mean the session it

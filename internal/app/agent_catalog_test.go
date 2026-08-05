@@ -22,7 +22,7 @@ const (
 	catToolGlob  = "Glob"
 	catNameRole  = "code"
 	catNameSkill = "pdf"
-	catNameAgent = "explore"
+	catNameAgent = nameExplore
 	nameWidened  = "widened-role"
 )
 
@@ -446,5 +446,75 @@ func TestDispatchTask_RejectsWrongModeWithARealMessage(t *testing.T) {
 	_, err = a.DispatchTask(context.Background(), "no-such-thing", "x")
 	if err == nil || !strings.Contains(err.Error(), "not found") {
 		t.Errorf("unknown name should say not found, got %v", err)
+	}
+}
+
+// The Task listing stays curated by *declaration*: an agent is listed, and so
+// is anything whose frontmatter names subagent mode, but a skill that merely
+// inherits the mode is not.
+func TestAgentCatalog_ListsDeclaredSubagentsNotInheritedOnes(t *testing.T) {
+	t.Parallel()
+
+	a := newCatalogTestAgent()
+	a.definitions = skill.DefinitionMap{
+		// Inherits [inline, subagent] from its Kind — dispatchable, not listed.
+		catNameSkill: {Name: catNameSkill, Description: "a skill", Kind: skill.KindSkill},
+		// Agent-kind — always listed.
+		catNameAgent: {Name: catNameAgent, Description: "an agent", Kind: skill.KindAgent},
+		// A role that opts in explicitly — listed, because declaring it is the
+		// author saying "delegate to this".
+		nameWidened: {
+			Name: nameWidened, Description: "a widened role", Kind: skill.KindRole,
+			Modes: []skill.Mode{skill.ModeStartup, skill.ModeSubagent},
+		},
+		// A plain role — neither listed nor dispatchable.
+		catNameRole: {Name: catNameRole, Description: "a role", Kind: skill.KindRole},
+	}
+
+	var listed []string
+	for _, e := range a.AgentCatalog() {
+		listed = append(listed, e.Name)
+	}
+	if strings.Join(listed, ",") != catNameAgent+","+nameWidened {
+		t.Errorf("catalog = %v, want the agent and the widened role only", listed)
+	}
+
+	// Dispatch stays wider than the listing.
+	if d, _ := a.ResolveSubagent(catNameSkill); d == nil {
+		t.Error("an unlisted skill must still be dispatchable")
+	}
+	if d, _ := a.ResolveSubagent(catNameRole); d != nil {
+		t.Error("a plain role must not be dispatchable")
+	}
+}
+
+// /<name> and -r reach the same set: whatever permits startup.
+func TestLookupStartup(t *testing.T) {
+	t.Parallel()
+
+	a := newCatalogTestAgent()
+	a.definitions = skill.DefinitionMap{
+		catNameRole:  {Name: catNameRole, Kind: skill.KindRole},
+		catNameSkill: {Name: catNameSkill, Kind: skill.KindSkill},
+		catNameAgent: {Name: catNameAgent, Kind: skill.KindAgent},
+		nameWidened: {
+			Name: nameWidened, Kind: skill.KindAgent,
+			Modes: []skill.Mode{skill.ModeStartup, skill.ModeSubagent},
+		},
+	}
+
+	for name, want := range map[string]bool{
+		catNameRole:  true,  // a role opens a session
+		catNameSkill: false, // a skill is inline/subagent, not a session prompt
+		catNameAgent: false, // a plain agent is subagent-only
+		nameWidened:  true,  // ...until it declares startup
+	} {
+		if _, ok := a.LookupStartup(name); ok != want {
+			t.Errorf("LookupStartup(%q) = %v, want %v", name, ok, want)
+		}
+	}
+
+	if got := strings.Join(a.StartupNames(), ","); got != catNameRole+","+nameWidened {
+		t.Errorf("StartupNames = %q, want the role and the widened agent", got)
 	}
 }

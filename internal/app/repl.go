@@ -188,6 +188,43 @@ func handlePluginCommand(ctx context.Context, a *Agent, skillName, input string)
 	return true
 }
 
+// handleAgentCommand dispatches /<name> for any definition that permits startup
+// mode, running it for this turn only — the session's own agent is unchanged.
+// Returns false when the name is not such a definition, so the caller can fall
+// through to the built-in commands.
+//
+// Built-in names win: a definition called "help" or "clear" must not be able to
+// take over the commands the user needs to get out of trouble.
+func handleAgentCommand(ctx context.Context, a *Agent, input string) bool {
+	name, args := SplitSlashCommand(input)
+	if name == "" || isBuiltinSlashCommand(name) {
+		return false
+	}
+	def, ok := a.LookupStartup(name)
+	if !ok {
+		return false
+	}
+
+	fmt.Fprintf(a.OutWriter(), "▶ /%s\n", def.Name)
+	// executeTurn already reports errors and cancellation on the agent's
+	// writer; there is nothing further for a one-shot command to do with them.
+	_, _, _ = executeTurn(ctx, a, args, def.Name)
+	return true
+}
+
+// isBuiltinSlashCommand reports whether name is one of the REPL's own commands.
+func isBuiltinSlashCommand(name string) bool {
+	for _, c := range getSlashCommands() {
+		if c.Name == name {
+			return true
+		}
+	}
+	return name == cmdGoal || name == cmdLoop
+}
+
+// agentCommandDescription labels a definition in the REPL command palette.
+const agentCommandDescription = "(agent — run for one turn)"
+
 // showCommandSelector shows an interactive command selector using promptui
 func showCommandSelector(a *Agent) bool {
 	commands := getSlashCommands()
@@ -249,7 +286,7 @@ func StartInteractiveMode(ctx context.Context, a *Agent, skillName string) {
 	rlCfg := &readline.Config{
 		Prompt:                 "> ",
 		HistoryFile:            "",
-		AutoComplete:           createAutoCompleter(),
+		AutoComplete:           createAutoCompleter(a),
 		InterruptPrompt:        "^C",
 		EOFPrompt:              "exit",
 		HistorySearchFold:      true,
@@ -386,6 +423,16 @@ func StartInteractiveMode(ctx context.Context, a *Agent, skillName string) {
 				rl.Refresh()
 				continue
 			}
+			// /<agent> runs a startup-capable definition for this turn only.
+			// After built-ins would shadow /help and /clear; before them would
+			// let a definition named "clear" break the REPL. Plugin commands
+			// already took precedence above, so this sits between the two.
+			if handleAgentCommand(ctx, a, cmd) {
+				pb.Clear()
+				rl.Clean()
+				rl.Refresh()
+				continue
+			}
 			if handleSlashCommand(cmd, a) {
 				break
 			}
@@ -416,13 +463,21 @@ func StartInteractiveMode(ctx context.Context, a *Agent, skillName string) {
 }
 
 // slashCandidates returns the invocable /commands for display: built-ins, the
-// multi-turn drivers (/goal, /loop), and any loaded plugin commands.
+// multi-turn drivers (/goal, /loop), any loaded plugin commands, and every
+// definition that can drive a turn.
 func slashCandidates(a *Agent) []SlashCommand {
 	cmds := getSlashCommands()
-	cmds = append(cmds,
+	cmds = append(
+		cmds,
 		SlashCommand{Name: cmdGoal, Description: "Set and track a goal across turns"},
 		SlashCommand{Name: cmdLoop, Description: "Repeat a prompt/command on an interval"},
 	)
+	for _, name := range a.StartupNames() {
+		if isBuiltinSlashCommand(name) {
+			continue // a built-in owns this name; /<name> will not reach the definition
+		}
+		cmds = append(cmds, SlashCommand{Name: name, Description: agentCommandDescription})
+	}
 	for _, name := range a.ListPluginCommands() {
 		cmds = append(cmds, SlashCommand{Name: name, Description: "(plugin command)"})
 	}
@@ -438,8 +493,10 @@ func printSlashCandidates(a *Agent) {
 	}
 }
 
-// createAutoCompleter creates an autocompletion function for readline
-func createAutoCompleter() *readline.PrefixCompleter {
+// createAutoCompleter creates an autocompletion function for readline. It takes
+// the agent so /<name> completions cover the loaded definitions and plugin
+// commands, not just the built-ins.
+func createAutoCompleter(a *Agent) *readline.PrefixCompleter {
 	commands := getSlashCommands()
 	var pcItems []readline.PrefixCompleterInterface
 	for _, cmd := range commands {
@@ -447,6 +504,12 @@ func createAutoCompleter() *readline.PrefixCompleter {
 	}
 	// Multi-turn driving commands handled outside getSlashCommands.
 	pcItems = append(pcItems, readline.PcItem("/goal"), readline.PcItem("/loop"))
+	for _, name := range a.StartupNames() {
+		pcItems = append(pcItems, readline.PcItem("/"+name))
+	}
+	for _, name := range a.ListPluginCommands() {
+		pcItems = append(pcItems, readline.PcItem("/"+name))
+	}
 	pcItems = append(pcItems, readline.PcItem("/"))
 	for _, pattern := range []string{
 		"Create a", "Analyze the", "Write unit tests for", "List files in",

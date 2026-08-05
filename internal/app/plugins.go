@@ -192,6 +192,22 @@ func (a *Agent) lookupInvocable(name string) (*skill.Definition, bool) {
 	return d, true
 }
 
+// LookupStartup resolves a definition that may open or drive a session turn:
+// the -r/--agent target, and the /<name> REPL command.
+func (a *Agent) LookupStartup(name string) (*skill.Definition, bool) {
+	d, ok := a.definitions[strings.ToLower(name)]
+	if !ok || !d.Permits(skill.ModeStartup) {
+		return nil, false
+	}
+	return d, true
+}
+
+// StartupNames returns the sorted names of every definition that permits
+// startup mode, for the REPL palette and autocompleter.
+func (a *Agent) StartupNames() []string {
+	return skill.NamesPermitting(a.definitions, skill.ModeStartup)
+}
+
 // ResolveSubagent looks up a definition the Task tool may dispatch to, the same
 // way ResolveCommand resolves commands. Membership is by declared mode, not by
 // which file the definition came from: a role that permits subagent mode is
@@ -212,13 +228,14 @@ func (a *Agent) ResolveSubagent(name string) (*skill.Definition, bool) {
 // AgentCatalog returns one entry per loaded subagent, for the Task tool's
 // available-agents listing.
 //
-// The listing is curated, not exhaustive: it names agent-kind definitions,
-// which are the ones written to be delegated to. ResolveSubagent is deliberately
-// wider — any definition permitting subagent mode is dispatchable, including
-// skills — but listing all of those made the description ten entries of prose
-// written for a different audience ("also invocable as /report <topic>"), with
-// create-skill offered as a delegation target. The prose below names the wider
-// set in one sentence instead. Agents are indexed twice (scoped and bare), so entries are
+// The listing is curated, not exhaustive. It names definitions written to be
+// delegated to: every agent, plus anything that *declares* subagent mode in its
+// frontmatter. Declaring it is an author opting in; merely permitting it by
+// inheritance is not, which is what keeps the ten skills that permit subagent by
+// default out of a description written for a different audience ("also invocable
+// as /report <topic>", create-skill as a delegation target). ResolveSubagent
+// stays wider than this listing, and the prose below names that wider set in one
+// sentence. Agents are indexed twice (scoped and bare), so entries are
 // deduplicated by definition pointer and reported under the name the model
 // should actually pass: the bare name when it is unambiguous, otherwise the
 // scoped "<plugin>:<agent>" form, which is all that survives indexing for a
@@ -227,7 +244,7 @@ func (a *Agent) ResolveSubagent(name string) (*skill.Definition, bool) {
 func (a *Agent) AgentCatalog() []tool.AgentCatalogEntry {
 	preferred := make(map[*pluginpkg.Agent]string, len(a.definitions))
 	for name, ag := range a.definitions {
-		if !ag.IsAgent() || !ag.Permits(skill.ModeSubagent) {
+		if !ag.Permits(skill.ModeSubagent) || (!ag.IsAgent() && !ag.Declares(skill.ModeSubagent)) {
 			continue
 		}
 		current, seen := preferred[ag]

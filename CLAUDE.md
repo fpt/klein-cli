@@ -9,6 +9,7 @@ This file provides guidance to AI agent when working with code in this repositor
 # Interactive mode (default)
 go run klein/main.go                         # Start interactive REPL
 go run klein/main.go -b anthropic            # Interactive with Anthropic
+go run klein/main.go --agent explore         # Open the session with the explore agent
 
 # One-shot mode
 go run klein/main.go "your requirements"     # Run with requirements
@@ -252,6 +253,17 @@ it came from — `roles/` → `[startup]`, `agents/` → `[subagent]`, `skills/`
 definition permitting `startup`; the `Task` tool accepts any permitting
 `subagent` (its listing is curated to agent-kind definitions, but a skill name
 works too); `ReadSkill` accepts any permitting `inline`.
+
+Selecting an agent: `--agent <name>` (aliases `-r`, `--role`) opens the session
+with it, and `/<name> [args]` in the REPL runs one turn with it without changing
+the session's own agent. Both accept anything permitting `startup`. Built-in
+REPL commands (`/help`, `/clear`, …) win a name collision, so a definition
+cannot make them unreachable.
+
+The `Task` listing is curated rather than exhaustive: it names agents plus any
+definition whose frontmatter *declares* `subagent`. Skills inherit that mode by
+default and stay dispatchable but unlisted — listing them filled the description
+with prose written for a different audience.
 
 Agents are a separate registry with the same ladder but a flat file layout —
 `agents/{name}.md`, one file per agent, matching Claude Code's `.claude/agents/`

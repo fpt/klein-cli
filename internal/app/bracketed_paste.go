@@ -121,6 +121,20 @@ func (r *BracketedPasteReader) ClearSegments() {
 // either outBuf (for readline) or pasteBuf (during paste).
 // Must be called with r.mu held.
 func (r *BracketedPasteReader) processBytes(data []byte) {
+	// Rejoin a sequence split across reads. Terminals deliver a paste in
+	// whatever chunks the tty hands over, so ESC[200~ / ESC[201~ regularly
+	// straddle a read boundary — especially the end marker, which sits at the
+	// tail of a large paste. Without this the held bytes are never rescanned:
+	// the marker is missed, its literal text lands in the line buffer as
+	// ^[[200~, and readline then eats the following Return as part of an
+	// escape sequence it cannot parse.
+	if len(r.seqBuf) > 0 {
+		joined := make([]byte, 0, len(r.seqBuf)+len(data))
+		joined = append(joined, r.seqBuf...)
+		data = append(joined, data...)
+		r.seqBuf = nil
+	}
+
 	i := 0
 	for i < len(data) {
 		if r.inPaste {
@@ -134,20 +148,13 @@ func (r *BracketedPasteReader) processBytes(data []byte) {
 				// Drain any partial sequence buffer since we found a complete sequence
 				r.seqBuf = nil
 			} else {
-				// Check if data ends with a partial match for pasteEndSeq
+				// No end marker yet. Hold back a trailing partial match so the
+				// next read can complete it; everything before it is content.
 				remaining := data[i:]
 				partialLen := r.partialMatchSuffix(remaining, pasteEndSeq)
+				r.pasteBuf.Write(remaining[:len(remaining)-partialLen])
 				if partialLen > 0 {
-					// Write everything except the potential partial sequence
-					r.pasteBuf.Write(remaining[:len(remaining)-partialLen])
 					r.seqBuf = append(r.seqBuf[:0], remaining[len(remaining)-partialLen:]...)
-				} else {
-					// Flush any previous partial sequence buffer that turned out not to match
-					if len(r.seqBuf) > 0 {
-						r.pasteBuf.Write(r.seqBuf)
-						r.seqBuf = nil
-					}
-					r.pasteBuf.Write(remaining)
 				}
 				return
 			}
@@ -163,20 +170,13 @@ func (r *BracketedPasteReader) processBytes(data []byte) {
 				// Clear partial sequence buffer
 				r.seqBuf = nil
 			} else {
-				// Check for partial match at the end
+				// No start marker yet. Hold back a trailing partial match so
+				// the next read can complete it; the rest is ordinary input.
 				remaining := data[i:]
 				partialLen := r.partialMatchSuffix(remaining, pasteStartSeq)
+				r.outBuf.Write(remaining[:len(remaining)-partialLen])
 				if partialLen > 0 {
-					// Write everything except the potential partial sequence
-					r.outBuf.Write(remaining[:len(remaining)-partialLen])
 					r.seqBuf = append(r.seqBuf[:0], remaining[len(remaining)-partialLen:]...)
-				} else {
-					// Flush any previous partial sequence that didn't match
-					if len(r.seqBuf) > 0 {
-						r.outBuf.Write(r.seqBuf)
-						r.seqBuf = nil
-					}
-					r.outBuf.Write(remaining)
 				}
 				return
 			}

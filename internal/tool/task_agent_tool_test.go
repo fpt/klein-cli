@@ -65,6 +65,94 @@ func TestTaskAgentTool_RequiresArgs(t *testing.T) {
 	}
 }
 
+// Tool names are constants because goconst counts string literals across the
+// whole package and these already appear in other tool tests.
+const (
+	catToolRead = "Read"
+	catToolGrep = "Grep"
+	catToolGlob = "Glob"
+)
+
+func TestTaskAgentTool_DescriptionListsAgents(t *testing.T) {
+	t.Parallel()
+
+	mgr := NewTaskAgentToolManager()
+	mgr.SetCatalogProvider(func() []AgentCatalogEntry {
+		return []AgentCatalogEntry{
+			{
+				Name:        "explore",
+				Description: "Read-only search agent",
+				Tools:       []string{catToolRead, catToolGrep, catToolGlob},
+			},
+			{Name: "github-watcher:pr-watcher", Description: "Watches a PR for review activity"},
+		}
+	})
+
+	tool, ok := mgr.GetTool("Task")
+	if !ok {
+		t.Fatal("Task tool not registered")
+	}
+	desc := string(tool.Description())
+
+	for _, want := range []string{
+		"- explore: Read-only search agent (Tools: Read, Grep, Glob)",
+		"- github-watcher:pr-watcher: Watches a PR for review activity (Tools: All tools)",
+	} {
+		if !strings.Contains(desc, want) {
+			t.Errorf("description missing %q\ngot:\n%s", want, desc)
+		}
+	}
+}
+
+func TestTaskAgentTool_DescriptionWhenNoAgentsLoaded(t *testing.T) {
+	t.Parallel()
+
+	cases := map[string]func(*TaskAgentToolManager){
+		"no provider wired": func(*TaskAgentToolManager) {},
+		"provider returns none": func(m *TaskAgentToolManager) {
+			m.SetCatalogProvider(func() []AgentCatalogEntry { return nil })
+		},
+	}
+	for name, setup := range cases {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			mgr := NewTaskAgentToolManager()
+			setup(mgr)
+
+			tool, _ := mgr.GetTool("Task")
+			desc := string(tool.Description())
+
+			if !strings.Contains(desc, "No subagents are currently loaded") {
+				t.Errorf("description should say no agents are loaded, got:\n%s", desc)
+			}
+			if strings.Contains(desc, "Available agents") {
+				t.Errorf("description should not advertise an empty listing, got:\n%s", desc)
+			}
+		})
+	}
+}
+
+// The catalog is read on every Description() call so agents registered after
+// the tool manager is constructed (plugins load later) still show up.
+func TestTaskAgentTool_DescriptionReflectsLateRegistration(t *testing.T) {
+	t.Parallel()
+
+	mgr := NewTaskAgentToolManager()
+	var entries []AgentCatalogEntry
+	mgr.SetCatalogProvider(func() []AgentCatalogEntry { return entries })
+
+	tool, _ := mgr.GetTool("Task")
+	if strings.Contains(string(tool.Description()), "late-agent") {
+		t.Fatal("agent listed before registration")
+	}
+
+	entries = []AgentCatalogEntry{{Name: "late-agent", Description: "registered later"}}
+	if !strings.Contains(string(tool.Description()), "late-agent") {
+		t.Error("agent registered after construction is not listed")
+	}
+}
+
 func TestTaskAgentTool_UnwiredCallback(t *testing.T) {
 	mgr := NewTaskAgentToolManager() // SetCallback NOT called
 	res, _ := mgr.CallTool(context.Background(), "Task", message.ToolArgumentValues{

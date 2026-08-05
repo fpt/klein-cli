@@ -3,10 +3,12 @@ package app
 import (
 	"context"
 	"fmt"
+	"sort"
 	"strings"
 
 	"github.com/fpt/klein-cli/internal/permission"
 	pluginpkg "github.com/fpt/klein-cli/internal/plugin"
+	"github.com/fpt/klein-cli/internal/tool"
 	"github.com/fpt/klein-cli/pkg/agent/domain"
 	"github.com/fpt/klein-cli/pkg/message"
 )
@@ -115,6 +117,36 @@ func (a *Agent) ResolveAgent(name string) (*pluginpkg.Agent, bool) {
 		return nil, true
 	}
 	return nil, false
+}
+
+// AgentCatalog returns one entry per loaded subagent, for the Task tool's
+// available-agents listing.
+//
+// pluginAgents indexes most agents twice (scoped and bare), so entries are
+// deduplicated by definition pointer and reported under the name the model
+// should actually pass: the bare name when it is unambiguous, otherwise the
+// scoped "<plugin>:<agent>" form, which is all that survives indexing for a
+// contested name. The result is sorted so the tool description — and thus the
+// prompt cache — is stable across runs.
+func (a *Agent) AgentCatalog() []tool.AgentCatalogEntry {
+	preferred := make(map[*pluginpkg.Agent]string, len(a.pluginAgents))
+	for name, ag := range a.pluginAgents {
+		current, seen := preferred[ag]
+		if !seen || (strings.Contains(current, ":") && !strings.Contains(name, ":")) {
+			preferred[ag] = name
+		}
+	}
+
+	entries := make([]tool.AgentCatalogEntry, 0, len(preferred))
+	for ag, name := range preferred {
+		entries = append(entries, tool.AgentCatalogEntry{
+			Name:        name,
+			Description: ag.Description,
+			Tools:       ag.Tools,
+		})
+	}
+	sort.Slice(entries, func(i, j int) bool { return entries[i].Name < entries[j].Name })
+	return entries
 }
 
 // ListPluginCommands returns the names of every command available, scoped

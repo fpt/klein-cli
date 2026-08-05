@@ -97,6 +97,8 @@ func TestTaskAgentTool_DescriptionListsAgents(t *testing.T) {
 	for _, want := range []string{
 		"- explore: Read-only search agent (Tools: Read, Grep, Glob)",
 		"- github-watcher:pr-watcher: Watches a PR for review activity (Tools: All tools)",
+		// The wider dispatch set is named even when the listing is populated.
+		"A skill name also works as subagent_type",
 	} {
 		if !strings.Contains(desc, want) {
 			t.Errorf("description missing %q\ngot:\n%s", want, desc)
@@ -123,11 +125,20 @@ func TestTaskAgentTool_DescriptionWhenNoAgentsLoaded(t *testing.T) {
 			tool, _ := mgr.GetTool("Task")
 			desc := string(tool.Description())
 
-			if !strings.Contains(desc, "No subagents are currently loaded") {
+			if !strings.Contains(desc, "No named agents are loaded") {
 				t.Errorf("description should say no agents are loaded, got:\n%s", desc)
 			}
 			if strings.Contains(desc, "Available agents") {
 				t.Errorf("description should not advertise an empty listing, got:\n%s", desc)
+			}
+			// Dispatch accepts any definition permitting subagent mode, so an
+			// empty listing must not read as "this tool is unusable" — skills
+			// are still valid subagent_type values.
+			if !strings.Contains(desc, "skill name as subagent_type") {
+				t.Errorf("description must still point at skill dispatch, got:\n%s", desc)
+			}
+			if strings.Contains(desc, "cannot be used") {
+				t.Errorf("description wrongly claims the tool is unusable, got:\n%s", desc)
 			}
 		})
 	}

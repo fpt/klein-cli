@@ -92,20 +92,23 @@ func (t *taskAgentTool) Description() message.ToolDescription {
 		"definition, and returns a final answer as text. " +
 		"Subagents cannot spawn further subagents.\n\n")
 
+	// The listing names agent-kind definitions only, but dispatch accepts any
+	// definition permitting subagent mode — skills included. So an empty
+	// listing means "nothing curated to delegate to", never "this tool is
+	// unusable", and the skill guidance has to survive that case.
 	entries := t.manager.agentCatalog()
-	if len(entries) == 0 {
-		b.WriteString("No subagents are currently loaded, so this tool cannot be used.")
-		return message.ToolDescription(b.String())
+	if len(entries) > 0 {
+		b.WriteString("Available agents (pass the name exactly as listed as subagent_type):\n")
+		for _, e := range entries {
+			fmt.Fprintf(&b, "- %s: %s (Tools: %s)\n", e.Name, e.Description, formatAgentTools(e.Tools))
+		}
+		b.WriteString("\nA skill name also works as subagent_type, which runs that skill " +
+			"in its own context. The agents above are the ones written for delegation; " +
+			"reach for a skill only when one matches the task better.\n")
+	} else {
+		b.WriteString("No named agents are loaded. Pass a skill name as subagent_type " +
+			"instead, which runs that skill in its own context.\n")
 	}
-
-	b.WriteString("Available agents (pass the name exactly as listed as subagent_type):\n")
-	for _, e := range entries {
-		fmt.Fprintf(&b, "- %s: %s (Tools: %s)\n", e.Name, e.Description, formatAgentTools(e.Tools))
-	}
-
-	b.WriteString("\nA skill name also works as subagent_type, which runs that skill " +
-		"in its own context. The agents above are the ones written for delegation; " +
-		"reach for a skill only when one matches the task better.\n")
 
 	b.WriteString("\nBrief the subagent as you would a colleague who has not seen this " +
 		"conversation: state the goal, what you already ruled out, and how long an " +

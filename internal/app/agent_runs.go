@@ -35,16 +35,48 @@ type agentRun struct {
 	cancel     context.CancelFunc
 	done       chan struct{}
 
+	// A time.Time carries its pointer in the middle of its 24 bytes, so the
+	// two of them go before the strings: ending the struct on a string keeps
+	// the last pointer 8 bytes earlier (govet fieldalignment).
+	started time.Time // immutable
+	ended   time.Time // guarded by mu
+
+	// Immutable after construction; readable without synchronization.
 	id         string
 	label      string
 	task       string
-	result     string
-	errText    string
 	outputPath string
 
-	started time.Time
-	ended   time.Time
+	// Guarded by mu.
+	result  string
+	errText string
 	status  RunStatus
+
+	// mu guards ended, result, errText, and status. It is the run's own lock, not the
+	// registry's: the registry lock protects the map, and a finishing run must
+	// not have to take it. StopAgentRun waits on done while a worker completes,
+	// and if that completion needed the registry lock the two would deadlock.
+	//
+	// Lock order is registry.mu -> run.mu, never the reverse. syncBuffer.mu is a
+	// leaf and is never held while acquiring either.
+	//
+	// Declared last so the pointerless mutex does not sit between pointer
+	// fields (govet fieldalignment).
+	mu sync.Mutex
+}
+
+// finish records a run's outcome. Takes only the run's own lock.
+func (a *agentRun) finish(status RunStatus, result, errText string) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.status, a.result, a.errText, a.ended = status, result, errText, time.Now()
+}
+
+// snapshot returns a consistent copy of the mutable fields.
+func (a *agentRun) snapshot() (status RunStatus, result, errText string, ended time.Time) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.status, a.result, a.errText, a.ended
 }
 
 // RunInfo is a snapshot of a background agent for the listing tools.
@@ -160,13 +192,17 @@ func (r *agentRunRegistry) CancelAll() int {
 }
 
 func (a *agentRun) info() RunInfo {
+	status, _, _, ended := a.snapshot()
 	return RunInfo{
-		ID: a.id, Label: a.label, Task: a.task, Status: a.getStatus(),
-		OutputPath: a.outputPath, Started: a.started, Ended: a.ended,
+		ID: a.id, Label: a.label, Task: a.task, Status: status,
+		OutputPath: a.outputPath, Started: a.started, Ended: ended,
 	}
 }
 
-func (a *agentRun) getStatus() RunStatus { return a.status }
+func (a *agentRun) getStatus() RunStatus {
+	status, _, _, _ := a.snapshot()
+	return status
+}
 
 // StartBackgroundAgent launches def as a detached subagent and returns its run
 // id immediately.
@@ -218,16 +254,13 @@ func (a *Agent) StartBackgroundAgent(def *skill.Definition, task string) (RunInf
 			SkipApproval: true,
 		})
 
-		a.agentRuns.mu.Lock()
-		defer a.agentRuns.mu.Unlock()
-		run.ended = time.Now()
 		switch {
 		case err == nil:
-			run.status, run.result = RunCompleted, result
+			run.finish(RunCompleted, result, "")
 		case ctx.Err() != nil:
-			run.status, run.errText = RunKilled, "stopped"
+			run.finish(RunKilled, "", "stopped")
 		default:
-			run.status, run.errText = RunFailed, err.Error()
+			run.finish(RunFailed, "", err.Error())
 		}
 	}()
 
@@ -290,12 +323,13 @@ func (a *Agent) AgentRunOutput(
 		}
 	}
 
-	a.agentRuns.mu.Lock()
-	defer a.agentRuns.mu.Unlock()
+	// Snapshot first, then read the transcript with no lock held: it can be
+	// megabytes, and copying it under a lock would stall a finishing run.
+	status, result, errText, _ := run.snapshot()
 	return tool.AgentRunOutput{
-		ID: run.id, Label: run.label, Status: string(run.status),
+		ID: run.id, Label: run.label, Status: string(status),
 		OutputPath: run.outputPath, Transcript: run.transcript.String(),
-		Result: run.result, Error: run.errText, Elapsed: elapsed(run.info()),
+		Result: result, Error: errText, Elapsed: elapsed(run.info()),
 	}, nil
 }
 
@@ -306,12 +340,19 @@ func (a *Agent) StopAgentRun(id string) (string, error) {
 	if !ok {
 		return "", fmt.Errorf("no such background agent %q", id)
 	}
-	if run.getStatus() != RunRunning {
-		return fmt.Sprintf("agent %s already %s", id, run.getStatus()), nil
+	if status := run.getStatus(); status != RunRunning {
+		return fmt.Sprintf("agent %s already %s", id, status), nil
 	}
+
+	// cancel() and the wait happen with no lock held: the worker takes the
+	// run's lock to record its outcome, so holding it here would deadlock.
 	run.cancel()
 	<-run.done
-	return fmt.Sprintf("agent %s stopped", id), nil
+
+	// Report what actually happened. A run that completed in the moment
+	// between the check and the cancel is completed, not stopped, and saying
+	// otherwise would send the caller looking for a result that exists.
+	return fmt.Sprintf("agent %s %s", id, run.getStatus()), nil
 }
 
 // CancelBackgroundAgents stops everything still running and reports how many.

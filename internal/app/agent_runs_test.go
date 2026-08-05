@@ -98,6 +98,80 @@ func TestAgentRunRegistry_CancelAllOnlyTouchesRunning(t *testing.T) {
 	}
 }
 
+// Concurrent AgentStop and completion is the case the original tests missed:
+// they only ever stopped runs whose status nothing else was writing. Under
+// -race this fails if status is read without the run's own lock.
+func TestStopAgentRun_RacesWithCompletion(t *testing.T) {
+	t.Parallel()
+
+	for range 50 {
+		r := newAgentRunRegistry()
+		agent := &Agent{agentRuns: r}
+		run := newTestRun(r, testRunID, RunRunning)
+
+		var wg sync.WaitGroup
+		wg.Add(2)
+		// A worker finishing at the same moment the user stops it.
+		go func() {
+			defer wg.Done()
+			run.finish(RunCompleted, "done", "")
+			close(run.done)
+		}()
+		go func() {
+			defer wg.Done()
+			if _, err := agent.StopAgentRun(testRunID); err != nil {
+				t.Errorf("StopAgentRun: %v", err)
+			}
+		}()
+		wg.Wait()
+
+		// Whichever won, the reported status must be a real terminal one —
+		// never "stopped" for a run that completed.
+		if got := run.getStatus(); got != RunCompleted {
+			t.Fatalf("status = %q, want the recorded outcome to survive", got)
+		}
+	}
+}
+
+// AgentOutput must not block a run from finishing: it reads the transcript
+// without holding a lock the worker needs.
+func TestAgentRunOutput_DoesNotBlockCompletion(t *testing.T) {
+	t.Parallel()
+
+	r := newAgentRunRegistry()
+	agent := &Agent{agentRuns: r}
+	run := newTestRun(r, testRunID, RunRunning)
+
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		for range 100 {
+			_, _ = run.transcript.Write([]byte("progress "))
+			run.finish(RunRunning, "", "")
+		}
+		run.finish(RunCompleted, "final", "")
+		close(run.done)
+	}()
+	go func() {
+		defer wg.Done()
+		for range 100 {
+			if _, err := agent.AgentRunOutput(context.Background(), testRunID, false, 0); err != nil {
+				t.Errorf("AgentRunOutput: %v", err)
+			}
+		}
+	}()
+	wg.Wait()
+
+	out, err := agent.AgentRunOutput(context.Background(), testRunID, true, time.Second)
+	if err != nil {
+		t.Fatalf("AgentRunOutput: %v", err)
+	}
+	if out.Result != "final" {
+		t.Errorf("result = %q, want the completed result", out.Result)
+	}
+}
+
 func TestStopAgentRun(t *testing.T) {
 	t.Parallel()
 

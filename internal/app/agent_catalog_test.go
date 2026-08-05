@@ -10,6 +10,7 @@ import (
 	"github.com/fpt/klein-cli/internal/infra"
 	pluginpkg "github.com/fpt/klein-cli/internal/plugin"
 	"github.com/fpt/klein-cli/internal/skill"
+	"github.com/fpt/klein-cli/internal/tool"
 	"github.com/fpt/klein-cli/pkg/agent/domain"
 	pkgLogger "github.com/fpt/klein-cli/pkg/logger"
 )
@@ -433,7 +434,7 @@ func TestDispatchTask_RejectsWrongModeWithARealMessage(t *testing.T) {
 		catNameRole: {Name: catNameRole, Kind: skill.KindRole},
 	}
 
-	_, err := a.DispatchTask(context.Background(), catNameRole, "do a thing")
+	_, err := a.DispatchTask(context.Background(), tool.TaskRequest{SubagentType: catNameRole, Prompt: "do a thing"})
 	if err == nil {
 		t.Fatal("expected an error dispatching to a startup-only definition")
 	}
@@ -443,7 +444,7 @@ func TestDispatchTask_RejectsWrongModeWithARealMessage(t *testing.T) {
 		}
 	}
 
-	_, err = a.DispatchTask(context.Background(), "no-such-thing", "x")
+	_, err = a.DispatchTask(context.Background(), tool.TaskRequest{SubagentType: "no-such-thing", Prompt: "x"})
 	if err == nil || !strings.Contains(err.Error(), "not found") {
 		t.Errorf("unknown name should say not found, got %v", err)
 	}

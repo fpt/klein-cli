@@ -304,9 +304,12 @@ func formatBackgroundLaunch(info RunInfo) string {
 	if info.OutputPath != "" {
 		fmt.Fprintf(&b, "transcript_file: %s\n", info.OutputPath)
 	}
-	b.WriteString("No result yet. Read it later with AgentOutput(agent_id: \"" + info.ID + "\"), " +
-		"or AgentStop to cancel. Tell the user what you launched and end your response — " +
-		"do not predict or fabricate what it will find.")
+	b.WriteString("No result yet. It will be delivered to you automatically in a later " +
+		"turn as an <agent-notification>; you do not need to poll for it. " +
+		"AgentOutput(agent_id: \"" + info.ID + "\") checks early, AgentStop cancels.\n" +
+		"Tell the user what you launched and end your response. Do not predict or " +
+		"fabricate what it will find — if the user asks before it lands, say it is " +
+		"still running and give status, not a guess.")
 	return b.String()
 }
 
@@ -761,6 +764,11 @@ func (a *Agent) Invoke(ctx context.Context, userInput string, skillName string, 
 	if !exists {
 		return nil, fmt.Errorf("skill '%s' not found", skillName)
 	}
+
+	// Deliver any background agent that finished since the last turn. Draining
+	// here rather than in each front end means the REPL, the Connect server and
+	// the gateway all get it without three separate chances to forget.
+	userInput = a.prependAgentNotifications(userInput)
 
 	// Codex backend: route the whole turn to a codex thread instead of the
 	// ReAct loop. The skill still resolves (its prompt steers codex), but klein's

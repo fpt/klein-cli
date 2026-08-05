@@ -51,6 +51,11 @@ type agentRun struct {
 	result  string
 	errText string
 	status  RunStatus
+	// notified records that this run's outcome has been handed to the
+	// conversation. Set inside the same critical section that reads the
+	// outcome, so a run that is stopped and then completes cannot report
+	// twice.
+	notified bool
 
 	// mu guards ended, result, errText, and status. It is the run's own lock, not the
 	// registry's: the registry lock protects the map, and a finishing run must
@@ -72,11 +77,41 @@ func (a *agentRun) finish(status RunStatus, result, errText string) {
 	a.status, a.result, a.errText, a.ended = status, result, errText, time.Now()
 }
 
+// takeNotification returns this run's outcome exactly once, and only after it
+// has finished. The check and the flag are set under one lock so two drains
+// racing cannot both claim it.
+func (a *agentRun) takeNotification() (RunNotification, bool) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.notified || a.status == RunRunning {
+		return RunNotification{}, false
+	}
+	a.notified = true
+	return RunNotification{
+		ID: a.id, Label: a.label, Task: a.task, Status: a.status,
+		Result: a.result, Error: a.errText, OutputPath: a.outputPath,
+		Elapsed: a.ended.Sub(a.started).Round(time.Second),
+	}, true
+}
+
 // snapshot returns a consistent copy of the mutable fields.
 func (a *agentRun) snapshot() (status RunStatus, result, errText string, ended time.Time) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	return a.status, a.result, a.errText, a.ended
+}
+
+// RunNotification is a finished run's outcome, delivered into the conversation
+// once.
+type RunNotification struct {
+	ID         string
+	Label      string
+	Task       string
+	Result     string
+	Error      string
+	OutputPath string
+	Status     RunStatus
+	Elapsed    time.Duration
 }
 
 // RunInfo is a snapshot of a background agent for the listing tools.
@@ -369,4 +404,120 @@ func elapsed(i RunInfo) time.Duration {
 		end = time.Now()
 	}
 	return end.Sub(i.Started).Round(time.Second)
+}
+
+// drainNotifications returns the outcome of every run that has finished and not
+// yet been reported, marking each as reported.
+func (r *agentRunRegistry) drainNotifications() []RunNotification {
+	r.mu.Lock()
+	runs := make([]*agentRun, 0, len(r.runs))
+	for _, run := range r.runs {
+		runs = append(runs, run)
+	}
+	r.mu.Unlock()
+
+	var out []RunNotification
+	for _, run := range runs {
+		if n, ok := run.takeNotification(); ok {
+			out = append(out, n)
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
+	return out
+}
+
+// HasPendingAgentNotifications reports whether any finished run is still
+// waiting to be reported. The REPL uses it to decide whether a bare Enter
+// should drive a turn.
+func (a *Agent) HasPendingAgentNotifications() bool {
+	if a.agentRuns == nil {
+		return false
+	}
+	a.agentRuns.mu.Lock()
+	runs := make([]*agentRun, 0, len(a.agentRuns.runs))
+	for _, run := range a.agentRuns.runs {
+		runs = append(runs, run)
+	}
+	a.agentRuns.mu.Unlock()
+
+	for _, run := range runs {
+		run.mu.Lock()
+		pending := !run.notified && run.status != RunRunning
+		run.mu.Unlock()
+		if pending {
+			return true
+		}
+	}
+	return false
+}
+
+// prependAgentNotifications puts any finished background agents' outcomes in
+// front of the user's message for this turn.
+//
+// This lives in Invoke rather than in the REPL's executeTurn so every caller of
+// a session turn gets it for free — the REPL, the Connect server, and the
+// gateway all funnel through here, and duplicating the drain per front end
+// would be three chances to forget it.
+func (a *Agent) prependAgentNotifications(userInput string) string {
+	if a.agentRuns == nil {
+		return userInput
+	}
+	notes := a.agentRuns.drainNotifications()
+	if len(notes) == 0 {
+		return userInput
+	}
+
+	var b strings.Builder
+	for _, n := range notes {
+		b.WriteString(formatRunNotification(n))
+		b.WriteString("\n")
+	}
+
+	// Say what to do with them. Delivering the block alone is not enough: a
+	// model handed a notification plus an unrelated question will answer the
+	// question and silently drop the result, which is exactly the outcome
+	// backgrounding was supposed to avoid. Stated once, not per notification.
+	b.WriteString(notificationInstruction(len(notes)))
+	if userInput == "" {
+		return strings.TrimRight(b.String(), "\n")
+	}
+	b.WriteString("\n")
+	b.WriteString(userInput)
+	return b.String()
+}
+
+// notificationInstruction tells the model to relay what just arrived. Without
+// it the notification is delivered and ignored.
+func notificationInstruction(n int) string {
+	subject := "A background agent you started has finished"
+	if n > 1 {
+		subject = fmt.Sprintf("%d background agents you started have finished", n)
+	}
+	return subject + ". Report the result(s) to the user in your reply, before " +
+		"anything else they asked for. Do not silently drop them, and do not " +
+		"re-run the work yourself — the answer is above."
+}
+
+// formatRunNotification renders one outcome. The result is included inline —
+// that is the whole point of backgrounding, so the caller does not have to go
+// and fetch it — but the transcript is not; it stays in the file.
+func formatRunNotification(n RunNotification) string {
+	var b strings.Builder
+	b.WriteString("<agent-notification>\n")
+	fmt.Fprintf(&b, "<agent-id>%s</agent-id>\n", n.ID)
+	fmt.Fprintf(&b, "<agent>%s</agent>\n", n.Label)
+	fmt.Fprintf(&b, "<status>%s</status>\n", n.Status)
+	fmt.Fprintf(&b, "<summary>Background agent %s (%s) %s after %s.</summary>\n",
+		n.ID, n.Label, n.Status, n.Elapsed)
+	if n.OutputPath != "" {
+		fmt.Fprintf(&b, "<transcript-file>%s</transcript-file>\n", n.OutputPath)
+	}
+	if n.Error != "" {
+		fmt.Fprintf(&b, "<error>%s</error>\n", n.Error)
+	}
+	if n.Result != "" {
+		fmt.Fprintf(&b, "<result>\n%s\n</result>\n", n.Result)
+	}
+	b.WriteString("</agent-notification>")
+	return b.String()
 }

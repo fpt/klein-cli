@@ -8,7 +8,11 @@ import (
 	"time"
 )
 
-const testRunID = "agent-1"
+const (
+	testRunID      = "agent-1"
+	testResult     = "the answer"
+	testTranscript = "/tmp/agent-1.md"
+)
 
 func TestSyncBuffer_ConcurrentWriteAndRead(t *testing.T) {
 	t.Parallel()
@@ -214,7 +218,7 @@ func TestAgentRunOutput_BlockUnblocksOnCompletion(t *testing.T) {
 	go func() {
 		time.Sleep(20 * time.Millisecond)
 		r.mu.Lock()
-		run.status, run.result, run.ended = RunCompleted, "the answer", time.Now()
+		run.status, run.result, run.ended = RunCompleted, testResult, time.Now()
 		r.mu.Unlock()
 		close(run.done)
 	}()
@@ -227,7 +231,7 @@ func TestAgentRunOutput_BlockUnblocksOnCompletion(t *testing.T) {
 	if took := time.Since(start); took > 2*time.Second {
 		t.Errorf("blocked for %s; should return as soon as the run finishes", took)
 	}
-	if out.Status != string(RunCompleted) || out.Result != "the answer" {
+	if out.Status != string(RunCompleted) || out.Result != testResult {
 		t.Errorf("out = %+v, want the completed result", out)
 	}
 }
@@ -266,11 +270,159 @@ func TestFormatBackgroundLaunch(t *testing.T) {
 	t.Parallel()
 
 	msg := formatBackgroundLaunch(RunInfo{
-		ID: testRunID, Label: "pr-watcher", OutputPath: "/tmp/agent-1.md",
+		ID: testRunID, Label: "pr-watcher", OutputPath: testTranscript,
 	})
-	for _, want := range []string{testRunID, "pr-watcher", "No result yet", "AgentOutput", "/tmp/agent-1.md"} {
+	for _, want := range []string{testRunID, "pr-watcher", "No result yet", "AgentOutput", testTranscript} {
 		if !strings.Contains(msg, want) {
 			t.Errorf("launch message should mention %q, got:\n%s", want, msg)
+		}
+	}
+}
+
+// A finished run reports exactly once, however many drains race for it.
+func TestDrainNotifications_ExactlyOnce(t *testing.T) {
+	t.Parallel()
+
+	r := newAgentRunRegistry()
+	run := newTestRun(r, testRunID, RunRunning)
+	run.finish(RunCompleted, testResult, "")
+
+	var mu sync.Mutex
+	var claimed []RunNotification
+	var wg sync.WaitGroup
+	for range 20 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			got := r.drainNotifications()
+			mu.Lock()
+			claimed = append(claimed, got...)
+			mu.Unlock()
+		}()
+	}
+	wg.Wait()
+
+	if len(claimed) != 1 {
+		t.Fatalf("claimed %d notifications, want exactly 1", len(claimed))
+	}
+	if claimed[0].Result != testResult {
+		t.Errorf("result = %q", claimed[0].Result)
+	}
+	if got := r.drainNotifications(); len(got) != 0 {
+		t.Errorf("a later drain returned %d, want none", len(got))
+	}
+}
+
+// A run that is stopped and then records its outcome must not report twice —
+// the flag and the outcome are read in one critical section.
+func TestDrainNotifications_StoppedThenFinished(t *testing.T) {
+	t.Parallel()
+
+	r := newAgentRunRegistry()
+	run := newTestRun(r, testRunID, RunRunning)
+	run.finish(RunKilled, "", "stopped")
+
+	if got := r.drainNotifications(); len(got) != 1 || got[0].Status != RunKilled {
+		t.Fatalf("first drain = %+v, want one killed notification", got)
+	}
+	// A late completion write cannot resurrect the notification.
+	run.finish(RunCompleted, "late", "")
+	if got := r.drainNotifications(); len(got) != 0 {
+		t.Errorf("second drain = %+v, want none", got)
+	}
+}
+
+// A run still going is not reported.
+func TestDrainNotifications_SkipsRunning(t *testing.T) {
+	t.Parallel()
+
+	r := newAgentRunRegistry()
+	newTestRun(r, testRunID, RunRunning)
+
+	if got := r.drainNotifications(); len(got) != 0 {
+		t.Errorf("drain returned %+v for a running agent", got)
+	}
+}
+
+func TestPrependAgentNotifications(t *testing.T) {
+	t.Parallel()
+
+	t.Run("prepends before the user message", func(t *testing.T) {
+		t.Parallel()
+
+		r := newAgentRunRegistry()
+		a := &Agent{agentRuns: r}
+		run := newTestRun(r, testRunID, RunRunning)
+		run.finish(RunCompleted, "found it at m.go:2", "")
+
+		got := a.prependAgentNotifications("what next?")
+		hasBlock := strings.Contains(got, "<agent-notification>")
+		if !hasBlock || !strings.Contains(got, "found it at m.go:2") {
+			t.Errorf("notification missing from %q", got)
+		}
+		if !strings.HasSuffix(got, "what next?") {
+			t.Errorf("user message should come last, got %q", got)
+		}
+	})
+
+	t.Run("notifications alone are a turn", func(t *testing.T) {
+		t.Parallel()
+
+		r := newAgentRunRegistry()
+		a := &Agent{agentRuns: r}
+		run := newTestRun(r, testRunID, RunRunning)
+		run.finish(RunCompleted, "done", "")
+
+		got := a.prependAgentNotifications("")
+		if !strings.Contains(got, "<agent-notification>") {
+			t.Errorf("empty input should still carry the notification, got %q", got)
+		}
+		if strings.HasSuffix(got, "\n") {
+			t.Errorf("no trailing blank line expected, got %q", got)
+		}
+	})
+
+	t.Run("nothing pending leaves the input alone", func(t *testing.T) {
+		t.Parallel()
+
+		a := &Agent{agentRuns: newAgentRunRegistry()}
+		if got := a.prependAgentNotifications("hello"); got != "hello" {
+			t.Errorf("got %q, want the input unchanged", got)
+		}
+	})
+}
+
+func TestHasPendingAgentNotifications(t *testing.T) {
+	t.Parallel()
+
+	r := newAgentRunRegistry()
+	a := &Agent{agentRuns: r}
+	run := newTestRun(r, testRunID, RunRunning)
+
+	if a.HasPendingAgentNotifications() {
+		t.Error("a running agent is not pending delivery")
+	}
+	run.finish(RunCompleted, "x", "")
+	if !a.HasPendingAgentNotifications() {
+		t.Error("a finished agent should be pending delivery")
+	}
+	_ = r.drainNotifications()
+	if a.HasPendingAgentNotifications() {
+		t.Error("delivered notifications should not stay pending")
+	}
+}
+
+// The transcript stays in its file; only the result travels.
+func TestFormatRunNotification_CarriesResultNotTranscript(t *testing.T) {
+	t.Parallel()
+
+	out := formatRunNotification(RunNotification{
+		ID: testRunID, Label: nameExplore, Status: RunCompleted,
+		Result: "m.go:2", OutputPath: testTranscript, Elapsed: 16 * time.Second,
+	})
+	for _, want := range []string{"<agent-notification>", testRunID, nameExplore, "completed", "m.go:2", "16s"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("notification should mention %q, got:\n%s", want, out)
 		}
 	}
 }

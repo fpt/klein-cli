@@ -294,7 +294,7 @@ func TestDrainNotifications_ExactlyOnce(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			got := r.drainNotifications()
+			got, _ := r.drainNotifications()
 			mu.Lock()
 			claimed = append(claimed, got...)
 			mu.Unlock()
@@ -308,7 +308,7 @@ func TestDrainNotifications_ExactlyOnce(t *testing.T) {
 	if claimed[0].Result != testResult {
 		t.Errorf("result = %q", claimed[0].Result)
 	}
-	if got := r.drainNotifications(); len(got) != 0 {
+	if got, _ := r.drainNotifications(); len(got) != 0 {
 		t.Errorf("a later drain returned %d, want none", len(got))
 	}
 }
@@ -322,12 +322,12 @@ func TestDrainNotifications_StoppedThenFinished(t *testing.T) {
 	run := newTestRun(r, testRunID, RunRunning)
 	run.finish(RunKilled, "", "stopped")
 
-	if got := r.drainNotifications(); len(got) != 1 || got[0].Status != RunKilled {
+	if got, _ := r.drainNotifications(); len(got) != 1 || got[0].Status != RunKilled {
 		t.Fatalf("first drain = %+v, want one killed notification", got)
 	}
 	// A late completion write cannot resurrect the notification.
 	run.finish(RunCompleted, "late", "")
-	if got := r.drainNotifications(); len(got) != 0 {
+	if got, _ := r.drainNotifications(); len(got) != 0 {
 		t.Errorf("second drain = %+v, want none", got)
 	}
 }
@@ -339,7 +339,7 @@ func TestDrainNotifications_SkipsRunning(t *testing.T) {
 	r := newAgentRunRegistry()
 	newTestRun(r, testRunID, RunRunning)
 
-	if got := r.drainNotifications(); len(got) != 0 {
+	if got, _ := r.drainNotifications(); len(got) != 0 {
 		t.Errorf("drain returned %+v for a running agent", got)
 	}
 }
@@ -355,7 +355,7 @@ func TestPrependAgentNotifications(t *testing.T) {
 		run := newTestRun(r, testRunID, RunRunning)
 		run.finish(RunCompleted, "found it at m.go:2", "")
 
-		got := a.prependAgentNotifications("what next?")
+		got, _ := a.prependAgentNotifications("what next?")
 		hasBlock := strings.Contains(got, "<agent-notification>")
 		if !hasBlock || !strings.Contains(got, "found it at m.go:2") {
 			t.Errorf("notification missing from %q", got)
@@ -373,7 +373,7 @@ func TestPrependAgentNotifications(t *testing.T) {
 		run := newTestRun(r, testRunID, RunRunning)
 		run.finish(RunCompleted, "done", "")
 
-		got := a.prependAgentNotifications("")
+		got, _ := a.prependAgentNotifications("")
 		if !strings.Contains(got, "<agent-notification>") {
 			t.Errorf("empty input should still carry the notification, got %q", got)
 		}
@@ -386,7 +386,7 @@ func TestPrependAgentNotifications(t *testing.T) {
 		t.Parallel()
 
 		a := &Agent{agentRuns: newAgentRunRegistry()}
-		if got := a.prependAgentNotifications("hello"); got != "hello" {
+		if got, _ := a.prependAgentNotifications("hello"); got != "hello" {
 			t.Errorf("got %q, want the input unchanged", got)
 		}
 	})
@@ -406,7 +406,7 @@ func TestHasPendingAgentNotifications(t *testing.T) {
 	if !a.HasPendingAgentNotifications() {
 		t.Error("a finished agent should be pending delivery")
 	}
-	_ = r.drainNotifications()
+	_, _ = r.drainNotifications()
 	if a.HasPendingAgentNotifications() {
 		t.Error("delivered notifications should not stay pending")
 	}
@@ -424,5 +424,54 @@ func TestFormatRunNotification_CarriesResultNotTranscript(t *testing.T) {
 		if !strings.Contains(out, want) {
 			t.Errorf("notification should mention %q, got:\n%s", want, out)
 		}
+	}
+}
+
+// A turn that ends before the message reaches the conversation must put the
+// notifications back. Without this a Ctrl+C during the turn after an agent
+// finishes loses that result permanently: it is flagged delivered, never
+// shown, and every later drain skips it.
+func TestDrainNotifications_ReleaseRequeues(t *testing.T) {
+	t.Parallel()
+
+	r := newAgentRunRegistry()
+	run := newTestRun(r, testRunID, RunRunning)
+	run.finish(RunCompleted, testResult, "")
+
+	notes, release := r.drainNotifications()
+	if len(notes) != 1 {
+		t.Fatalf("first drain = %d, want 1", len(notes))
+	}
+	// While reserved, a concurrent drain must not take the same one.
+	if again, _ := r.drainNotifications(); len(again) != 0 {
+		t.Errorf("reserved notification taken twice: %+v", again)
+	}
+
+	release()
+
+	after, _ := r.drainNotifications()
+	if len(after) != 1 || after[0].Result != testResult {
+		t.Fatalf("after release = %+v, want the notification back", after)
+	}
+}
+
+// Releasing is only for the undelivered case; a committed turn must not put
+// them back, or the model would see the same result twice.
+func TestPrependAgentNotifications_ReleaseIsOptional(t *testing.T) {
+	t.Parallel()
+
+	r := newAgentRunRegistry()
+	a := &Agent{agentRuns: r}
+	run := newTestRun(r, testRunID, RunRunning)
+	run.finish(RunCompleted, testResult, "")
+
+	got, release := a.prependAgentNotifications("hello")
+	if !strings.Contains(got, testResult) {
+		t.Fatalf("notification missing from %q", got)
+	}
+	_ = release // a delivered turn simply never calls it
+
+	if again, _ := a.agentRuns.drainNotifications(); len(again) != 0 {
+		t.Errorf("delivered notification re-drained: %+v", again)
 	}
 }

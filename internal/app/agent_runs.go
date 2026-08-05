@@ -406,9 +406,15 @@ func elapsed(i RunInfo) time.Duration {
 	return end.Sub(i.Started).Round(time.Second)
 }
 
-// drainNotifications returns the outcome of every run that has finished and not
-// yet been reported, marking each as reported.
-func (r *agentRunRegistry) drainNotifications() []RunNotification {
+// drainNotifications reserves the outcome of every run that has finished and
+// not yet been reported, and returns them with a restore function.
+//
+// Reserving marks them so a concurrent drain cannot take the same ones, but the
+// claim is not final: a turn that fails before the message reaches the
+// conversation must call restore, or the result is lost for good — every later
+// drain would skip it. Ctrl+C during a turn is the case that makes this
+// matter, and it is not rare.
+func (r *agentRunRegistry) drainNotifications() (notes []RunNotification, restore func()) {
 	r.mu.Lock()
 	runs := make([]*agentRun, 0, len(r.runs))
 	for _, run := range r.runs {
@@ -416,14 +422,22 @@ func (r *agentRunRegistry) drainNotifications() []RunNotification {
 	}
 	r.mu.Unlock()
 
-	var out []RunNotification
+	var claimed []*agentRun
 	for _, run := range runs {
 		if n, ok := run.takeNotification(); ok {
-			out = append(out, n)
+			notes = append(notes, n)
+			claimed = append(claimed, run)
 		}
 	}
-	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
-	return out
+	sort.Slice(notes, func(i, j int) bool { return notes[i].ID < notes[j].ID })
+
+	return notes, func() {
+		for _, run := range claimed {
+			run.mu.Lock()
+			run.notified = false
+			run.mu.Unlock()
+		}
+	}
 }
 
 // HasPendingAgentNotifications reports whether any finished run is still
@@ -458,13 +472,20 @@ func (a *Agent) HasPendingAgentNotifications() bool {
 // a session turn gets it for free — the REPL, the Connect server, and the
 // gateway all funnel through here, and duplicating the drain per front end
 // would be three chances to forget it.
-func (a *Agent) prependAgentNotifications(userInput string) string {
+//
+// It returns the augmented input and a release function. The notifications are
+// reserved, not finally claimed: the caller must call release if the turn ends
+// without the message reaching the conversation, which puts them back for the
+// next turn. Losing a background result permanently — which is what an
+// unreleased claim means, since every later drain skips it — is far worse than
+// showing it a turn later.
+func (a *Agent) prependAgentNotifications(userInput string) (string, func()) {
 	if a.agentRuns == nil {
-		return userInput
+		return userInput, func() {}
 	}
-	notes := a.agentRuns.drainNotifications()
+	notes, release := a.agentRuns.drainNotifications()
 	if len(notes) == 0 {
-		return userInput
+		return userInput, func() {}
 	}
 
 	var b strings.Builder
@@ -478,12 +499,15 @@ func (a *Agent) prependAgentNotifications(userInput string) string {
 	// question and silently drop the result, which is exactly the outcome
 	// backgrounding was supposed to avoid. Stated once, not per notification.
 	b.WriteString(notificationInstruction(len(notes)))
+
+	out := b.String()
 	if userInput == "" {
-		return strings.TrimRight(b.String(), "\n")
+		// A bare Enter with results waiting: the notifications are the turn.
+		out = strings.TrimRight(out, "\n")
+	} else {
+		out += "\n" + userInput
 	}
-	b.WriteString("\n")
-	b.WriteString(userInput)
-	return b.String()
+	return out, release
 }
 
 // notificationInstruction tells the model to relay what just arrived. Without

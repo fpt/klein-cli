@@ -89,14 +89,12 @@ func (t *taskAgentTool) Description() message.ToolDescription {
 	var b strings.Builder
 	b.WriteString("Delegate a task to a NAMED subagent. The subagent runs in its own " +
 		"context using the system prompt and tool restrictions declared in its " +
-		"definition, and returns a final answer as text. Prefer this tool over " +
-		"spawn_agent whenever a named agent fits the task. " +
+		"definition, and returns a final answer as text. " +
 		"Subagents cannot spawn further subagents.\n\n")
 
 	entries := t.manager.agentCatalog()
 	if len(entries) == 0 {
-		b.WriteString("No subagents are currently loaded, so this tool cannot be used. " +
-			"Use spawn_agent instead, which dispatches to a built-in skill.")
+		b.WriteString("No subagents are currently loaded, so this tool cannot be used.")
 		return message.ToolDescription(b.String())
 	}
 
@@ -104,6 +102,10 @@ func (t *taskAgentTool) Description() message.ToolDescription {
 	for _, e := range entries {
 		fmt.Fprintf(&b, "- %s: %s (Tools: %s)\n", e.Name, e.Description, formatAgentTools(e.Tools))
 	}
+
+	b.WriteString("\nA skill name also works as subagent_type, which runs that skill " +
+		"in its own context. The agents above are the ones written for delegation; " +
+		"reach for a skill only when one matches the task better.\n")
 
 	b.WriteString("\nBrief the subagent as you would a colleague who has not seen this " +
 		"conversation: state the goal, what you already ruled out, and how long an " +

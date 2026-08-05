@@ -242,6 +242,17 @@ resolves either without caring which it got; the distinction is enforced where a
 is *selected* (validated against roles, in `validateRole`) or *listed* (roles excluded
 from the skill catalog and from `ListScenarios`). Passing a skill to `-r` is an error.
 
+Which of the three a caller may run is decided by **invocation mode**, declared
+per definition and chosen by the caller: `startup` (opens a session; shared
+state; output to the user), `subagent` (own ReAct loop, fresh state, returns
+text to the caller), `inline` (injected into the running context, what
+`ReadSkill` does). A file that omits `modes:` inherits the set implied by where
+it came from — `roles/` → `[startup]`, `agents/` → `[subagent]`, `skills/` →
+`[inline, subagent]` — so `modes:` is only needed to widen. `-r` accepts any
+definition permitting `startup`; the `Task` tool accepts any permitting
+`subagent` (its listing is curated to agent-kind definitions, but a skill name
+works too); `ReadSkill` accepts any permitting `inline`.
+
 Agents are a separate registry with the same ladder but a flat file layout —
 `agents/{name}.md`, one file per agent, matching Claude Code's `.claude/agents/`
 convention. `plugin.LoadAgents` handles the embedded/personal/project tiers;
@@ -257,6 +268,7 @@ which is how the model discovers what it can delegate to.
 - **Tool Filtering**: Available tools filtered per skill via `allowed-tools` field
 - **Security-First Design**: Read→write semantics, directory allowlists, file blacklists
 - **Tool Composition**: All tool managers composed at construction, filtered at invoke time per skill
+- **One Dispatcher**: `Task` is the only subagent dispatcher; `spawn_agent` was folded into it
 
 **Simplified Workflow Architecture:**
 1. **Role Selection** → User picks the session's startup prompt via `-r` (validated: a skill name is rejected)
@@ -823,7 +835,10 @@ Override or extend any of them by placing files in the matching directory:
 **Frontmatter Fields:**
 - `name` - Skill identifier (used for invocation)
 - `description` - Human-readable description of the skill
-- `allowed-tools` - List of tool names this skill can access (empty = all tools)
+- `allowed-tools` - Legacy tool list; a hard cap on an agent, a preload hint on a role/skill
+- `tools` - Hard allowlist enforced in every mode (empty = no cap)
+- `preload` - Tools exposed up front in the deferred/ToolSearch view (a hint, not a boundary)
+- `modes` - Invocation modes permitted: `startup`, `subagent`, `inline` (default: by file kind)
 - `argument-hint` - Hint text shown to user for expected arguments
 - `user-invocable` - Whether the skill can be directly invoked by users (default: true)
 - `model` - Optional model override for this skill

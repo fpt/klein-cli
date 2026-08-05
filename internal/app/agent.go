@@ -45,7 +45,6 @@ type Agent struct {
 	askQuestionManager   *tool.AskUserQuestionToolManager
 	planMode             *tool.PlanModeState // shared with planToolManager and guard
 	planToolManager      *tool.PlanToolManager
-	spawnAgentManager    *tool.SpawnAgentToolManager
 	taskAgentManager     *tool.TaskAgentToolManager      // Provides the Task tool that delegates to loaded agent definitions
 	fsRepo               repository.FilesystemRepository // Shared filesystem repository instance
 	workingDir           string
@@ -148,140 +147,46 @@ func (a *Agent) SetPlanApprovalHandler(h tool.PlanApprovalHandler) {
 	}
 }
 
-// SpawnSubAgent runs a sub-agent with a fresh conversation state and returns its result.
-// The sub-agent shares the parent's LLM client and tool managers but has its own
-// message state and cannot spawn further agents (recursion prevention).
-func (a *Agent) SpawnSubAgent(ctx context.Context, task string, skillName string, allowedTools []string, maxIterations int) (string, error) {
-	skillName = strings.ToLower(skillName)
-	if skillName == "" {
-		skillName = "code"
+// RunSubagent runs def in subagent mode: its own ReAct loop over fresh message
+// state, returning its final text to the caller. This is the single dispatcher
+// behind the Task tool — it replaces the SpawnSubAgent/RunPluginAgent pair,
+// which differed only in which registry they looked in and what the frontmatter
+// called the tool list.
+//
+// maxIterations <= 0 uses the default. toolsOverride, when non-empty, replaces
+// the definition's own tool list for this call.
+func (a *Agent) RunSubagent(
+	ctx context.Context, def *skill.Definition, task string, toolsOverride []string, maxIterations int,
+) (string, error) {
+	if def == nil {
+		return "", errors.New("subagent: nil definition")
 	}
-	activeSkill, exists := a.lookupInvocable(skillName)
-	if !exists {
-		return "", fmt.Errorf("sub-agent skill %q not found", skillName)
+	if !def.Permits(skill.ModeSubagent) {
+		return "", fmt.Errorf("%q cannot run as a subagent (it permits: %s)",
+			def.Name, strings.Join(def.ModeNames(), ", "))
 	}
 
-	// Build the effective allowed-tools list, always excluding spawn_agent to prevent recursion.
-	var subToolManager domain.ToolManager
-	effectiveAllowed := allowedTools
-	if len(effectiveAllowed) == 0 {
-		effectiveAllowed = activeSkill.EffectiveTools()
+	allowed := toolsOverride
+	if len(allowed) == 0 {
+		allowed = def.EffectiveTools()
 	}
-	if len(effectiveAllowed) > 0 {
-		filtered := make([]string, 0, len(effectiveAllowed))
-		for _, name := range effectiveAllowed {
-			if name != "spawn_agent" {
-				filtered = append(filtered, name)
-			}
-		}
-		subToolManager = skill.NewFilteredToolManager(a.allToolManagers, filtered)
-	} else {
-		// No restriction from skill or caller — allow all tools except spawn_agent.
-		allTools := a.allToolManagers.GetTools()
-		names := make([]string, 0, len(allTools))
-		for name := range allTools {
-			if name != "spawn_agent" {
-				names = append(names, string(name))
-			}
-		}
-		subToolManager = skill.NewFilteredToolManager(a.allToolManagers, names)
-	}
+	subToolManager := buildSubAgentToolManager(a.allToolManagers, allowed)
 
 	if maxIterations <= 0 {
 		maxIterations = DefaultAgentMaxIterations
 	}
 
-	// Emit sub-agent start event on the parent's output.
+	label := def.Name
+	if def.PluginName != "" {
+		label = def.PluginName + ":" + def.Name
+	}
 	writer := a.OutWriter()
-	fmt.Fprintf(writer, "  [sub-agent:%s] Starting: %s\n", skillName, task)
+	fmt.Fprintf(writer, "  [agent:%s] Starting: %s\n", label, truncate(task, 80))
 
 	// Fresh conversation state — isolated from the parent.
 	subState := state.NewMessageState()
-
-	// Inject skill system prompt.
-	systemPrompt := activeSkill.RenderContent("", a.workingDir)
-	if systemPrompt != "" {
-		subState.AddMessage(message.NewSystemMessage(systemPrompt))
-	}
-
-	llmWithTools, err := client.NewClientWithToolManager(a.llmClient, subToolManager)
-	if err != nil {
-		return "", fmt.Errorf("sub-agent: failed to create LLM client: %w", err)
-	}
-
-	situation := NewIterationAdvisor(a.allToolManagers)
-	reactClient, eventEmitter := react.NewReAct(llmWithTools, subToolManager, subState, situation, maxIterations)
-	defer reactClient.Close()
-	if a.settings != nil {
-		reactClient.SetBashWhitelist(a.settings.Bash.WhitelistedCommands)
-	}
-
-	// Forward sub-agent events to our output with an indent prefix.
-	eventEmitter.AddHandler(func(event events.AgentEvent) {
-		switch event.Type {
-		case events.EventTypeToolCallStart:
-			if data, ok := event.Data.(events.ToolCallStartData); ok {
-				fmt.Fprintf(writer, "  [sub-agent] Running tool %s %v\n", data.ToolName, data.Arguments)
-			}
-		case events.EventTypeToolResult:
-			if data, ok := event.Data.(events.ToolResultData); ok {
-				if data.IsError {
-					fmt.Fprintf(writer, "  [sub-agent] ERROR %s\n", data.Content)
-				}
-			}
-		case events.EventTypeThinkingChunk:
-			if data, ok := event.Data.(events.ThinkingChunkData); ok {
-				fmt.Fprintf(writer, "\x1b[90m%s", data.Content)
-			}
-		case events.EventTypeResponse:
-			fmt.Fprint(writer, "\x1b[0m")
-		}
-		if a.externalEventHandler != nil {
-			a.externalEventHandler(event)
-		}
-	})
-
-	result, err := reactClient.Run(ctx, task)
-	if err != nil {
-		fmt.Fprintf(writer, "  [sub-agent:%s] Failed: %v\n", skillName, err)
-		return "", err
-	}
-
-	resultText := result.Content()
-	fmt.Fprintf(writer, "  [sub-agent:%s] Done\n", skillName)
-	return resultText, nil
-}
-
-// RunPluginAgent dispatches to a plugin-loaded agent definition. The agent's
-// markdown body is injected as the sub-agent's system prompt and its `tools`
-// frontmatter restricts the allowed-tools (empty = inherit all). Mirrors the
-// behaviour of Claude Code's built-in Task tool.
-//
-// `agentName` may be the bare agent name (only resolvable when unambiguous)
-// or the scoped `<plugin>:<name>` form. Returns the sub-agent's final answer.
-func (a *Agent) RunPluginAgent(ctx context.Context, agentName, task string) (string, error) {
-	ag, ambiguous := a.ResolveAgent(agentName)
-	if ambiguous {
-		return "", fmt.Errorf("agent name %q is ambiguous — scope it as <plugin>:<name>", agentName)
-	}
-	if ag == nil {
-		return "", fmt.Errorf("agent %q not found", agentName)
-	}
-
-	// Always exclude spawn_agent and Task to prevent unbounded recursion.
-	effectiveAllowed := ag.Tools
-	subToolManager := buildSubAgentToolManager(a.allToolManagers, effectiveAllowed)
-
-	writer := a.OutWriter()
-	label := agentName
-	if ag.PluginName != "" {
-		label = ag.PluginName + ":" + ag.Name
-	}
-	fmt.Fprintf(writer, "  [agent:%s] Starting: %s\n", label, truncate(task, 80))
-
-	subState := state.NewMessageState()
-	if ag.Content != "" {
-		subState.AddMessage(message.NewSystemMessage(ag.Content))
+	if prompt := def.RenderContent("", a.workingDir); prompt != "" {
+		subState.AddMessage(message.NewSystemMessage(prompt))
 	}
 
 	llmWithTools, err := client.NewClientWithToolManager(a.llmClient, subToolManager)
@@ -290,16 +195,15 @@ func (a *Agent) RunPluginAgent(ctx context.Context, agentName, task string) (str
 	}
 
 	situation := NewIterationAdvisor(a.allToolManagers)
-	reactClient, eventEmitter := react.NewReAct(llmWithTools, subToolManager, subState, situation, DefaultAgentMaxIterations)
+	reactClient, eventEmitter := react.NewReAct(llmWithTools, subToolManager, subState, situation, maxIterations)
 	defer reactClient.Close()
 	if a.settings != nil {
 		reactClient.SetBashWhitelist(a.settings.Bash.WhitelistedCommands)
 	}
 	// Background agents auto-approve every tool call. The user opted in by
-	// enabling this plugin agent, and the agent's frontmatter `tools` list
-	// is the surface area; we trust that declaration. Foreground agents
-	// continue to honour the normal approval workflow.
-	if ag.Background {
+	// enabling this agent, and its frontmatter tool list is the surface area;
+	// we trust that declaration. Foreground agents keep the normal workflow.
+	if def.Background {
 		reactClient.SetSkipApproval(true)
 	}
 
@@ -334,11 +238,29 @@ func (a *Agent) RunPluginAgent(ctx context.Context, agentName, task string) (str
 	return result.Content(), nil
 }
 
+// DispatchTask resolves a name for the Task tool and runs it as a subagent.
+// Any definition permitting subagent mode is reachable, not only agent-kind
+// ones — which is what lets Task absorb the deleted spawn_agent tool.
+func (a *Agent) DispatchTask(ctx context.Context, name, task string) (string, error) {
+	def, ambiguous := a.ResolveSubagent(name)
+	if ambiguous {
+		return "", fmt.Errorf("agent name %q is ambiguous — scope it as <plugin>:<name>", name)
+	}
+	if def == nil {
+		if other, ok := a.definitions[strings.ToLower(name)]; ok {
+			return "", fmt.Errorf("%q cannot run as a subagent (it permits: %s)",
+				name, strings.Join(other.ModeNames(), ", "))
+		}
+		return "", fmt.Errorf("agent %q not found", name)
+	}
+	return a.RunSubagent(ctx, def, task, nil, 0)
+}
+
 // buildSubAgentToolManager constructs a filtered tool manager for sub-agents:
-// always strips spawn_agent and Task to prevent recursion; respects the
-// optional allowedTools whitelist.
+// always strips Task to prevent recursion; respects the optional allowedTools
+// whitelist.
 func buildSubAgentToolManager(all *tool.CompositeToolManager, allowedTools []string) domain.ToolManager {
-	excluded := map[string]bool{"spawn_agent": true, "Task": true}
+	excluded := map[string]bool{"Task": true}
 	if len(allowedTools) > 0 {
 		filtered := make([]string, 0, len(allowedTools))
 		for _, name := range allowedTools {
@@ -532,7 +454,6 @@ type agentTools struct {
 	askQuestion *tool.AskUserQuestionToolManager
 	planMode    *tool.PlanModeState
 	plan        *tool.PlanToolManager
-	spawnAgent  *tool.SpawnAgentToolManager
 	taskAgent   *tool.TaskAgentToolManager
 	all         *tool.CompositeToolManager
 	deferred    *tool.DeferredToolManager
@@ -585,7 +506,6 @@ func buildAgentTools(opts AgentOptions, skills skill.DefinitionMap, memoryDir, t
 	askQuestionManager := tool.NewAskUserQuestionToolManager()
 	planModeState := new(tool.PlanModeState) // starts as PlanModeOff
 	planToolManager := tool.NewPlanToolManager(planModeState)
-	spawnAgentManager := tool.NewSpawnAgentToolManager()
 	taskAgentManager := tool.NewTaskAgentToolManager()
 
 	// Combine ALL tool managers into one composite.
@@ -594,7 +514,7 @@ func buildAgentTools(opts AgentOptions, skills skill.DefinitionMap, memoryDir, t
 		tool.NewSearchToolManager(tool.SearchConfig{WorkingDir: workingDir}),
 		tool.NewWebToolManager(), tool.NewPDFToolManager(workingDir), tool.NewMarketToolManager(),
 		tool.NewSkillToolManager(skills, workingDir), askQuestionManager, planToolManager,
-		spawnAgentManager, taskAgentManager, tool.NewResearcherToolManager(),
+		taskAgentManager, tool.NewResearcherToolManager(),
 	}
 	for _, mcpManager := range opts.MCPToolManagers {
 		managers = append(managers, mcpManager)
@@ -607,7 +527,6 @@ func buildAgentTools(opts AgentOptions, skills skill.DefinitionMap, memoryDir, t
 		askQuestion: askQuestionManager,
 		planMode:    planModeState,
 		plan:        planToolManager,
-		spawnAgent:  spawnAgentManager,
 		taskAgent:   taskAgentManager,
 		all:         allToolManagers,
 		deferred:    tool.NewDeferredToolManager(allToolManagers),
@@ -704,7 +623,6 @@ func NewAgentWithOptions(ctx context.Context, opts AgentOptions) (*Agent, func()
 		askQuestionManager: tools.askQuestion,
 		planMode:           tools.planMode,
 		planToolManager:    tools.plan,
-		spawnAgentManager:  tools.spawnAgent,
 		taskAgentManager:   tools.taskAgent,
 		fsRepo:             fsRepo,
 		workingDir:         workingDir,
@@ -747,25 +665,16 @@ func findMemoryManager(managers map[string]domain.ToolManager) *memorydb.Manager
 }
 
 // wireToolsAndBackend performs the two-phase init that needs the constructed
-// Agent: it wires the self-referential spawn/Task callbacks and provisions the
+// Agent: it wires the self-referential Task callback and provisions the
 // optional whole-agent backend, returning the cleanup for any process started
 // (never nil).
 func (a *Agent) wireToolsAndBackend(
 	ctx context.Context, tools agentTools, backend domain.AgentBackend,
 ) (func(), error) {
-	// Wire spawn_agent callback (callback references the agent).
-	tools.spawnAgent.SetCallback(
-		func(ctx context.Context, task, skillName string, allowedTools []string, maxIterations int) (string, error) {
-			return a.SpawnSubAgent(ctx, task, skillName, allowedTools, maxIterations)
-		},
-	)
-
-	// Wire Task callback for plugin-defined subagents. The catalog provider is
-	// evaluated lazily on each Description() because plugins are registered
-	// after the agent is constructed.
-	tools.taskAgent.SetCallback(func(ctx context.Context, subagentType, prompt string) (string, error) {
-		return a.RunPluginAgent(ctx, subagentType, prompt)
-	})
+	// Wire the Task dispatcher. The catalog provider is evaluated lazily on
+	// each Description() because plugins are registered after the agent is
+	// constructed.
+	tools.taskAgent.SetCallback(a.DispatchTask)
 	tools.taskAgent.SetCatalogProvider(a.AgentCatalog)
 
 	// Provision the whole-agent backend (e.g. codex), if one was injected. This

@@ -123,14 +123,15 @@ func (a *Agent) ResolveCommand(name string) (*pluginpkg.Command, bool) {
 }
 
 // mergeDefinitions folds roles, skills, and agents into the single registry the
-// agent resolves against. Which names a caller may reach is decided by Kind at
-// lookup time (lookupInvocable vs ResolveAgent), not by keeping separate maps.
+// agent resolves against. Which names a caller may reach is decided by declared
+// mode at lookup time (lookupInvocable vs ResolveSubagent), not by keeping
+// separate maps.
 //
 // Roles, skills, and agents occupy one namespace now, so a name claimed by two
 // of them has to have a winner: higher Priority wins, and on a tie the
 // non-agent keeps the name, which is what preserves today's Invoke behavior.
 // No built-in collides; a user-authored one is logged loudly because half of
-// what they wrote will be unreachable until #84 makes the two one definition.
+// what they wrote will be unreachable.
 func mergeDefinitions(
 	logger *pkgLogger.Logger, defs skill.DefinitionMap, agents pluginpkg.AgentMap,
 ) skill.DefinitionMap {
@@ -179,25 +180,28 @@ func (a *Agent) selectToolManager(def *skill.Definition) (domain.ToolManager, bo
 	}
 }
 
-// lookupInvocable resolves a name that Invoke may run: a role or a skill, never
-// an agent. Agents are reachable only through the Task tool until invocation
-// modes land.
+// lookupInvocable resolves a name that Invoke may run. Invoke drives the
+// session's own turn, which is startup mode for the role it opened with and
+// inline mode for a skill run mid-session; a subagent-only definition is not
+// reachable here, only through the Task tool.
 func (a *Agent) lookupInvocable(name string) (*skill.Definition, bool) {
 	d, ok := a.definitions[name]
-	if !ok || d.IsAgent() {
+	if !ok || !d.PermitsAny(skill.ModeStartup, skill.ModeInline) {
 		return nil, false
 	}
 	return d, true
 }
 
-// ResolveAgent looks up an agent definition the same way ResolveCommand
-// resolves commands. Roles and skills are not reachable here.
-func (a *Agent) ResolveAgent(name string) (*pluginpkg.Agent, bool) {
+// ResolveSubagent looks up a definition the Task tool may dispatch to, the same
+// way ResolveCommand resolves commands. Membership is by declared mode, not by
+// which file the definition came from: a role that permits subagent mode is
+// dispatchable, and an agent that somehow does not is no longer reachable.
+func (a *Agent) ResolveSubagent(name string) (*skill.Definition, bool) {
 	if name == "" {
 		return nil, false
 	}
-	if ag, ok := a.definitions[name]; ok && ag.IsAgent() {
-		return ag, false
+	if d, ok := a.definitions[strings.ToLower(name)]; ok && d.Permits(skill.ModeSubagent) {
+		return d, false
 	}
 	if a.ambiguousAgents[name] {
 		return nil, true
@@ -208,8 +212,13 @@ func (a *Agent) ResolveAgent(name string) (*pluginpkg.Agent, bool) {
 // AgentCatalog returns one entry per loaded subagent, for the Task tool's
 // available-agents listing.
 //
-// The registry holds roles and skills too, so only agent-kind definitions are
-// listed. Agents are indexed twice (scoped and bare), so entries are
+// The listing is curated, not exhaustive: it names agent-kind definitions,
+// which are the ones written to be delegated to. ResolveSubagent is deliberately
+// wider — any definition permitting subagent mode is dispatchable, including
+// skills — but listing all of those made the description ten entries of prose
+// written for a different audience ("also invocable as /report <topic>"), with
+// create-skill offered as a delegation target. The prose below names the wider
+// set in one sentence instead. Agents are indexed twice (scoped and bare), so entries are
 // deduplicated by definition pointer and reported under the name the model
 // should actually pass: the bare name when it is unambiguous, otherwise the
 // scoped "<plugin>:<agent>" form, which is all that survives indexing for a
@@ -218,7 +227,7 @@ func (a *Agent) ResolveAgent(name string) (*pluginpkg.Agent, bool) {
 func (a *Agent) AgentCatalog() []tool.AgentCatalogEntry {
 	preferred := make(map[*pluginpkg.Agent]string, len(a.definitions))
 	for name, ag := range a.definitions {
-		if !ag.IsAgent() {
+		if !ag.IsAgent() || !ag.Permits(skill.ModeSubagent) {
 			continue
 		}
 		current, seen := preferred[ag]

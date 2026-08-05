@@ -23,6 +23,7 @@ const (
 	catNameRole  = "code"
 	catNameSkill = "pdf"
 	catNameAgent = "explore"
+	nameWidened  = "widened-role"
 )
 
 // newCatalogTestAgent returns an Agent with just enough state for
@@ -39,6 +40,7 @@ func agentsNamed(pluginName string, names ...string) map[string]*pluginpkg.Agent
 	for _, n := range names {
 		out[n] = &pluginpkg.Agent{
 			Kind:        skill.KindAgent,
+			Modes:       []skill.Mode{skill.ModeSubagent},
 			Name:        n,
 			PluginName:  pluginName,
 			Description: pluginName + " " + n,
@@ -63,6 +65,7 @@ func TestAgentCatalog_PrefersBareNameAndDeduplicates(t *testing.T) {
 		plug("docs-for-ai", map[string]*pluginpkg.Agent{
 			searcher: {
 				Kind:        skill.KindAgent,
+				Modes:       []skill.Mode{skill.ModeSubagent},
 				Name:        searcher,
 				PluginName:  "docs-for-ai",
 				Description: descr,
@@ -139,14 +142,18 @@ func TestRegisterPlugins_LocalAgentBeatsPluginOnBareName(t *testing.T) {
 	t.Parallel()
 
 	const contested = catNameAgent
-	local := &pluginpkg.Agent{Kind: skill.KindAgent, Name: contested, Description: "built-in explore"}
+	local := &pluginpkg.Agent{
+		Kind:  skill.KindAgent,
+		Modes: []skill.Mode{skill.ModeSubagent},
+		Name:  contested, Description: "built-in explore",
+	}
 	a := newCatalogTestAgent()
 	a.definitions = map[string]*pluginpkg.Agent{contested: local}
 	a.RegisterPlugins([]*pluginpkg.Plugin{
 		plug("someplugin", agentsNamed("someplugin", contested)),
 	})
 
-	got, ambiguous := a.ResolveAgent(contested)
+	got, ambiguous := a.ResolveSubagent(contested)
 	if ambiguous {
 		t.Fatal("bare name reported ambiguous; the local agent should win outright")
 	}
@@ -154,7 +161,7 @@ func TestRegisterPlugins_LocalAgentBeatsPluginOnBareName(t *testing.T) {
 		t.Errorf("bare %q resolved to %+v, want the local definition", contested, got)
 	}
 	// The plugin's agent is still reachable, just only when scoped.
-	scoped, ambiguous := a.ResolveAgent("someplugin:" + contested)
+	scoped, ambiguous := a.ResolveSubagent("someplugin:" + contested)
 	if ambiguous || scoped == nil {
 		t.Error("plugin agent unreachable under its scoped name")
 	}
@@ -174,7 +181,7 @@ func TestRegisterPlugins_TwoPluginsStillAmbiguous(t *testing.T) {
 		plug("beta", agentsNamed("beta", contested)),
 	})
 
-	if _, ambiguous := a.ResolveAgent(contested); !ambiguous {
+	if _, ambiguous := a.ResolveSubagent(contested); !ambiguous {
 		t.Error("bare name contested by two plugins should be ambiguous")
 	}
 }
@@ -239,9 +246,9 @@ func TestRegistry_KindGatesLookup(t *testing.T) {
 
 	a := newCatalogTestAgent()
 	a.definitions = skill.DefinitionMap{
-		catNameRole:  {Name: catNameRole, Kind: skill.KindRole},
-		catNameSkill: {Name: catNameSkill, Kind: skill.KindSkill},
-		catNameAgent: {Name: catNameAgent, Kind: skill.KindAgent},
+		catNameRole:  {Name: catNameRole, Kind: skill.KindRole, Modes: []skill.Mode{skill.ModeStartup}},
+		catNameSkill: {Name: catNameSkill, Kind: skill.KindSkill, Modes: []skill.Mode{skill.ModeInline}},
+		catNameAgent: {Name: catNameAgent, Kind: skill.KindAgent, Modes: []skill.Mode{skill.ModeSubagent}},
 	}
 
 	cases := []struct {
@@ -260,7 +267,7 @@ func TestRegistry_KindGatesLookup(t *testing.T) {
 			if _, ok := a.lookupInvocable(tt.name); ok != tt.wantInvocable {
 				t.Errorf("lookupInvocable(%q) = %v, want %v", tt.name, ok, tt.wantInvocable)
 			}
-			ag, _ := a.ResolveAgent(tt.name)
+			ag, _ := a.ResolveSubagent(tt.name)
 			if (ag != nil) != tt.wantAgent {
 				t.Errorf("ResolveAgent(%q) found = %v, want %v", tt.name, ag != nil, tt.wantAgent)
 			}
@@ -322,13 +329,122 @@ func TestAgentCatalog_ExcludesRolesAndSkills(t *testing.T) {
 
 	a := newCatalogTestAgent()
 	a.definitions = skill.DefinitionMap{
-		catNameRole:  {Name: catNameRole, Description: "coding role", Kind: skill.KindRole},
-		catNameSkill: {Name: catNameSkill, Description: "pdf skill", Kind: skill.KindSkill},
-		catNameAgent: {Name: catNameAgent, Description: "search agent", Kind: skill.KindAgent},
+		catNameRole: {
+			Name: catNameRole, Description: "coding role", Kind: skill.KindRole,
+			Modes: []skill.Mode{skill.ModeStartup},
+		},
+		catNameSkill: {
+			Name: catNameSkill, Description: "pdf skill", Kind: skill.KindSkill,
+			Modes: []skill.Mode{skill.ModeInline},
+		},
+		catNameAgent: {
+			Name: catNameAgent, Description: "search agent", Kind: skill.KindAgent,
+			Modes: []skill.Mode{skill.ModeSubagent},
+		},
 	}
 
 	entries := a.AgentCatalog()
 	if len(entries) != 1 || entries[0].Name != catNameAgent {
 		t.Errorf("catalog = %+v, want only the agent", entries)
+	}
+}
+
+// Dispatch membership is by declared mode, not by which file a definition came
+// from — that is what lets Task absorb the deleted spawn_agent tool.
+func TestResolveSubagent_ByModeNotKind(t *testing.T) {
+	t.Parallel()
+
+	a := newCatalogTestAgent()
+	a.definitions = skill.DefinitionMap{
+		catNameRole:  {Name: catNameRole, Kind: skill.KindRole},   // startup only
+		catNameSkill: {Name: catNameSkill, Kind: skill.KindSkill}, // inline + subagent
+		catNameAgent: {Name: catNameAgent, Kind: skill.KindAgent}, // subagent
+		nameWidened: {
+			Name: nameWidened, Kind: skill.KindRole,
+			Modes: []skill.Mode{skill.ModeStartup, skill.ModeSubagent},
+		},
+	}
+
+	cases := map[string]bool{
+		catNameRole:  false, // a plain role is not dispatchable
+		catNameSkill: true,  // what spawn_agent used to do
+		catNameAgent: true,
+		nameWidened:  true, // a role that declares subagent is
+	}
+	for name, want := range cases {
+		got, ambiguous := a.ResolveSubagent(name)
+		if ambiguous {
+			t.Errorf("%q reported ambiguous", name)
+			continue
+		}
+		if (got != nil) != want {
+			t.Errorf("ResolveSubagent(%q) found = %v, want %v", name, got != nil, want)
+		}
+	}
+}
+
+// The Task listing stays curated even though dispatch is wider: skills are
+// dispatchable but are not written to be delegated to.
+func TestAgentCatalog_ListsAgentsOnlyThoughSkillsDispatch(t *testing.T) {
+	t.Parallel()
+
+	a := newCatalogTestAgent()
+	a.definitions = skill.DefinitionMap{
+		catNameSkill: {Name: catNameSkill, Description: "a skill", Kind: skill.KindSkill},
+		catNameAgent: {Name: catNameAgent, Description: "an agent", Kind: skill.KindAgent},
+	}
+
+	entries := a.AgentCatalog()
+	if len(entries) != 1 || entries[0].Name != catNameAgent {
+		t.Errorf("catalog = %+v, want only the agent", entries)
+	}
+	// ...but the skill is still dispatchable.
+	if d, _ := a.ResolveSubagent(catNameSkill); d == nil {
+		t.Error("skill should still be dispatchable even though it is unlisted")
+	}
+}
+
+// Invoke drives the session's own turn, so a subagent-only definition must not
+// be reachable there.
+func TestLookupInvocable_ExcludesSubagentOnly(t *testing.T) {
+	t.Parallel()
+
+	a := newCatalogTestAgent()
+	a.definitions = skill.DefinitionMap{
+		catNameRole:  {Name: catNameRole, Kind: skill.KindRole},
+		catNameSkill: {Name: catNameSkill, Kind: skill.KindSkill},
+		catNameAgent: {Name: catNameAgent, Kind: skill.KindAgent},
+	}
+
+	for name, want := range map[string]bool{catNameRole: true, catNameSkill: true, catNameAgent: false} {
+		if _, ok := a.lookupInvocable(name); ok != want {
+			t.Errorf("lookupInvocable(%q) = %v, want %v", name, ok, want)
+		}
+	}
+}
+
+// Asking for a mode a definition does not permit must say what it is, not
+// pretend the name is unknown.
+func TestDispatchTask_RejectsWrongModeWithARealMessage(t *testing.T) {
+	t.Parallel()
+
+	a := newCatalogTestAgent()
+	a.definitions = skill.DefinitionMap{
+		catNameRole: {Name: catNameRole, Kind: skill.KindRole},
+	}
+
+	_, err := a.DispatchTask(context.Background(), catNameRole, "do a thing")
+	if err == nil {
+		t.Fatal("expected an error dispatching to a startup-only definition")
+	}
+	for _, want := range []string{catNameRole, "cannot run as a subagent", "startup"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error %q should mention %q", err, want)
+		}
+	}
+
+	_, err = a.DispatchTask(context.Background(), "no-such-thing", "x")
+	if err == nil || !strings.Contains(err.Error(), "not found") {
+		t.Errorf("unknown name should say not found, got %v", err)
 	}
 }

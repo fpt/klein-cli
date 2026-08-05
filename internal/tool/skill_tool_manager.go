@@ -53,6 +53,16 @@ func (m *SkillToolManager) handleReadSkill(_ context.Context, args message.ToolA
 			fmt.Sprintf("skill '%s' not found. Available skills: %s", nameArg, strings.Join(available, ", ")),
 		), nil
 	}
+	// The registry holds startup prompts and delegation targets too. Reading one
+	// mid-session is not what this tool does, and reporting "not found" for a
+	// name that plainly exists sends the model looking for a typo. Say what it
+	// is instead.
+	if !s.Permits(skill.ModeInline) {
+		return message.NewToolResultError(fmt.Sprintf(
+			"'%s' cannot be read as a skill: it permits %s. Available skills: %s",
+			nameArg, strings.Join(s.ModeNames(), ", "), strings.Join(m.availableSkillNames(), ", "),
+		)), nil
+	}
 
 	rendered := s.RenderContent("", m.workingDir)
 	if rendered == "" {
@@ -73,10 +83,14 @@ func (m *SkillToolManager) handleReadSkill(_ context.Context, args message.ToolA
 	return message.NewToolResultText(result.String()), nil
 }
 
+// availableSkillNames lists only what ReadSkill will actually accept, so the
+// suggestion in an error never names something the next call would reject.
 func (m *SkillToolManager) availableSkillNames() []string {
 	names := make([]string, 0, len(m.skills))
-	for name := range m.skills {
-		names = append(names, name)
+	for name, s := range m.skills {
+		if s.Permits(skill.ModeInline) {
+			names = append(names, name)
+		}
 	}
 	sort.Strings(names)
 	return names

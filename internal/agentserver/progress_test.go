@@ -422,3 +422,52 @@ func TestProgress_NilLogger_DoesNotPanic(t *testing.T) {
 
 	feed(progress, completed(itm("i1", "toolResult", nil)))
 }
+
+// turnEnd builds a turn/completed notification carrying codex's Turn object.
+func turnEnd(status string) rpc.Notification {
+	raw, _ := json.Marshal(map[string]any{
+		"threadId": testThread,
+		"turn":     map[string]any{"id": "turn_1", "status": status},
+	})
+	return rpc.Notification{Method: "turn/completed", Raw: raw}
+}
+
+// codex ends every turn with turn/completed and puts the outcome in the status,
+// so the method alone cannot say whether the turn worked. Reading only the
+// method reported a failed turn as a successful one carrying whatever text
+// happened to precede it — silently, which is the worst way to be wrong about
+// this. See fpt/rs-gallium#77.
+func TestClassify_TurnCompletedStatusDecidesTheOutcome(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct {
+		status string
+		want   noteStatus
+	}{
+		{"completed", noteDone},
+		{"failed", noteFailed},
+		// The turn ended the way it was asked to, and the caller keeps the text
+		// it had produced — which is what someone who pressed Ctrl+C wants back.
+		{"interrupted", noteDone},
+		// A backend that says nothing is taken at its word that the turn ended.
+		{"", noteDone},
+	} {
+		progress, _ := newProgress()
+		if _, got := classifyNote(turnEnd(tc.status), testThread, progress); got != tc.want {
+			t.Errorf("status %q: got %v, want %v", tc.status, got, tc.want)
+		}
+	}
+}
+
+// turn/failed is rs-gallium's own spelling, not codex's. Kept working so this
+// client is not the thing that has to be deployed first.
+func TestClassify_LegacyTurnFailedStillFails(t *testing.T) {
+	t.Parallel()
+	progress, _ := newProgress()
+
+	raw, _ := json.Marshal(map[string]any{"threadId": testThread, "turnId": "turn_1"})
+	n := rpc.Notification{Method: "turn/failed", Raw: raw}
+	if _, got := classifyNote(n, testThread, progress); got != noteFailed {
+		t.Errorf("got %v, want noteFailed", got)
+	}
+}

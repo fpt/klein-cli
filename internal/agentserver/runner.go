@@ -434,6 +434,9 @@ func classifyNote(note rpc.Notification, threadID string, progress *turnProgress
 	var p struct {
 		ThreadID string          `json:"threadId"`
 		Item     json.RawMessage `json:"item"`
+		Turn     struct {
+			Status string `json:"status"`
+		} `json:"turn"`
 	}
 	_ = json.Unmarshal(note.Raw, &p)
 	if p.ThreadID != "" && p.ThreadID != threadID {
@@ -448,7 +451,21 @@ func classifyNote(note rpc.Notification, threadID string, progress *turnProgress
 			return text, noteContinue
 		}
 	case "turn/completed":
+		// codex spells every ending this way and puts the outcome in the
+		// status, so the method alone does not say whether the turn worked.
+		// Reading only the method reported a failed turn as a successful one
+		// carrying whatever text happened to precede it.
+		//
+		// "interrupted" stays a success: the turn ended the way it was asked
+		// to, and `final` holds what it had produced, which is what a user who
+		// pressed Ctrl+C wants back.
+		if p.Turn.Status == statusFailed {
+			return "", noteFailed
+		}
 		return "", noteDone
+	// rs-gallium's own spelling, kept because it costs nothing and this client
+	// may face a backend older than fpt/rs-gallium#77's item 5. `error` is not
+	// a codex method either; it predates this and is equally harmless to keep.
 	case "turn/failed", "error":
 		return "", noteFailed
 	}

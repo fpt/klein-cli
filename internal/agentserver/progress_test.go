@@ -232,6 +232,29 @@ func TestProgress_ToolCall_MCPContentItems(t *testing.T) {
 	}
 }
 
+// A dynamicToolCall carries its output in contentItems, which is the only place
+// codex defines output for that variant — it has no `result` field at all. That
+// is what rs-gallium emits, so without this the entire progress display for
+// every gallium tool call degrades to the bare status string.
+func TestProgress_ToolCall_DynamicContentItems(t *testing.T) {
+	t.Parallel()
+	progress, got := newProgress()
+
+	feed(progress, completed(itm("t2b", "dynamicToolCall", map[string]any{
+		kTool:    "Write",
+		"status": stCompleted,
+		kArgs:    map[string]any{"file_path": "a.txt"},
+		"contentItems": []any{
+			map[string]any{keyType: "inputText", keyText: "Wrote 3 lines to a.txt"},
+		},
+	})))
+
+	res := toolResults(*got)
+	if len(res) != 1 || !strings.Contains(res[0].Content, "Wrote 3 lines to a.txt") {
+		t.Fatalf("contentItems not extracted: %+v", res)
+	}
+}
+
 func TestProgress_ToolCall_FallsBackToStatus(t *testing.T) {
 	t.Parallel()
 	progress, got := newProgress()

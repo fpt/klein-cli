@@ -93,6 +93,8 @@ func (a *Agent) FilesystemRepository() repository.FilesystemRepository { return 
 
 // SetAllowedToolsOverride sets a CLI-level override for the skill's allowed-tools.
 // When non-empty, this list is used instead of the skill's own allowed-tools field.
+// It is a hard sandbox: subagents dispatched from this agent are bounded by it
+// too (their definition's tools are intersected with it in runSubagent).
 func (a *Agent) SetAllowedToolsOverride(tools []string) {
 	a.allowedToolsOverride = tools
 }
@@ -194,6 +196,17 @@ func (a *Agent) runSubagent(
 	allowed := toolsOverride
 	if len(allowed) == 0 {
 		allowed = def.EffectiveTools()
+	}
+	// A CLI-level hard override (SetAllowedToolsOverride) is a security
+	// boundary, not a preference: a subagent must never exceed it, whatever its
+	// definition or the caller asks for. An uncapped definition collapses to
+	// the override itself rather than inheriting every tool.
+	if len(a.allowedToolsOverride) > 0 {
+		allowed = intersectTools(allowed, a.allowedToolsOverride)
+		if len(allowed) == 0 {
+			return "", fmt.Errorf(
+				"subagent %q: none of its tools are permitted under the active tool sandbox", def.Name)
+		}
 	}
 	subToolManager := buildSubAgentToolManager(a.allToolManagers, allowed)
 
@@ -311,6 +324,29 @@ func formatBackgroundLaunch(info RunInfo) string {
 		"fabricate what it will find — if the user asks before it lands, say it is " +
 		"still running and give status, not a guess.")
 	return b.String()
+}
+
+// intersectTools bounds a definition's tool list by a hard override. An empty
+// definition list means "all tools", so the bound itself is the result. The
+// result must never be conflated with "no cap": callers treat empty as an
+// error, because buildSubAgentToolManager reads an empty list as unrestricted.
+func intersectTools(defTools, bound []string) []string {
+	if len(defTools) == 0 {
+		out := make([]string, len(bound))
+		copy(out, bound)
+		return out
+	}
+	inBound := make(map[string]bool, len(bound))
+	for _, n := range bound {
+		inBound[n] = true
+	}
+	var out []string
+	for _, n := range defTools {
+		if inBound[n] {
+			out = append(out, n)
+		}
+	}
+	return out
 }
 
 // buildSubAgentToolManager constructs a filtered tool manager for sub-agents:

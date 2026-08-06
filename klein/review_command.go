@@ -28,8 +28,13 @@ import (
 // exploration plus the review accumulation tools. Enforced via
 // SetAllowedToolsOverride (the skill's allowed-tools alone would leave other
 // tools reachable through deferred tool loading).
+// Task is safe here because the override also bounds every dispatched
+// subagent by intersection (see Agent.runSubagent): a read-only agent like
+// explore keeps its Read/Grep/Glob/LS, while an uncapped one (general-purpose)
+// collapses to this same read-only set instead of inheriting Bash/Write.
+// Grep is included so delegated exploration keeps its primary search tool.
 var reviewAllowedTools = []string{
-	"Read", "Glob", "LS",
+	"Read", "Glob", "Grep", "LS", "Task",
 	"AddInlineReview", "AddSummaryReview", "FinalizeReview", "ResolveReviewComment",
 }
 

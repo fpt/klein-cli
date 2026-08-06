@@ -166,9 +166,9 @@ func mergeDefinitions(
 // anything else stays reachable through ToolSearch, which is what lets the cad
 // role discover app MCP tools.
 func (a *Agent) selectToolManager(def *skill.Definition) (domain.ToolManager, bool) {
-	switch {
-	case len(a.allowedToolsOverride) > 0:
-		return skill.NewFilteredToolManager(a.allToolManagers, a.allowedToolsOverride), false
+	switch sandbox := a.toolSandbox(); {
+	case len(sandbox) > 0:
+		return skill.NewFilteredToolManager(a.allToolManagers, sandbox), false
 	case len(def.Tools) > 0:
 		return skill.NewFilteredToolManager(a.allToolManagers, def.Tools), false
 	case a.deferredTools != nil:
@@ -287,12 +287,12 @@ func (a *Agent) InvokeCommand(ctx context.Context, cmd *pluginpkg.Command, args 
 
 	// Per-invocation allowed-tools override. We save and restore the
 	// existing override so the command doesn't leak state into subsequent
-	// turns.
-	prevOverride := a.allowedToolsOverride
+	// turns. Anything dispatched during the window must capture the override
+	// synchronously — see resolveSubagentTools.
 	if len(cmd.AllowedTools) > 0 {
-		a.allowedToolsOverride = cmd.AllowedTools
+		prevOverride := a.setToolSandbox(cmd.AllowedTools)
+		defer a.setToolSandbox(prevOverride)
 	}
-	defer func() { a.allowedToolsOverride = prevOverride }()
 
 	// Plugin commands frequently shell out via Bash; the official Claude Code
 	// behaviour is to auto-approve based on the command's `allowed-tools`.

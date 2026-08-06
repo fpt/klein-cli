@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	pkgErrors "github.com/pkg/errors"
@@ -58,7 +59,8 @@ type Agent struct {
 	thinkingStarted      bool
 	sessionRules         *permission.RuleSet // in-memory allow/deny rules created during this session
 	permRules            *permission.RuleSet // persistent allow/deny rules from JSON files
-	allowedToolsOverride []string            // CLI override for skill's allowed-tools
+	allowedToolsOverride []string            // CLI override for skill's allowed-tools (guarded by sandboxMu)
+	sandboxMu            sync.RWMutex        // guards allowedToolsOverride: background runs read it off-turn
 	sanitizeToolResults  bool                // neutralize chat-template control tokens in tool results
 	tokenBudget          int                 // cumulative token cap per Invoke run (0 = unlimited)
 	externalEventHandler events.EventHandler // optional: forward events to external consumers (e.g., Connect server)
@@ -93,8 +95,35 @@ func (a *Agent) FilesystemRepository() repository.FilesystemRepository { return 
 
 // SetAllowedToolsOverride sets a CLI-level override for the skill's allowed-tools.
 // When non-empty, this list is used instead of the skill's own allowed-tools field.
+// It is a hard sandbox: subagents dispatched from this agent are bounded by it
+// too (their definition's tools are intersected with it in resolveSubagentTools).
 func (a *Agent) SetAllowedToolsOverride(tools []string) {
+	a.setToolSandbox(tools)
+}
+
+// toolSandbox returns a copy of the active hard tool override, or nil if there
+// is none. It is a copy because a background run resolves its tools while the
+// turn that dispatched it may still be mutating the field (InvokeCommand swaps
+// an override in for the length of one plugin command).
+func (a *Agent) toolSandbox() []string {
+	a.sandboxMu.RLock()
+	defer a.sandboxMu.RUnlock()
+	if len(a.allowedToolsOverride) == 0 {
+		return nil
+	}
+	out := make([]string, len(a.allowedToolsOverride))
+	copy(out, a.allowedToolsOverride)
+	return out
+}
+
+// setToolSandbox installs a new hard override and returns the previous one, so
+// a caller scoping an override to one turn can restore it.
+func (a *Agent) setToolSandbox(tools []string) []string {
+	a.sandboxMu.Lock()
+	defer a.sandboxMu.Unlock()
+	prev := a.allowedToolsOverride
 	a.allowedToolsOverride = tools
+	return prev
 }
 
 // SetSanitizeToolResults neutralizes chat-template control tokens (`<|…|>`) in
@@ -191,9 +220,9 @@ func (a *Agent) runSubagent(
 			def.Name, strings.Join(def.ModeNames(), ", "))
 	}
 
-	allowed := toolsOverride
-	if len(allowed) == 0 {
-		allowed = def.EffectiveTools()
+	allowed, err := a.resolveSubagentTools(def, toolsOverride)
+	if err != nil {
+		return "", err
 	}
 	subToolManager := buildSubAgentToolManager(a.allToolManagers, allowed)
 
@@ -311,6 +340,58 @@ func formatBackgroundLaunch(info RunInfo) string {
 		"fabricate what it will find — if the user asks before it lands, say it is " +
 		"still running and give status, not a guess.")
 	return b.String()
+}
+
+// resolveSubagentTools computes the final tool whitelist for one subagent run:
+// the caller's per-dispatch override, else the definition's own list, bounded by
+// the active hard sandbox.
+//
+// A CLI-level hard override (SetAllowedToolsOverride) is a security boundary,
+// not a preference: a subagent must never exceed it, whatever its definition or
+// the caller asks for. An uncapped definition collapses to the sandbox itself
+// rather than inheriting every tool.
+//
+// This MUST be called on the goroutine that dispatches the run, not inside it.
+// The sandbox is mutable turn-scoped state — InvokeCommand swaps one in for the
+// length of a plugin command — so a background run that resolved its own tools
+// later could find the override already restored and escape the boundary.
+func (a *Agent) resolveSubagentTools(def *skill.Definition, toolsOverride []string) ([]string, error) {
+	allowed := toolsOverride
+	if len(allowed) == 0 {
+		allowed = def.EffectiveTools()
+	}
+	sandbox := a.toolSandbox()
+	if len(sandbox) == 0 {
+		return allowed, nil
+	}
+	if allowed = intersectTools(allowed, sandbox); len(allowed) == 0 {
+		return nil, fmt.Errorf(
+			"subagent %q: none of its tools are permitted under the active tool sandbox", def.Name)
+	}
+	return allowed, nil
+}
+
+// intersectTools bounds a definition's tool list by a hard override. An empty
+// definition list means "all tools", so the bound itself is the result. The
+// result must never be conflated with "no cap": callers treat empty as an
+// error, because buildSubAgentToolManager reads an empty list as unrestricted.
+func intersectTools(defTools, bound []string) []string {
+	if len(defTools) == 0 {
+		out := make([]string, len(bound))
+		copy(out, bound)
+		return out
+	}
+	inBound := make(map[string]bool, len(bound))
+	for _, n := range bound {
+		inBound[n] = true
+	}
+	var out []string
+	for _, n := range defTools {
+		if inBound[n] {
+			out = append(out, n)
+		}
+	}
+	return out
 }
 
 // buildSubAgentToolManager constructs a filtered tool manager for sub-agents:

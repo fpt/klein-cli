@@ -26,8 +26,10 @@ skill, or `.github/actions/ai-review/`.
    the result is read from the tool manager's state after the run. There is
    no fragile "extract JSON from the response" step.
 4. **The reviewer is sandboxed read-only.** The agent gets exactly
-   `Read, Glob, LS` plus the three review tools — enforced as a hard
-   whitelist, not just a skill preference (see §6).
+   `Read, Glob, Grep, LS, Task` plus the review tools — enforced as a hard
+   whitelist, not just a skill preference — and the sandbox propagates:
+   a subagent dispatched via `Task` is bounded by the same whitelist through
+   intersection, so even an uncapped agent cannot reach Bash/Write (see §6).
 5. **Verify before reporting** — the review skill follows the repo-wide
    reason→verify→evaluate loop (DESIGN.md §10): a suspicion from the diff must
    be confirmed against the actual code via `Read` before it becomes a comment.
@@ -231,9 +233,19 @@ deviations:
   every other registered tool would remain reachable via `ToolSearch`.
   `a.SetAllowedToolsOverride(reviewAllowedTools)` switches to the hard
   whitelist path — nothing outside
-  `Read, Glob, LS, AddInlineReview, AddSummaryReview, FinalizeReview`
-  exists for this run. (`Grep` is intentionally absent; `Glob`+`Read` have
-  been sufficient, and the enriched prompt removes most search needs.)
+  `Read, Glob, Grep, LS, Task` + the review accumulation tools exists for
+  this run. The override **propagates to subagents**: `Agent.resolveSubagentTools`
+  intersects a dispatched definition's tools with it, so the read-only
+  `explore` agent keeps `Read/Grep/Glob/LS` (losing only `ToolSearch`, the
+  deferred-loading escape hatch), while an uncapped agent such as
+  `general-purpose` collapses to the same read-only set instead of
+  inheriting `Bash`/`Write`. A definition with no permitted tools at all is
+  refused. The whitelist is resolved on the goroutine that *dispatches* the
+  run, never inside it: the override is turn-scoped mutable state (a plugin
+  command swaps one in for its own duration), so a backgrounded subagent that
+  resolved its own tools later could find it already restored. On large PRs the
+  reviewer delegates broad verification sweeps to `explore`, keeping the search
+  noise out of its own context.
 - **Backend restriction.** Whole-agent backends (`codex`, `appserver`) run their
   own toolset out-of-process and can't see the review tools, so they are
   rejected at startup. Any direct `domain.LLM` backend (openai default,

@@ -256,6 +256,16 @@ func (a *Agent) StartBackgroundAgent(def *skill.Definition, task string) (RunInf
 			def.Name, strings.Join(def.ModeNames(), ", "))
 	}
 
+	// Resolve the tool whitelist HERE, on the dispatching goroutine, and hand
+	// the snapshot to the run. The hard sandbox is turn-scoped mutable state, so
+	// a run that resolved its own tools later could find it already restored and
+	// escape the boundary. Refusal also belongs here: the caller sees it
+	// immediately instead of finding a failed run in a transcript.
+	allowed, err := a.resolveSubagentTools(def, nil)
+	if err != nil {
+		return RunInfo{}, err
+	}
+
 	a.agentRuns.mu.Lock()
 	id := a.agentRuns.nextID()
 	a.agentRuns.mu.Unlock()
@@ -284,6 +294,11 @@ func (a *Agent) StartBackgroundAgent(def *skill.Definition, task string) (RunInf
 
 		result, err := a.runSubagent(ctx, def, task, subagentOptions{
 			Writer: transcript,
+			// The whitelist captured at dispatch. Re-resolving against the
+			// sandbox inside runSubagent is idempotent: intersecting a subset
+			// with the same bound yields the subset, and if the sandbox has
+			// since been cleared this snapshot still stands.
+			ToolsOverride: allowed,
 			// Nobody is at the prompt to answer an approval request for a
 			// detached run; the definition's tool list is the surface area.
 			SkipApproval: true,

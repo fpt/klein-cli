@@ -70,6 +70,61 @@ func TestRunSubagent_CallerOverrideStillBounded(t *testing.T) {
 	}
 }
 
+// A background run must resolve its tools on the dispatching goroutine. The
+// sandbox is turn-scoped mutable state (InvokeCommand swaps one in for the
+// length of a plugin command), so a run that resolved its own tools later could
+// find the override already restored and escape the boundary. Refusing at
+// dispatch — synchronously, before the run is even registered — is what proves
+// resolution has not drifted back into the goroutine.
+func TestStartBackgroundAgent_ResolvesSandboxAtDispatch(t *testing.T) {
+	t.Parallel()
+	a := &Agent{definitions: skill.DefinitionMap{}}
+	a.SetAllowedToolsOverride([]string{catToolRead, catToolGlob})
+
+	def := &skill.Definition{
+		Name:  "shell-runner",
+		Kind:  skill.KindAgent,
+		Tools: []string{toolBash, toolWrite},
+	}
+	if _, err := a.StartBackgroundAgent(def, "do something"); err == nil {
+		t.Fatal("expected a synchronous refusal at dispatch")
+	} else if !strings.Contains(err.Error(), "sandbox") {
+		t.Errorf("error %q should mention the sandbox", err)
+	}
+}
+
+// The snapshot a background dispatch captures survives the sandbox being
+// restored afterwards: re-resolving it inside the run is idempotent, and with
+// the override gone the snapshot itself is what still bounds the run.
+func TestResolveSubagentTools_SnapshotSurvivesSandboxRestore(t *testing.T) {
+	t.Parallel()
+	a := &Agent{definitions: skill.DefinitionMap{}}
+	a.SetAllowedToolsOverride([]string{catToolRead, catToolGlob})
+
+	// Dispatch time: an uncapped definition collapses to the sandbox.
+	def := &skill.Definition{Name: "helper", Kind: skill.KindAgent}
+	snapshot, err := a.resolveSubagentTools(def, nil)
+	if err != nil {
+		t.Fatalf("resolve at dispatch: %v", err)
+	}
+	if want := []string{catToolRead, catToolGlob}; !equalStringSlices(snapshot, want) {
+		t.Fatalf("snapshot: got %v, want %v", snapshot, want)
+	}
+
+	// The turn that dispatched it ends and restores the sandbox.
+	a.SetAllowedToolsOverride(nil)
+
+	// The run re-resolves with the snapshot as its override and stays bounded —
+	// it must NOT widen back to the uncapped definition's full tool set.
+	got, err := a.resolveSubagentTools(def, snapshot)
+	if err != nil {
+		t.Fatalf("resolve in run: %v", err)
+	}
+	if !equalStringSlices(got, snapshot) {
+		t.Errorf("run escaped its captured sandbox: got %v, want %v", got, snapshot)
+	}
+}
+
 func equalStringSlices(a, b []string) bool {
 	if len(a) != len(b) {
 		return false

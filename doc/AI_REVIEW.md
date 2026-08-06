@@ -234,14 +234,18 @@ deviations:
   `a.SetAllowedToolsOverride(reviewAllowedTools)` switches to the hard
   whitelist path — nothing outside
   `Read, Glob, Grep, LS, Task` + the review accumulation tools exists for
-  this run. The override **propagates to subagents**: `Agent.runSubagent`
+  this run. The override **propagates to subagents**: `Agent.resolveSubagentTools`
   intersects a dispatched definition's tools with it, so the read-only
   `explore` agent keeps `Read/Grep/Glob/LS` (losing only `ToolSearch`, the
   deferred-loading escape hatch), while an uncapped agent such as
   `general-purpose` collapses to the same read-only set instead of
   inheriting `Bash`/`Write`. A definition with no permitted tools at all is
-  refused. On large PRs the reviewer delegates broad verification sweeps to
-  `explore`, keeping the search noise out of its own context.
+  refused. The whitelist is resolved on the goroutine that *dispatches* the
+  run, never inside it: the override is turn-scoped mutable state (a plugin
+  command swaps one in for its own duration), so a backgrounded subagent that
+  resolved its own tools later could find it already restored. On large PRs the
+  reviewer delegates broad verification sweeps to `explore`, keeping the search
+  noise out of its own context.
 - **Backend restriction.** Whole-agent backends (`codex`, `appserver`) run their
   own toolset out-of-process and can't see the review tools, so they are
   rejected at startup. Any direct `domain.LLM` backend (openai default,

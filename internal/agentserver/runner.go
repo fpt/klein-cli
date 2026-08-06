@@ -482,6 +482,10 @@ type codexItem struct {
 	Result    json.RawMessage `json:"result"`
 	Output    json.RawMessage `json:"output"`
 	Content   json.RawMessage `json:"content"`
+	// codex's dynamicToolCall spells its output this way, and defines no
+	// `result` field on that variant at all — so this is the only candidate
+	// that carries anything for the tool calls gallium reports.
+	ContentItems json.RawMessage `json:"contentItems"`
 }
 
 // Synthetic tool names klein assigns to codex activity so it renders through
@@ -668,7 +672,7 @@ func toolCallOutcome(it codexItem) (content string, isErr bool) {
 	if it.Error != nil && strings.TrimSpace(*it.Error) != "" {
 		return strings.TrimSpace(*it.Error), true
 	}
-	for _, raw := range []json.RawMessage{it.Result, it.Output, it.Content} {
+	for _, raw := range []json.RawMessage{it.Result, it.Output, it.Content, it.ContentItems} {
 		if s := renderToolResult(raw); s != "" {
 			return s, isErr
 		}

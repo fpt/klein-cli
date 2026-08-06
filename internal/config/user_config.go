@@ -182,6 +182,14 @@ func (c *UserConfig) NewProjectSessionFile(projectPath string) (string, error) {
 // Ordering is by mtime rather than by the timestamp in the name, because what
 // `--continue` should resume is the session most recently *used* — a session
 // resumed yesterday and worked in today is the one you mean, whenever it began.
+//
+// Equal mtimes are broken by name, descending. Two sessions written in the same
+// filesystem timestamp tick is not hypothetical: mtime resolution is coarser
+// than session names (nanoseconds) on some filesystems, and a test that starts
+// two sessions back to back hits it. `After` alone is a strict comparison, so a
+// tie kept whichever entry came first — and `os.ReadDir` sorts by name
+// ascending, which is oldest first. The tie-break therefore reversed the
+// answer rather than merely making it arbitrary.
 func (c *UserConfig) LatestProjectSessionFile(projectPath string) (string, error) {
 	sessionsDir, err := c.GetProjectSessionsDir(projectPath)
 	if err != nil {
@@ -202,8 +210,11 @@ func (c *UserConfig) LatestProjectSessionFile(projectPath string) (string, error
 		if err != nil {
 			continue // vanished mid-scan; not a reason to fail the whole lookup
 		}
-		if latest == "" || info.ModTime().After(latestMod) {
-			latest, latestMod = filepath.Join(sessionsDir, entry.Name()), info.ModTime()
+		mod := info.ModTime()
+		path := filepath.Join(sessionsDir, entry.Name())
+		if latest == "" || mod.After(latestMod) ||
+			(mod.Equal(latestMod) && entry.Name() > filepath.Base(latest)) {
+			latest, latestMod = path, mod
 		}
 	}
 	return latest, nil

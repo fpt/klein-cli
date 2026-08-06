@@ -106,6 +106,37 @@ func TestLatestProjectSessionFile_PicksMostRecentlyUsed(t *testing.T) {
 	}
 }
 
+// Two sessions can land on the same mtime — filesystem timestamp resolution is
+// coarser than the nanoseconds a session name carries, and starting two sessions
+// back to back is enough to collide. Before the tie-break this was not merely
+// arbitrary but reliably *wrong*: `os.ReadDir` returns names ascending, so the
+// first entry won and `--continue` resumed the older session.
+//
+// Observed in CI on fpt/klein-cli#95, on two files 1.6ms apart.
+func TestLatestProjectSessionFile_EqualMtimesPickTheLaterName(t *testing.T) {
+	t.Parallel()
+	c, workdir := testUserConfig(t)
+	dir, err := c.GetProjectSessionsDir(workdir)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Identical mtimes, so only the name can decide.
+	same := time.Now().Truncate(time.Second)
+	earlier := filepath.Join(dir, "20260101T090000.011827479.json")
+	later := filepath.Join(dir, "20260101T090000.013434046.json")
+	writeSession(t, earlier, same)
+	writeSession(t, later, same)
+
+	latest, err := c.LatestProjectSessionFile(workdir)
+	if err != nil {
+		t.Fatalf("LatestProjectSessionFile: %v", err)
+	}
+	if latest != later {
+		t.Errorf("expected the later session %q, got %q", later, latest)
+	}
+}
+
 // The codex thread sidecar lives beside its session as "<session>.json.codex-thread".
 // Mistaking one for a session of its own would hand --continue a file that holds
 // a thread id rather than a conversation.

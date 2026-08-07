@@ -205,23 +205,19 @@ func (r *Runner) startThread(ctx context.Context, developerInstructions string) 
 		params["config"] = map[string]any{"mcp_servers": r.cfg.MCPServers}
 	}
 
+	// codex's ThreadStartResponse carries the id inside the thread object.
 	var resp struct {
-		ThreadID string `json:"threadId"`
-		Thread   struct {
+		Thread struct {
 			ID string `json:"id"`
 		} `json:"thread"`
 	}
 	if err := r.client.Call(ctx, "thread/start", params, &resp); err != nil {
 		return "", fmt.Errorf("codex thread/start: %w", err)
 	}
-	id := resp.ThreadID
-	if id == "" {
-		id = resp.Thread.ID
-	}
-	if id == "" {
+	if resp.Thread.ID == "" {
 		return "", errors.New("codex thread/start returned no thread id")
 	}
-	return id, nil
+	return resp.Thread.ID, nil
 }
 
 // runTurn starts a turn and drains notifications until the turn completes,
@@ -318,18 +314,15 @@ func (r *Runner) startTurn(ctx context.Context, threadID string, params map[stri
 
 	go func() {
 		// codex answers turn/start at once and reports the rest by notification,
-		// so this response is an acknowledgement, not the turn's outcome.
+		// so this response is an acknowledgement, not the turn's outcome. Like
+		// thread/start, the id travels inside the object (TurnStartResponse).
 		var started struct {
 			Turn struct {
 				ID string `json:"id"`
 			} `json:"turn"`
-			TurnID string `json:"turnId"`
 		}
 		err := r.client.Call(context.WithoutCancel(ctx), "turn/start", params, &started)
 		id := started.Turn.ID
-		if id == "" {
-			id = started.TurnID
-		}
 
 		mu.Lock()
 		if !abandoned {
@@ -486,9 +479,6 @@ func classifyNote(note rpc.Notification, threadID string, progress *turnProgress
 		}
 		return "", noteFailed
 	}
-	// No arm for `turn/failed`: that was rs-gallium's own spelling, and gallium
-	// now reports failures the codex way — turn/completed with status "failed"
-	// (fpt/rs-gallium#77/#80). Nothing sends it any more, so nothing accepts it.
 	return "", noteContinue
 }
 

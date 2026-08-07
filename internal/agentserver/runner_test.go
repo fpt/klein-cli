@@ -34,7 +34,10 @@ func TestInterruptTurn_WithoutTurnID_DoesNotCallTheBackend(t *testing.T) {
 type fakeServer struct {
 	out    chan string
 	closed chan struct{}
-	seen   []map[string]any
+	// threadStartResult is the raw JSON answered to thread/start, so a test can
+	// choose the response shape.
+	threadStartResult string
+	seen              []map[string]any
 
 	once sync.Once
 	mu   sync.Mutex
@@ -44,9 +47,10 @@ type fakeServer struct {
 
 func newFakeServer(startDelay time.Duration) *fakeServer {
 	return &fakeServer{
-		startDelay: startDelay,
-		out:        make(chan string, 8),
-		closed:     make(chan struct{}),
+		startDelay:        startDelay,
+		threadStartResult: `{"thread":{"id":"thread_new"}}`,
+		out:               make(chan string, 8),
+		closed:            make(chan struct{}),
 	}
 }
 
@@ -76,6 +80,8 @@ func (f *fakeServer) WriteLine(line string) error {
 	f.mu.Unlock()
 
 	switch req.Method {
+	case "thread/start":
+		f.reply(req.ID, f.threadStartResult)
 	case "turn/start":
 		go func() {
 			select {
@@ -124,6 +130,35 @@ func runnerOn(t *testing.T, server *fakeServer, grace time.Duration) *Runner {
 		cfg:                Config{Backend: BackendAppServer},
 		started:            map[string]bool{"thread_1": true},
 		startGraceOverride: grace,
+	}
+}
+
+// codex's ThreadStartResponse carries the new thread's id inside the thread
+// object, and that is the only spelling klein reads.
+func TestStartThread_ReadsTheIDFromTheThreadObject(t *testing.T) {
+	t.Parallel()
+
+	runner := runnerOn(t, newFakeServer(0), time.Second)
+
+	id, err := runner.startThread(context.Background(), "")
+	if err != nil {
+		t.Fatalf("startThread: %v", err)
+	}
+	if id != "thread_new" {
+		t.Errorf("thread id = %q, want thread_new", id)
+	}
+}
+
+// A response carrying no id has to fail here. Passing an empty thread id on to
+// turn/start would fail later and less clearly.
+func TestStartThread_WithoutAnID_Fails(t *testing.T) {
+	t.Parallel()
+
+	server := newFakeServer(0)
+	server.threadStartResult = `{}`
+
+	if _, err := runnerOn(t, server, time.Second).startThread(context.Background(), ""); err == nil {
+		t.Fatal("want an error when thread/start returns no id")
 	}
 }
 

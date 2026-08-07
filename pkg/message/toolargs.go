@@ -19,8 +19,8 @@ const (
 // tool are unaffected.
 //
 // It is shared by the native ReAct loop and the app-server backends
-// (codex/acp) so tool-call input is reported identically regardless of which
-// backend produced it.
+// (codex/appserver) so tool-call input is reported identically regardless of
+// which backend produced it.
 func SummarizeToolArgs(args ToolArgumentValues) ToolArgumentValues {
 	if summarized, ok := summarizeValue(map[string]any(args), 0).(map[string]any); ok {
 		return ToolArgumentValues(summarized)

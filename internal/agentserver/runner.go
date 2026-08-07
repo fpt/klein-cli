@@ -406,7 +406,7 @@ func (r *Runner) interruptTurn(ctx context.Context, threadID, turnID string) {
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), interruptTimeout)
 	defer cancel()
 
-	params := map[string]any{keyThreadID: threadID, "turnId": turnID}
+	params := map[string]any{keyThreadID: threadID, keyTurnID: turnID}
 	if err := r.client.Call(ctx, "turn/interrupt", params, &json.RawMessage{}); err != nil && r.cfg.Logger != nil {
 		r.cfg.Logger.Warn(
 			"could not stop the abandoned turn; the backend may still be working",
@@ -416,6 +416,9 @@ func (r *Runner) interruptTurn(ctx context.Context, threadID, turnID string) {
 		)
 	}
 }
+
+// methodError is codex's `error` server notification (v2 ErrorNotification).
+const methodError = "error"
 
 type noteStatus int
 
@@ -437,6 +440,11 @@ func classifyNote(note rpc.Notification, threadID string, progress *turnProgress
 		Turn     struct {
 			Status string `json:"status"`
 		} `json:"turn"`
+		// The `error` notification's payload (codex v2 ErrorNotification).
+		Error struct {
+			Message string `json:"message"`
+		} `json:"error"`
+		WillRetry bool `json:"willRetry"`
 	}
 	_ = json.Unmarshal(note.Raw, &p)
 	if p.ThreadID != "" && p.ThreadID != threadID {
@@ -463,10 +471,27 @@ func classifyNote(note rpc.Notification, threadID string, progress *turnProgress
 			return "", noteFailed
 		}
 		return "", noteDone
-	// rs-gallium's own spelling, kept because it costs nothing and this client
-	// may face a backend older than fpt/rs-gallium#77's item 5. `error` is not
-	// a codex method either; it predates this and is equally harmless to keep.
-	case "turn/failed", "error":
+	case methodError:
+		// codex *does* define `error` as a server notification
+		// (app-server-protocol v2 ErrorNotification: error, willRetry, threadId,
+		// turnId), and willRetry is the whole point of reading it: codex sets it
+		// on a stream error it is retrying itself, which by definition does not
+		// interrupt the turn. Failing here would show the user a failure that
+		// did not happen and abandon a turn still holding the thread's slot, so
+		// the next turn/start collides with it ("one turn at a time"). The turn's
+		// real outcome still arrives as turn/completed.
+		if p.WillRetry {
+			progress.reportRetry(p.Error.Message)
+			return "", noteContinue
+		}
+		return "", noteFailed
+	// rs-gallium's own spelling for a failed turn, kept because it costs nothing
+	// and this client may face a backend older than fpt/rs-gallium#77's item 5.
+	// Current gallium reports failures the codex way — turn/completed with
+	// status "failed" — so once no deployed backend spells it this way, the arm
+	// can go. Removing it early is the worse trade: an old backend's failure
+	// would then match nothing and hang the turn until the user interrupts it.
+	case "turn/failed":
 		return "", noteFailed
 	}
 	return "", noteContinue
@@ -589,6 +614,19 @@ func (tp *turnProgress) reportUnrendered(itemType string) {
 		"app-server sent an item type this build does not render",
 		"type", itemType,
 		"hint", "the backend may be newer than klein, or the two have drifted",
+	)
+}
+
+// reportRetry notes a transient backend error the app-server is retrying by
+// itself. Worth a line: the turn survives, but it stalls for as long as the
+// retry takes, and silence there looks like a hung agent.
+func (tp *turnProgress) reportRetry(msg string) {
+	if tp.logger == nil {
+		return
+	}
+	tp.logger.Warn(
+		"app-server hit a transient error and is retrying; the turn is still running",
+		"detail", strings.TrimSpace(msg),
 	)
 }
 

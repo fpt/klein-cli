@@ -21,6 +21,7 @@ const (
 	keyText         = "text"
 	keyType         = "type"
 	keyThreadID     = "threadId"
+	keyTurnID       = "turnId"
 
 	decisionAccept  = "accept"  // approve a command/file-change request
 	decisionDecline = "decline" // deny it; codex continues the turn

@@ -165,7 +165,7 @@ func TestRunTurn_CanceledDuringTurnStart_StillInterrupts(t *testing.T) {
 	}
 
 	interrupted := waitForInterrupt(t, server, time.Second)
-	if interrupted["turnId"] != "turn_1" || interrupted["threadId"] != "thread_1" {
+	if interrupted[keyTurnID] != testTurn || interrupted[keyThreadID] != "thread_1" {
 		t.Errorf("interrupted the wrong turn: %+v", interrupted)
 	}
 }
@@ -216,7 +216,7 @@ func TestRunTurn_TurnStartAnswersAfterTheGrace_InterruptsAnyway(t *testing.T) {
 	}
 
 	interrupted := waitForInterrupt(t, server, 2*time.Second)
-	if interrupted["turnId"] != "turn_1" {
+	if interrupted[keyTurnID] != testTurn {
 		t.Errorf("interrupted the wrong turn: %+v", interrupted)
 	}
 }

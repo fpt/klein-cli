@@ -485,15 +485,10 @@ func classifyNote(note rpc.Notification, threadID string, progress *turnProgress
 			return "", noteContinue
 		}
 		return "", noteFailed
-	// rs-gallium's own spelling for a failed turn, kept because it costs nothing
-	// and this client may face a backend older than fpt/rs-gallium#77's item 5.
-	// Current gallium reports failures the codex way — turn/completed with
-	// status "failed" — so once no deployed backend spells it this way, the arm
-	// can go. Removing it early is the worse trade: an old backend's failure
-	// would then match nothing and hang the turn until the user interrupts it.
-	case "turn/failed":
-		return "", noteFailed
 	}
+	// No arm for `turn/failed`: that was rs-gallium's own spelling, and gallium
+	// now reports failures the codex way — turn/completed with status "failed"
+	// (fpt/rs-gallium#77/#80). Nothing sends it any more, so nothing accepts it.
 	return "", noteContinue
 }
 

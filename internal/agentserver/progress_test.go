@@ -460,20 +460,6 @@ func TestClassify_TurnCompletedStatusDecidesTheOutcome(t *testing.T) {
 	}
 }
 
-// turn/failed is rs-gallium's own spelling, not codex's. Current gallium reports
-// failures as turn/completed(failed), but the arm stays so a backend older than
-// fpt/rs-gallium#77 fails the turn instead of hanging it.
-func TestClassify_LegacyTurnFailedStillFails(t *testing.T) {
-	t.Parallel()
-	progress, _ := newProgress()
-
-	raw, _ := json.Marshal(map[string]any{keyThreadID: testThread, keyTurnID: testTurn})
-	n := rpc.Notification{Method: "turn/failed", Raw: raw}
-	if _, got := classifyNote(n, testThread, progress); got != noteFailed {
-		t.Errorf("got %v, want noteFailed", got)
-	}
-}
-
 // errNote builds codex's `error` server notification (v2 ErrorNotification).
 func errNote(message string, willRetry bool) rpc.Notification {
 	raw, _ := json.Marshal(map[string]any{

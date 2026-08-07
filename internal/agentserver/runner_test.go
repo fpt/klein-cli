@@ -34,7 +34,10 @@ func TestInterruptTurn_WithoutTurnID_DoesNotCallTheBackend(t *testing.T) {
 type fakeServer struct {
 	out    chan string
 	closed chan struct{}
-	seen   []map[string]any
+	// threadStartResult is the raw JSON answered to thread/start, so a test can
+	// choose the response shape.
+	threadStartResult string
+	seen              []map[string]any
 
 	once sync.Once
 	mu   sync.Mutex
@@ -44,9 +47,10 @@ type fakeServer struct {
 
 func newFakeServer(startDelay time.Duration) *fakeServer {
 	return &fakeServer{
-		startDelay: startDelay,
-		out:        make(chan string, 8),
-		closed:     make(chan struct{}),
+		startDelay:        startDelay,
+		threadStartResult: `{"thread":{"id":"thread_new"}}`,
+		out:               make(chan string, 8),
+		closed:            make(chan struct{}),
 	}
 }
 
@@ -76,6 +80,8 @@ func (f *fakeServer) WriteLine(line string) error {
 	f.mu.Unlock()
 
 	switch req.Method {
+	case "thread/start":
+		f.reply(req.ID, f.threadStartResult)
 	case "turn/start":
 		go func() {
 			select {
@@ -127,6 +133,35 @@ func runnerOn(t *testing.T, server *fakeServer, grace time.Duration) *Runner {
 	}
 }
 
+// codex's ThreadStartResponse carries the new thread's id inside the thread
+// object, and that is the only spelling klein reads.
+func TestStartThread_ReadsTheIDFromTheThreadObject(t *testing.T) {
+	t.Parallel()
+
+	runner := runnerOn(t, newFakeServer(0), time.Second)
+
+	id, err := runner.startThread(context.Background(), "")
+	if err != nil {
+		t.Fatalf("startThread: %v", err)
+	}
+	if id != "thread_new" {
+		t.Errorf("thread id = %q, want thread_new", id)
+	}
+}
+
+// A response carrying no id has to fail here. Passing an empty thread id on to
+// turn/start would fail later and less clearly.
+func TestStartThread_WithoutAnID_Fails(t *testing.T) {
+	t.Parallel()
+
+	server := newFakeServer(0)
+	server.threadStartResult = `{}`
+
+	if _, err := runnerOn(t, server, time.Second).startThread(context.Background(), ""); err == nil {
+		t.Fatal("want an error when thread/start returns no id")
+	}
+}
+
 // waitForInterrupt returns the params of the first turn/interrupt the server
 // saw, waiting up to timeout for one that has not arrived yet.
 func waitForInterrupt(t *testing.T, server *fakeServer, timeout time.Duration) map[string]any {
@@ -165,7 +200,7 @@ func TestRunTurn_CanceledDuringTurnStart_StillInterrupts(t *testing.T) {
 	}
 
 	interrupted := waitForInterrupt(t, server, time.Second)
-	if interrupted["turnId"] != "turn_1" || interrupted["threadId"] != "thread_1" {
+	if interrupted[keyTurnID] != testTurn || interrupted[keyThreadID] != "thread_1" {
 		t.Errorf("interrupted the wrong turn: %+v", interrupted)
 	}
 }
@@ -216,7 +251,7 @@ func TestRunTurn_TurnStartAnswersAfterTheGrace_InterruptsAnyway(t *testing.T) {
 	}
 
 	interrupted := waitForInterrupt(t, server, 2*time.Second)
-	if interrupted["turnId"] != "turn_1" {
+	if interrupted[keyTurnID] != testTurn {
 		t.Errorf("interrupted the wrong turn: %+v", interrupted)
 	}
 }

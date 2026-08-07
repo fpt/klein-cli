@@ -16,6 +16,7 @@ import (
 
 const (
 	testThread   = "thr_1"
+	testTurn     = "turn_1"
 	stInProgress = "inProgress"
 	stCompleted  = "completed"
 
@@ -51,7 +52,7 @@ func itm(id, typ string, extra map[string]any) map[string]any {
 
 // noteFor wraps a ThreadItem in a notification for the given method and thread.
 func noteFor(method, thread string, item map[string]any) rpc.Notification {
-	raw, _ := json.Marshal(map[string]any{"threadId": thread, "item": item})
+	raw, _ := json.Marshal(map[string]any{keyThreadID: thread, "item": item})
 	return rpc.Notification{Method: method, Raw: raw}
 }
 
@@ -426,8 +427,8 @@ func TestProgress_NilLogger_DoesNotPanic(t *testing.T) {
 // turnEnd builds a turn/completed notification carrying codex's Turn object.
 func turnEnd(status string) rpc.Notification {
 	raw, _ := json.Marshal(map[string]any{
-		"threadId": testThread,
-		"turn":     map[string]any{"id": "turn_1", "status": status},
+		keyThreadID: testThread,
+		"turn":      map[string]any{"id": testTurn, "status": status},
 	})
 	return rpc.Notification{Method: "turn/completed", Raw: raw}
 }
@@ -459,15 +460,41 @@ func TestClassify_TurnCompletedStatusDecidesTheOutcome(t *testing.T) {
 	}
 }
 
-// turn/failed is rs-gallium's own spelling, not codex's. Kept working so this
-// client is not the thing that has to be deployed first.
-func TestClassify_LegacyTurnFailedStillFails(t *testing.T) {
+// errNote builds codex's `error` server notification (v2 ErrorNotification).
+func errNote(message string, willRetry bool) rpc.Notification {
+	raw, _ := json.Marshal(map[string]any{
+		keyThreadID: testThread,
+		keyTurnID:   testTurn,
+		"willRetry": willRetry,
+		methodError: map[string]any{"message": message},
+	})
+	return rpc.Notification{Method: methodError, Raw: raw}
+}
+
+// codex sends `error` with willRetry: true for a stream error it retries itself,
+// and says so in the protocol: "If true, this will not interrupt a turn."
+// Treating it as a failure reported a failure that never happened and abandoned
+// a turn the backend was still running — whose slot then refused the next
+// turn/start.
+func TestClassify_TransientErrorDoesNotEndTheTurn(t *testing.T) {
+	t.Parallel()
+	progress, buf := newProgressWithLogger()
+
+	if _, got := classifyNote(errNote("stream disconnected", true), testThread, progress); got != noteContinue {
+		t.Errorf("got %v, want noteContinue", got)
+	}
+	// A retry stalls the turn, so it must not stall silently.
+	if !strings.Contains(buf.String(), "stream disconnected") {
+		t.Errorf("transient error was not reported: %q", buf.String())
+	}
+}
+
+// The same notification with willRetry: false is codex's real turn error.
+func TestClassify_NonRetriedErrorFailsTheTurn(t *testing.T) {
 	t.Parallel()
 	progress, _ := newProgress()
 
-	raw, _ := json.Marshal(map[string]any{"threadId": testThread, "turnId": "turn_1"})
-	n := rpc.Notification{Method: "turn/failed", Raw: raw}
-	if _, got := classifyNote(n, testThread, progress); got != noteFailed {
+	if _, got := classifyNote(errNote("model refused", false), testThread, progress); got != noteFailed {
 		t.Errorf("got %v, want noteFailed", got)
 	}
 }

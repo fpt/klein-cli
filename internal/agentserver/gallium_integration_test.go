@@ -273,3 +273,38 @@ func TestGallium_RealAppServer_CancelledTurnFreesTheThread(t *testing.T) {
 
 	assertNoDrift(t, drift)
 }
+
+// A turn gallium fails must come back as an error, and this is the pair that
+// nothing else covers: klein reads the outcome from turn/completed's status, and
+// gallium is the only thing that can prove it sends the status klein reads.
+//
+// The script runs dry — one tool call and no reply — so the ReAct loop asks for
+// a step that does not exist and the provider errors. That fails the turn inside
+// gallium, which is the only honest way to reach this path.
+func TestGallium_RealAppServer_FailedTurnIsAnError(t *testing.T) {
+	t.Parallel()
+	bin := galliumBin(t)
+
+	script := writeScript(t, `{
+	  "steps": [
+	    { "toolCalls": [{ "id": "c1", "name": "LS", "arguments": { "path": "." } }] }
+	  ]
+	}`)
+	runner, drift := newGalliumRunner(t, bin, script, t.TempDir())
+
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+
+	_, text, err := runner.RunTurn(ctx, "", "list it", "", func(events.EventType, any) {})
+	if err == nil {
+		t.Fatalf("a failed turn returned success with text %q", text)
+	}
+	// Specifically the turn-failed classification, not a dead transport or a
+	// timeout — either of which would also produce "an error" and hide the fact
+	// that klein never read the status at all.
+	if !strings.Contains(err.Error(), "turn failed") {
+		t.Errorf("the turn failed for the wrong reason: %v", err)
+	}
+
+	assertNoDrift(t, drift)
+}

@@ -19,6 +19,11 @@
 //   - a table's block runs to the next header that is not one of its own
 //     children, so `[mcp.godoc.env]` travels with `[mcp.godoc]`.
 //
+// Line endings are the author's too. A document written on Windows keeps its
+// CRLF on every line it already had, and lines this package inserts adopt the
+// same ending — splitting on LF and rejoining with LF would turn an edit to one
+// server into a diff against the whole file.
+//
 // Every edit is parsed before it is returned. A splice that produces something
 // TOML cannot read is a bug here, and the caller gets an error instead of a
 // broken config file.
@@ -44,11 +49,12 @@ func SetTable(src []byte, path string, body []byte) ([]byte, error) {
 		return nil, err
 	}
 
+	crlf := usesCRLF(src)
 	lines := splitLines(src)
 	start, end, found := findTable(lines, path)
 
 	header := "[" + path + "]"
-	replacement := append([]string{header}, splitLines(body)...)
+	replacement := asDocumentLines(append([]string{header}, splitLines(body)...), crlf)
 
 	var out []string
 	switch {
@@ -62,12 +68,12 @@ func SetTable(src []byte, path string, body []byte) ([]byte, error) {
 	default:
 		out = append(out, lines...)
 		if len(out) > 0 && strings.TrimSpace(out[len(out)-1]) != "" {
-			out = append(out, "")
+			out = append(out, asDocumentLines([]string{""}, crlf)...)
 		}
 		out = append(out, replacement...)
 	}
 
-	return finish(out, path)
+	return finish(out, path, crlf)
 }
 
 // DeleteTable removes the table at path and reports whether it was there.
@@ -91,7 +97,7 @@ func DeleteTable(src []byte, path string) ([]byte, bool, error) {
 	out := append([]string{}, lines[:start]...)
 	out = append(out, lines[end:]...)
 
-	doc, err := finish(out, path)
+	doc, err := finish(out, path, usesCRLF(src))
 	if err != nil {
 		return nil, false, err
 	}
@@ -100,9 +106,14 @@ func DeleteTable(src []byte, path string) ([]byte, bool, error) {
 
 // finish joins the edited lines and refuses to hand back a document TOML cannot
 // read — the whole point of splicing text is that the result is still valid.
-func finish(lines []string, path string) ([]byte, error) {
+func finish(lines []string, path string, crlf bool) ([]byte, error) {
 	doc := []byte(strings.Join(lines, "\n"))
 	if len(doc) > 0 && !bytes.HasSuffix(doc, []byte("\n")) {
+		// The last line already carries its own CR when the document has one;
+		// this only restores the terminator the join left off.
+		if crlf && !bytes.HasSuffix(doc, []byte("\r")) {
+			doc = append(doc, '\r')
+		}
 		doc = append(doc, '\n')
 	}
 	var probe map[string]any
@@ -221,13 +232,38 @@ func validPath(path string) error {
 	return nil
 }
 
-// splitLines splits on newlines without inventing a trailing empty line for a
-// document that ends in one, so a round trip does not grow the file.
+// splitLines splits on LF and keeps whatever else the line held, so a line that
+// ended CRLF keeps its CR and rejoins byte-identical. The trailing newline is
+// trimmed rather than becoming an empty final line, so a round trip does not
+// grow the file.
+//
+// Every line-shaped comparison downstream goes through strings.TrimSpace, which
+// treats a stray CR as the whitespace it is.
 func splitLines(b []byte) []string {
-	s := strings.ReplaceAll(string(b), "\r\n", "\n")
-	s = strings.TrimSuffix(s, "\n")
+	s := strings.TrimSuffix(string(b), "\n")
 	if s == "" {
 		return nil
 	}
 	return strings.Split(s, "\n")
+}
+
+// usesCRLF reports the document's line-ending convention, so lines this package
+// inserts match the ones already there rather than seeding a mixed file.
+func usesCRLF(src []byte) bool {
+	return bytes.Contains(src, []byte("\r\n"))
+}
+
+// asDocumentLines restates caller-supplied lines in the document's convention.
+// The body comes from klein, not from the author, so it has no bytes worth
+// preserving — only an ending worth matching.
+func asDocumentLines(lines []string, crlf bool) []string {
+	out := make([]string, len(lines))
+	for i, l := range lines {
+		l = strings.TrimSuffix(l, "\r")
+		if crlf {
+			l += "\r"
+		}
+		out[i] = l
+	}
+	return out
 }

@@ -9,6 +9,10 @@ import (
 
 // decode is the assertion that matters most: after any edit the document still
 // means what it should, not merely that the text looks right.
+// newCommand is the replacement body these tests write, named because several
+// of them assert on it.
+const newCommand = "new"
+
 func decode(t *testing.T, doc []byte) map[string]any {
 	t.Helper()
 	var got map[string]any
@@ -109,7 +113,7 @@ command = "keep-me"
 	if _, stale := godoc["env"]; stale {
 		t.Errorf("the replaced table kept its child table: %+v", godoc)
 	}
-	if godoc["command"] != "new" {
+	if godoc["command"] != newCommand {
 		t.Errorf("body not replaced: %+v", godoc)
 	}
 	if other := mcp["other"].(map[string]any); other["command"] != "keep-me" {
@@ -306,7 +310,86 @@ func TestSetTable_KeepsHeaderLineVerbatim(t *testing.T) {
 	if !strings.Contains(string(got), "# the Go docs server") {
 		t.Errorf("the header's trailing comment was lost:\n%s", got)
 	}
-	if m := decode(t, got); m["mcp"].(map[string]any)["godoc"].(map[string]any)["command"] != "new" {
+	if m := decode(t, got); m["mcp"].(map[string]any)["godoc"].(map[string]any)["command"] != newCommand {
 		t.Errorf("body not replaced:\n%s", got)
+	}
+}
+
+// The package's whole claim is that untouched bytes stay untouched, and a
+// document written on Windows is the case where that is easiest to break: split
+// on LF, join on LF, and every line in the file has quietly changed. An edit to
+// one server would show up as a diff against the entire config.
+func TestSetTable_PreservesCRLFLineEndings(t *testing.T) {
+	t.Parallel()
+	src := []byte("# klein settings\r\n\r\n[llm]\r\nbackend = \"openai\"\r\n\r\n[mcp.godoc]\r\ncommand = \"old\"\r\n")
+
+	got, err := SetTable(src, "mcp.godoc", []byte(`command = "new"`))
+	if err != nil {
+		t.Fatalf("SetTable: %v", err)
+	}
+	s := string(got)
+
+	// Untouched lines keep their endings.
+	for _, keep := range []string{"# klein settings\r\n", "[llm]\r\n", "backend = \"openai\"\r\n"} {
+		if !strings.Contains(s, keep) {
+			t.Errorf("a CRLF line ending was rewritten; %q missing from:\n%q", keep, s)
+		}
+	}
+	// And the inserted line matches the file it landed in rather than seeding a
+	// mixed-ending document.
+	if !strings.Contains(s, "command = \"new\"\r\n") {
+		t.Errorf("inserted line did not adopt the document's endings:\n%q", s)
+	}
+	if strings.Contains(strings.ReplaceAll(s, "\r\n", ""), "\n") {
+		t.Errorf("document ended up with mixed line endings:\n%q", s)
+	}
+	if m := decode(t, got); m["mcp"].(map[string]any)["godoc"].(map[string]any)["command"] != newCommand {
+		t.Errorf("body not replaced:\n%s", got)
+	}
+}
+
+// Appending to a CRLF document has to match too — including the blank separator
+// line the append inserts.
+func TestSetTable_AppendsWithCRLF(t *testing.T) {
+	t.Parallel()
+	src := []byte("[llm]\r\nbackend = \"openai\"\r\n")
+
+	got, err := SetTable(src, "mcp.github", []byte(`url = "https://example.test"`))
+	if err != nil {
+		t.Fatalf("SetTable: %v", err)
+	}
+	if strings.Contains(strings.ReplaceAll(string(got), "\r\n", ""), "\n") {
+		t.Errorf("append introduced LF endings into a CRLF document:\n%q", got)
+	}
+	m := decode(t, got)
+	if m["mcp"].(map[string]any)["github"].(map[string]any)["url"] != "https://example.test" {
+		t.Errorf("appended table did not decode: %+v", m)
+	}
+}
+
+func TestDeleteTable_PreservesCRLFLineEndings(t *testing.T) {
+	t.Parallel()
+	src := []byte("[llm]\r\nbackend = \"openai\"\r\n\r\n[mcp.godoc]\r\ncommand = \"x\"\r\n")
+
+	got, found, err := DeleteTable(src, "mcp.godoc")
+	if err != nil || !found {
+		t.Fatalf("DeleteTable: found=%v err=%v", found, err)
+	}
+	if strings.Contains(strings.ReplaceAll(string(got), "\r\n", ""), "\n") {
+		t.Errorf("deletion rewrote line endings:\n%q", got)
+	}
+	if !strings.Contains(string(got), "backend = \"openai\"\r\n") {
+		t.Errorf("an untouched CRLF line was changed:\n%q", got)
+	}
+}
+
+// A CRLF document is still found by the scanner: a header line ends with a CR,
+// and every comparison has to see past it.
+func TestFindTable_HeaderWithCarriageReturn(t *testing.T) {
+	t.Parallel()
+	src := []byte("[mcp.godoc]\r\ncommand = \"x\"\r\n")
+
+	if _, found, err := DeleteTable(src, "mcp.godoc"); err != nil || !found {
+		t.Errorf("a CRLF header was not recognized: found=%v err=%v", found, err)
 	}
 }

@@ -1,9 +1,10 @@
-package agentserver
+package agentbackend
 
 import (
 	"context"
 	"strings"
 
+	"github.com/fpt/klein-cli/pkg/agentserver"
 	pkgLogger "github.com/fpt/klein-cli/pkg/logger"
 )
 
@@ -42,7 +43,7 @@ var shellMetacharacters = []string{"&&", "||", ";", "|", "$(", "`", ">", "<", "\
 // Each auto-approval is logged. A silent one is indistinguishable from a command
 // that was never proposed, and the point of an allowlist is to know what it let
 // through.
-func WithAutoApprove(allowlist []string, logger *pkgLogger.Logger, next Approver) Approver {
+func WithAutoApprove(allowlist []string, logger *pkgLogger.Logger, next agentserver.Approver) agentserver.Approver {
 	if len(allowlist) == 0 {
 		return next
 	}
@@ -52,11 +53,11 @@ func WithAutoApprove(allowlist []string, logger *pkgLogger.Logger, next Approver
 // autoApprover is the Approver WithAutoApprove returns.
 type autoApprover struct {
 	logger    *pkgLogger.Logger
-	next      Approver
+	next      agentserver.Approver
 	allowlist []string
 }
 
-func (a autoApprover) Approve(ctx context.Context, req ApprovalRequest) bool {
+func (a autoApprover) Approve(ctx context.Context, req agentserver.ApprovalRequest) bool {
 	if allowed, ok := autoApproved(req, a.allowlist); ok {
 		if a.logger != nil {
 			a.logger.InfoWithIntention(
@@ -76,8 +77,8 @@ func (a autoApprover) Approve(ctx context.Context, req ApprovalRequest) bool {
 // autoApproved reports whether every command in req is allowlisted, returning
 // them joined for the log line. A file change carries no commands and so is
 // never auto-approved — an allowlist of programs says nothing about writing files.
-func autoApproved(req ApprovalRequest, allowlist []string) (string, bool) {
-	if req.Kind != ApprovalCommand || len(req.Commands) == 0 {
+func autoApproved(req agentserver.ApprovalRequest, allowlist []string) (string, bool) {
+	if req.Kind != agentserver.ApprovalCommand || len(req.Commands) == 0 {
 		return "", false
 	}
 	for _, cmd := range req.Commands {

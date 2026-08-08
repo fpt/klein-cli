@@ -295,10 +295,28 @@ the turn is routed to a backend thread (`Runner.RunTurn`) and the ReAct loop +
 `ToolManager` are bypassed entirely. The `domain.LLM` slot holds only a stub (so
 construction and `ModelID()` work; `Chat` is never called).
 
-Both are driven by **one** implementation, `internal/agentserver`, because both
+Both are driven by **one** implementation, `pkg/agentserver`, because both
 speak the same JSON-RPC **app-server protocol**. They differ only in the binary
 spawned (resolved by `command()`) and in who owns the model: codex takes it from
 the codex CLI's config, a generic app-server from its own.
+
+That client is a **standalone package**: it imports nothing of klein's, so
+another Go program can drive an app-server without taking klein with it (4
+non-stdlib dependencies, against 151 when it lived under `internal/`). It asks
+its caller for what it needs through small interfaces in
+`pkg/agentserver/types.go` — `DynamicTools`, `Observer`, `Approver`, `Logger`,
+each optional and each nil-tolerant — and says nothing about how they are
+implemented.
+
+klein's half lives in `internal/agentbackend`: the adapters that convert klein's
+types into those interfaces (`adapters.go`), the settings→`Config` plumbing, the
+command allowlist, and the `domain.AgentBackend` implementations the app layer
+injects. The split follows one rule — **protocol knowledge in the client, policy
+in klein**. Truncating a tool argument for display, deciding which commands may
+run unattended, and phrasing an approval prompt are all klein's; parsing a
+`CommandAction`, rendering a JSON Schema, and knowing that codex has an account
+to probe are all the client's. `TestPackageImportsNothingOfKleins` enforces the
+boundary, because a boundary nothing checks is a boundary that drifts.
 
 `appserver` is deliberately **generic** — it names the protocol, not an
 implementation. Any local agent that implements the subset used here

@@ -1,22 +1,38 @@
-// Package agentserver adapts an external app-server as a whole-agent backend for
-// klein. Unlike the chat backends, such a backend runs its own reasoning + tool
-// loop; klein routes a conversation turn to one of its threads and takes back
-// the final text.
+// Package agentserver is a client for the codex app-server protocol: it spawns
+// an agent process, starts threads on it, runs turns, and reports what happened
+// along the way.
 //
-// Two backends are supported. Both speak the same codex-app-server JSON-RPC
-// protocol and differ only in the binary spawned and how it is configured:
+// Such a server is a whole agent, not a model — it runs its own reasoning and
+// tool loop, and a turn is one request in and one answer out, with progress
+// arriving as notifications in between. Two implementations are known to work:
+// codex itself (`codex app-server`) and rs-gallium (`gallium app-server`), and
+// anything implementing the same subset — initialize with `experimentalApi`,
+// thread/start, turn/start, plus `dynamicTools` — should work too. That subset
+// is treated as a contract: a server is driven through it alone unless the
+// caller names a Dialect saying otherwise.
 //
-//   - codex     — the codex app-server (`codex app-server`)
-//   - appserver — any local agent implementing the subset of that protocol used
-//     here; the binary comes from `appserver.command` (e.g. `gallium app-server`)
+// The package depends on nothing outside the standard library and the codex SDK,
+// which is deliberate and enforced by a test. Everything it needs from its caller
+// arrives through the small interfaces in types.go — DynamicTools to offer tools
+// the server may call back for, Observer to watch a turn, Approver to answer
+// permission requests, Logger for protocol drift. All are optional; a nil one
+// means the client does without.
 //
-// It drives the app-server over the LOW-LEVEL JSON-RPC protocol (not the SDK's
-// high-level Thread helpers) for one reason: klein exposes its own tools to the
-// backend via the experimental `dynamicTools` mechanism, which requires the
-// `experimentalApi` capability negotiated at `initialize` — something the SDK's
-// New() does not send. The backend then calls back for those tools via
-// ItemToolCall over the same stdio connection (see dynamictools.go). See
-// doc/DESIGN.md.
+// A caller wanting nothing but the answer needs three lines:
+//
+//	runner, err := agentserver.NewRunner(ctx, agentserver.Config{
+//		Command: "gallium", Args: []string{"app-server"}, Cwd: dir,
+//	})
+//	threadID, text, err := runner.RunTurn(ctx, "", "what changed today?", "", nil)
+//	defer runner.Close()
+//
+// It speaks the low-level JSON-RPC protocol rather than the SDK's Thread helpers
+// for one reason: dynamic tools require the `experimentalApi` capability
+// negotiated at initialize, which the SDK's New() does not send. The server then
+// calls back for those tools over the same stdio connection (see dynamictools.go).
+//
+// klein's own use of this package — the adapters from klein's tool managers,
+// event stream, and settings — lives in internal/agentbackend. See doc/DESIGN.md.
 package agentserver
 
 import (

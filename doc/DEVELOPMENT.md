@@ -469,7 +469,7 @@ make test
 
 #### App-server integration tests (opt-in)
 
-`internal/agentserver` is tested twice over. The unit tests hand-build
+`pkg/agentserver` is tested twice over. The unit tests hand-build
 notifications and feed them to the renderer — they check klein's *beliefs* about
 the protocol. `gallium_integration_test.go` spawns a real
 [rs-gallium](https://github.com/fpt/rs-gallium) `app-server`, runs a real turn,
@@ -495,7 +495,7 @@ Point it at a **freshly built** binary. There is deliberately no fall back to
 testing against a stale one turns "you did not configure this" into a confusing
 assertion failure. `go test ./...` skips these when `GALLIUM_BIN` is unset, so
 the default suite stays fast; CI runs them in the **Gallium Integration**
-workflow, on changes to `internal/agentserver/**` and nightly (gallium can drift
+workflow, on changes to `pkg/agentserver/**` and nightly (gallium can drift
 on days klein does not change).
 
 ### Code Quality

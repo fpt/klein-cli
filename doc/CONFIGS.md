@@ -126,7 +126,7 @@ needs a codex build with `dynamicTools`/`experimentalApi` support.
 
 Used only when `llm.backend == "appserver"`. Like codex, such an agent is a
 **whole-agent** backend driven over the same app-server JSON-RPC protocol
-(`internal/agentserver` serves both): klein routes each turn to a thread on the
+(`pkg/agentserver` serves both): klein routes each turn to a thread on the
 server and takes back the final answer, while klein keeps the frontend,
 memory-context injection, and session↔thread mapping.
 

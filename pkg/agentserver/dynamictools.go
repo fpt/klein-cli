@@ -2,6 +2,7 @@ package agentserver
 
 import (
 	"context"
+	"strings"
 
 	sdk "github.com/pmenglund/codex-sdk-go"
 	"github.com/pmenglund/codex-sdk-go/protocol"
@@ -154,4 +155,33 @@ func jsonType(t string) string {
 	default:
 		return jsonTypeString
 	}
+}
+
+// commandActionCommands pulls the parsed command out of each of the app-server's
+// CommandAction entries, or returns nil if any entry cannot be read.
+//
+// The actions are typed (read/listFiles/search/unknown) but the type is only for
+// friendlier display — every variant carries the same `command` string, and an
+// ordinary program like `gh` arrives as `unknown`. So the type is ignored and the
+// command is what matters.
+//
+// All or nothing is the point of the nil. Skipping an unreadable action and
+// returning the rest would hand WithAutoApprove a list it could find entirely
+// allowlisted while an action nobody could read went with it. Returning nothing
+// sends the request to the prompt instead, which is the answer for a request
+// klein does not fully understand.
+func commandActionCommands(actions []interface{}) []string {
+	out := make([]string, 0, len(actions))
+	for _, a := range actions {
+		action, ok := a.(map[string]any)
+		if !ok {
+			return nil
+		}
+		cmd, ok := action["command"].(string)
+		if !ok || strings.TrimSpace(cmd) == "" {
+			return nil
+		}
+		out = append(out, strings.TrimSpace(cmd))
+	}
+	return out
 }

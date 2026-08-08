@@ -1,4 +1,4 @@
-package agentserver
+package agentbackend
 
 import (
 	"bytes"
@@ -12,6 +12,7 @@ import (
 	"github.com/fpt/klein-cli/internal/tool"
 	"github.com/fpt/klein-cli/pkg/agent/domain"
 	"github.com/fpt/klein-cli/pkg/agent/events"
+	"github.com/fpt/klein-cli/pkg/agentserver"
 	pkgLogger "github.com/fpt/klein-cli/pkg/logger"
 	"github.com/fpt/klein-cli/pkg/message"
 )
@@ -19,8 +20,8 @@ import (
 // The adapters are the only place klein's types meet the client's, so the
 // interfaces have to be satisfied here or nowhere.
 var (
-	_ Observer     = eventObserver{}
-	_ DynamicTools = toolHost{}
+	_ agentserver.Observer     = eventObserver{}
+	_ agentserver.DynamicTools = toolHost{}
 )
 
 // A real tool manager has to survive the crossing. This is the assertion that
@@ -31,7 +32,7 @@ func TestToolHost_DescribesARealManager(t *testing.T) {
 	t.Parallel()
 	host := newToolHost(tool.NewScheduleToolManager(t.TempDir() + "/s.json"))
 
-	byName := map[string]ToolSpec{}
+	byName := map[string]agentserver.ToolSpec{}
 	for _, spec := range host.Specs() {
 		byName[spec.Name] = spec
 	}
@@ -48,7 +49,7 @@ func TestToolHost_DescribesARealManager(t *testing.T) {
 // assertParametersCrossed checks a spec's parameters arrived whole. Required-ness
 // is the part the backend acts on, so it is the part worth pinning: dropping it
 // silently would let the backend call with nothing.
-func assertParametersCrossed(t *testing.T, spec ToolSpec) {
+func assertParametersCrossed(t *testing.T, spec agentserver.ToolSpec) {
 	t.Helper()
 	if len(spec.Parameters) == 0 {
 		t.Fatalf("%s takes parameters; none crossed", spec.Name)
@@ -139,13 +140,18 @@ func (failingTools) CallTool(
 // klein's logger is the only implementation in the tree, and the interface is
 // sized to it: if this stops compiling, Logger grew a method the client does not
 // need or klein's logger lost one it does.
-var _ Logger = (*pkgLogger.Logger)(nil)
+var _ agentserver.Logger = (*pkgLogger.Logger)(nil)
 
-// reportPanicked runs a drift report against logger and says whether it blew up.
-func reportPanicked(logger Logger) (panicked bool) {
+// reportPanicked models what the client does with the Logger it is given — skip
+// a nil one, call Warn on anything else — and says whether that blew up. It
+// stands in for reaching into the client's own drift reporting, which is not
+// this package's to reach into any more.
+func reportPanicked(logger agentserver.Logger) (panicked bool) {
 	defer func() { panicked = recover() != nil }()
-	tp := &turnProgress{logger: logger, reported: map[string]bool{}}
-	tp.reportUnrendered("toolResult")
+	if logger == nil {
+		return false
+	}
+	logger.Warn("app-server sent an item type this build does not render", "type", "toolResult")
 	return false
 }
 
@@ -204,7 +210,7 @@ func TestEventObserver_SummarizesArguments(t *testing.T) {
 	t.Parallel()
 	obs, got := newEventObserver()
 
-	obs.ToolCallStarted(ToolCall{
+	obs.ToolCallStarted(agentserver.ToolCall{
 		Name:      "Remember",
 		Arguments: map[string]any{"body": strings.Repeat("x", 500)},
 	})
@@ -229,8 +235,8 @@ func TestEventObserver_SummarizesCommandsToo(t *testing.T) {
 	t.Parallel()
 	obs, got := newEventObserver()
 
-	obs.ToolCallStarted(ToolCall{
-		Name:      toolExec,
+	obs.ToolCallStarted(agentserver.ToolCall{
+		Name:      "exec",
 		Arguments: map[string]any{argCommand: strings.Repeat("y", 500)},
 	})
 
@@ -245,7 +251,7 @@ func TestEventObserver_ResultCrossesUnchanged(t *testing.T) {
 	t.Parallel()
 	obs, got := newEventObserver()
 
-	obs.ToolCallCompleted(ToolCallResult{Name: "Bash", Content: "exit 1", IsError: true})
+	obs.ToolCallCompleted(agentserver.ToolCallResult{Name: "Bash", Content: "exit 1", IsError: true})
 
 	if len(*got) != 1 || (*got)[0].typ != events.EventTypeToolResult {
 		t.Fatalf("want one ToolResult, got %+v", *got)
@@ -278,7 +284,7 @@ func TestEventObserver_ReasoningGetsKleinsSeparator(t *testing.T) {
 func TestTurnRunner_NilEmitDoesNotBecomeAnObserver(t *testing.T) {
 	t.Parallel()
 
-	var obs Observer
+	var obs agentserver.Observer
 	if emit := (func(events.EventType, any))(nil); emit != nil {
 		obs = eventObserver{emit: emit}
 	}
@@ -293,7 +299,7 @@ func TestEventObserver_ArgumentsKeepTheirValues(t *testing.T) {
 	t.Parallel()
 	obs, got := newEventObserver()
 
-	obs.ToolCallStarted(ToolCall{Name: "Lookup", Arguments: map[string]any{argQuery: "needle"}})
+	obs.ToolCallStarted(agentserver.ToolCall{Name: "Lookup", Arguments: map[string]any{argQuery: "needle"}})
 
 	args := (*got)[0].data.(events.ToolCallStartData).Arguments
 	if _, isKleinType := any(args).(message.ToolArgumentValues); !isKleinType {

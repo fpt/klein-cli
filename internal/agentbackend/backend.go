@@ -1,10 +1,23 @@
-package agentserver
+// Package agentbackend is klein's side of the app-server client in
+// pkg/agentserver: it turns klein settings into a client Config, adapts klein's
+// tool managers, event stream, logger, and approval policy into the interfaces
+// that client asks for, and exposes the result as a domain.AgentBackend the app
+// layer can inject.
+//
+// The division is protocol knowledge versus policy. Parsing the wire, rendering
+// a JSON Schema, and knowing codex has an account to probe belong to the client.
+// Which commands may run unattended, how long a tool argument may be before it
+// is truncated for display, and how an approval prompt is phrased belong here —
+// they are decisions about klein and its user, and a different program driving
+// the same server would decide them differently.
+package agentbackend
 
 import (
 	"context"
 
 	"github.com/fpt/klein-cli/internal/config"
 	"github.com/fpt/klein-cli/pkg/agent/domain"
+	"github.com/fpt/klein-cli/pkg/agentserver"
 	pkgLogger "github.com/fpt/klein-cli/pkg/logger"
 )
 
@@ -25,11 +38,11 @@ import (
 // dialectFor maps a settings backend id onto the client's dialect. Anything that
 // is not codex is driven as a plain conforming server, which is what an
 // unrecognized id should mean: the protocol subset is the contract.
-func dialectFor(backend string) Dialect {
+func dialectFor(backend string) agentserver.Dialect {
 	if backend == config.BackendCodex {
-		return DialectCodex
+		return agentserver.DialectCodex
 	}
-	return DialectGeneric
+	return agentserver.DialectGeneric
 }
 
 // noop is the cleanup returned when a backend owns no closable resource.
@@ -42,7 +55,7 @@ func noop() {}
 // mode's approval behavior (headless surfaces pass ApprovalNever).
 func Start(
 	ctx context.Context, settings *config.Settings, workingDir string, logger *pkgLogger.Logger, opts RunnerOptions,
-) (*Runner, error) {
+) (*agentserver.Runner, error) {
 	if !config.IsAgentServerBackend(settings.LLM.Backend) {
 		return nil, nil
 	}
@@ -89,12 +102,12 @@ func (b *lazyBackend) EnsureBackendProcess(
 // sharedBackend wraps an already-started Runner. EnsureBackendProcess returns it
 // with a noop cleanup — the owner (e.g. the server that started it once) is
 // responsible for Close. Used when many per-session agents share one process.
-type sharedBackend struct{ runner *Runner }
+type sharedBackend struct{ runner *agentserver.Runner }
 
 // NewSharedBackend adapts an already-started Runner to the AgentBackend
 // interface so it can be injected into agent construction. The caller retains
 // ownership of the Runner's lifetime.
-func NewSharedBackend(runner *Runner) domain.AgentBackend {
+func NewSharedBackend(runner *agentserver.Runner) domain.AgentBackend {
 	return &sharedBackend{runner: runner}
 }
 

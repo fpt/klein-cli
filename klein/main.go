@@ -9,7 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/fpt/klein-cli/internal/agentserver"
+	"github.com/fpt/klein-cli/internal/agentbackend"
 	"github.com/fpt/klein-cli/internal/app"
 	"github.com/fpt/klein-cli/internal/config"
 	connectserver "github.com/fpt/klein-cli/internal/connectrpc"
@@ -20,6 +20,7 @@ import (
 	"github.com/fpt/klein-cli/internal/tool"
 	"github.com/fpt/klein-cli/internal/tool/memorydb"
 	"github.com/fpt/klein-cli/pkg/agent/domain"
+	"github.com/fpt/klein-cli/pkg/agentserver"
 	client "github.com/fpt/klein-cli/pkg/client"
 	pkgLogger "github.com/fpt/klein-cli/pkg/logger"
 	"github.com/fpt/klein-cli/pkg/message"
@@ -351,8 +352,8 @@ func main() {
 		}
 
 		// Whole-agent backend (codex/appserver): one shared app-server process for all sessions (headless).
-		backendRunner, startErr := agentserver.Start(
-			ctx, settings, workingDirectory, logger, agentserver.RunnerOptions{ApprovalPolicy: agentserver.ApprovalNever},
+		backendRunner, startErr := agentbackend.Start(
+			ctx, settings, workingDirectory, logger, agentbackend.RunnerOptions{ApprovalPolicy: agentserver.ApprovalNever},
 		)
 		if startErr != nil {
 			logger.Error("Failed to start agent backend", "error", startErr)
@@ -360,7 +361,7 @@ func main() {
 		}
 		var agentBackend domain.AgentBackend
 		if backendRunner != nil {
-			agentBackend = agentserver.NewSharedBackend(backendRunner)
+			agentBackend = agentbackend.NewSharedBackend(backendRunner)
 			defer backendRunner.Close()
 		}
 
@@ -376,15 +377,15 @@ func main() {
 
 	// Whole-agent backend for interactive/one-shot CLI (plain `klein -b codex` or `-b appserver`).
 	// Only the interactive REPL prompts for approvals; one-shot/file mode is headless.
-	// agentserver.Select returns nil for every backend that needs no external process, so the factory just
+	// agentbackend.Select returns nil for every backend that needs no external process, so the factory just
 	// runs the ReAct loop as usual.
-	backendOpts := agentserver.RunnerOptions{ApprovalPolicy: agentserver.ApprovalNever}
+	backendOpts := agentbackend.RunnerOptions{ApprovalPolicy: agentserver.ApprovalNever}
 	if isInteractiveMode {
 		// auto_approve_commands answers the allowlisted requests before the prompt
 		// ever reaches the terminal; everything else still asks.
-		approver := agentserver.WithAutoApprove(
+		approver := agentbackend.WithAutoApprove(
 			settings.AutoApproveCommands, logger, terminalApprover{backend: settings.LLM.Backend})
-		backendOpts = agentserver.RunnerOptions{
+		backendOpts = agentbackend.RunnerOptions{
 			ApprovalPolicy: agentserver.ApprovalOnRequest,
 			Approver:       approver,
 		}
@@ -417,7 +418,7 @@ func main() {
 		IsInteractiveMode:  isInteractiveMode,
 		ContinueSession:    resolvedContinue,
 		LLMClient:          llmClient,
-		AgentBackend:       agentserver.Select(settings, logger, backendOpts),
+		AgentBackend:       agentbackend.Select(settings, logger, backendOpts),
 	})
 	if err != nil {
 		logger.Error("Failed to create agent", "error", err)

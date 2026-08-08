@@ -1,6 +1,7 @@
 package agentserver
 
 import (
+	"context"
 	"strings"
 
 	pkgLogger "github.com/fpt/klein-cli/pkg/logger"
@@ -45,28 +46,38 @@ func WithAutoApprove(allowlist []string, logger *pkgLogger.Logger, next Approver
 	if len(allowlist) == 0 {
 		return next
 	}
-	return func(req ApprovalRequest) bool {
-		if allowed, ok := autoApproved(req, allowlist); ok {
-			if logger != nil {
-				logger.InfoWithIntention(
-					pkgLogger.IntentionTool,
-					"auto-approved a command on the allowlist",
-					"command", allowed,
-				)
-			}
-			return true
+	return autoApprover{allowlist: allowlist, logger: logger, next: next}
+}
+
+// autoApprover is the Approver WithAutoApprove returns.
+type autoApprover struct {
+	logger    *pkgLogger.Logger
+	next      Approver
+	allowlist []string
+}
+
+func (a autoApprover) Approve(ctx context.Context, req ApprovalRequest) bool {
+	if allowed, ok := autoApproved(req, a.allowlist); ok {
+		if a.logger != nil {
+			a.logger.InfoWithIntention(
+				pkgLogger.IntentionTool,
+				"auto-approved a command on the allowlist",
+				"command", allowed,
+			)
 		}
-		if next == nil {
-			return true
-		}
-		return next(req)
+		return true
 	}
+	if a.next == nil {
+		return true
+	}
+	return a.next.Approve(ctx, req)
 }
 
 // autoApproved reports whether every command in req is allowlisted, returning
-// them joined for the log line.
+// them joined for the log line. A file change carries no commands and so is
+// never auto-approved — an allowlist of programs says nothing about writing files.
 func autoApproved(req ApprovalRequest, allowlist []string) (string, bool) {
-	if len(req.Commands) == 0 {
+	if req.Kind != ApprovalCommand || len(req.Commands) == 0 {
 		return "", false
 	}
 	for _, cmd := range req.Commands {

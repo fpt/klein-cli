@@ -383,7 +383,7 @@ func main() {
 		// auto_approve_commands answers the allowlisted requests before the prompt
 		// ever reaches the terminal; everything else still asks.
 		approver := agentserver.WithAutoApprove(
-			settings.AutoApproveCommands, logger, terminalApprover(settings.LLM.Backend))
+			settings.AutoApproveCommands, logger, terminalApprover{backend: settings.LLM.Backend})
 		backendOpts = agentserver.RunnerOptions{
 			ApprovalPolicy: agentserver.ApprovalOnRequest,
 			Approver:       approver,
@@ -649,28 +649,42 @@ func loadPluginsFromFlags(marketplace string, pluginDirs []string, logger *pkgLo
 // It reads a line from stdin byte-by-byte so it doesn't buffer ahead of the
 // REPL's readline (the two never read concurrently — the approver only runs
 // mid-turn, while readline is idle).
-func terminalApprover(backend string) agentserver.Approver {
-	return func(req agentserver.ApprovalRequest) bool {
-		fmt.Printf("\n🔐 %s wants to %s:\n    %s\nApprove? [y/N] ", backend, req.Kind, req.Summary)
-		var b []byte
-		buf := make([]byte, 1)
-		for {
-			n, err := os.Stdin.Read(buf)
-			if n > 0 {
-				if buf[0] == '\n' {
-					break
-				}
-				if buf[0] != '\r' {
-					b = append(b, buf[0])
-				}
-			}
-			if err != nil {
+type terminalApprover struct{ backend string }
+
+// approvalPhrase turns the kind of request into the words the prompt uses. The
+// client hands over a kind and stops there; every surface that asks a human
+// phrases it for that human, and this is the terminal's phrasing.
+func approvalPhrase(kind agentserver.ApprovalKind) string {
+	if kind == agentserver.ApprovalFileChange {
+		return "edit files"
+	}
+	return "run a command"
+}
+
+// Approve blocks on the user. ctx is not watched: the read is on os.Stdin, which
+// has no cancellation, and abandoning the prompt would leave the terminal
+// consuming the user's keystrokes into nothing.
+func (t terminalApprover) Approve(_ context.Context, req agentserver.ApprovalRequest) bool {
+	fmt.Printf("\n🔐 %s wants to %s:\n    %s\nApprove? [y/N] ",
+		t.backend, approvalPhrase(req.Kind), req.Summary)
+	var b []byte
+	buf := make([]byte, 1)
+	for {
+		n, err := os.Stdin.Read(buf)
+		if n > 0 {
+			if buf[0] == '\n' {
 				break
 			}
+			if buf[0] != '\r' {
+				b = append(b, buf[0])
+			}
 		}
-		ans := strings.ToLower(strings.TrimSpace(string(b)))
-		return ans == "y" || ans == "yes"
+		if err != nil {
+			break
+		}
 	}
+	ans := strings.ToLower(strings.TrimSpace(string(b)))
+	return ans == "y" || ans == "yes"
 }
 
 // hasEnabledMCPServers checks if there are any enabled MCP servers

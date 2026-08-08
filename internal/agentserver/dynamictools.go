@@ -24,25 +24,6 @@ const (
 	decisionDecline = "decline" // deny it; codex continues the turn
 )
 
-// ApprovalRequest describes an action codex is asking permission to perform
-// (used when approval_policy is "on-request"). Kind is a short verb phrase
-// ("run a command", "apply file changes"); Summary is the specifics, for display.
-//
-// Commands carries the shell commands the request would run, with the backend's
-// shell wrapper already stripped — the app-server parses `/bin/zsh -lc 'gh
-// --version'` into `gh --version` for us, so nothing here has to. It is empty
-// for a file-change request, and for a command request the backend did not
-// parse; either way, an empty Commands is what stops WithAutoApprove from
-// deciding anything, since it has nothing to check against the allowlist.
-type ApprovalRequest struct {
-	Kind     string
-	Summary  string
-	Commands []string
-}
-
-// Approver decides an approval request. Return true to accept, false to decline.
-type Approver func(ApprovalRequest) bool
-
 // toolHandler services codex's server→client callbacks. It embeds
 // AutoApproveHandler (the default accept-everything approval methods) and
 // overrides ItemToolCall (dispatch klein's dynamic tools) plus the command/file
@@ -55,11 +36,11 @@ type toolHandler struct {
 }
 
 // approve returns true when the request should proceed. Nil approver = accept.
-func (h *toolHandler) approve(req ApprovalRequest) bool {
+func (h *toolHandler) approve(ctx context.Context, req ApprovalRequest) bool {
 	if h.approver == nil {
 		return true
 	}
-	return h.approver(req)
+	return h.approver.Approve(ctx, req)
 }
 
 func ptrStr(s *string) string {
@@ -72,18 +53,18 @@ func ptrStr(s *string) string {
 // ItemCommandExecutionRequestApproval is called when codex wants to run a shell
 // command and approval_policy requires a decision.
 func (h *toolHandler) ItemCommandExecutionRequestApproval(
-	_ context.Context, p protocol.CommandExecutionRequestApprovalParams,
+	ctx context.Context, p protocol.CommandExecutionRequestApprovalParams,
 ) (*protocol.CommandExecutionRequestApprovalResponse, error) {
 	summary := ptrStr(p.Command)
 	if cwd := ptrStr(p.Cwd); cwd != "" {
 		summary += "  (in " + cwd + ")"
 	}
 	req := ApprovalRequest{
-		Kind:     "run a command",
+		Kind:     ApprovalCommand,
 		Summary:  summary,
 		Commands: commandActionCommands(p.CommandActions),
 	}
-	if h.approve(req) {
+	if h.approve(ctx, req) {
 		return &protocol.CommandExecutionRequestApprovalResponse{Decision: decisionAccept}, nil
 	}
 	return &protocol.CommandExecutionRequestApprovalResponse{Decision: decisionDecline}, nil
@@ -91,13 +72,13 @@ func (h *toolHandler) ItemCommandExecutionRequestApproval(
 
 // ItemFileChangeRequestApproval is called when codex wants to apply file edits.
 func (h *toolHandler) ItemFileChangeRequestApproval(
-	_ context.Context, p protocol.FileChangeRequestApprovalParams,
+	ctx context.Context, p protocol.FileChangeRequestApprovalParams,
 ) (*protocol.FileChangeRequestApprovalResponse, error) {
 	summary := "apply proposed file changes"
 	if p.Reason != nil && *p.Reason != "" {
 		summary = *p.Reason
 	}
-	if h.approve(ApprovalRequest{Kind: "edit files", Summary: summary}) {
+	if h.approve(ctx, ApprovalRequest{Kind: ApprovalFileChange, Summary: summary}) {
 		return &protocol.FileChangeRequestApprovalResponse{Decision: decisionAccept}, nil
 	}
 	return &protocol.FileChangeRequestApprovalResponse{Decision: decisionDecline}, nil

@@ -30,14 +30,20 @@ var kleinSideFiles = map[string]bool{
 	// read from klein's settings, not anything the protocol has an opinion about.
 	"autoapprove.go":      true,
 	"autoapprove_test.go": true,
-	// Settings → Config plumbing, and the backend selection the app layer asks for.
-	"backend.go":          true,
-	"backend_test.go":     true,
-	"settings.go":         true,
-	"codexconfig.go":      true,
-	"codexconfig_test.go": true,
-	"mcpconfig.go":        true,
-	"mcpconfig_test.go":   true,
+	// Settings → Config plumbing, and the backend selection the app layer asks
+	// for. appserverconfig.go imports nothing of klein's today, but it reads a
+	// path klein's settings name and feeds Config.Env, so it stays on this side
+	// too — this list is "what does not travel with the client", not merely
+	// "what happens to import klein".
+	"backend.go":              true,
+	"backend_test.go":         true,
+	"settings.go":             true,
+	"codexconfig.go":          true,
+	"codexconfig_test.go":     true,
+	"mcpconfig.go":            true,
+	"mcpconfig_test.go":       true,
+	"appserverconfig.go":      true,
+	"appserverconfig_test.go": true,
 }
 
 // The extraction is a file-level boundary until the package split lands, and a

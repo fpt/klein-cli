@@ -125,7 +125,7 @@ func runnerOn(t *testing.T, server *fakeServer, grace time.Duration) *Runner {
 	t.Cleanup(func() { _ = client.Close() })
 	return &Runner{
 		client:             client,
-		cfg:                Config{Backend: BackendAppServer},
+		cfg:                Config{Dialect: DialectGeneric},
 		started:            map[string]bool{"thread_1": true},
 		startGraceOverride: grace,
 	}
@@ -251,5 +251,26 @@ func TestRunTurn_TurnStartAnswersAfterTheGrace_InterruptsAnyway(t *testing.T) {
 	interrupted := waitForInterrupt(t, server, 2*time.Second)
 	if interrupted[keyTurnID] != testTurn {
 		t.Errorf("interrupted the wrong turn: %+v", interrupted)
+	}
+}
+
+// TestProbeReadySkipsGenericDialect confirms the codex account probe never runs
+// for a generic server. `account/read` is outside the protocol subset the client
+// requires, so probing it would reject a conforming server that has no account
+// concept at all. A nil client is the assertion: reaching the RPC call would panic.
+func TestProbeReadySkipsGenericDialect(t *testing.T) {
+	t.Parallel()
+	if err := probeReady(t.Context(), nil, DialectGeneric); err != nil {
+		t.Errorf("probeReady(DialectGeneric) = %v, want nil (no probe)", err)
+	}
+}
+
+// The zero value has to be the harmless one: a caller that never heard of
+// Dialect must not have its server probed for an account it does not have.
+func TestDialectZeroValueIsGeneric(t *testing.T) {
+	t.Parallel()
+	var unset Dialect
+	if unset != DialectGeneric {
+		t.Errorf("the zero Dialect is %v, want DialectGeneric", unset)
 	}
 }

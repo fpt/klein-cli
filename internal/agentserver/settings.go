@@ -72,7 +72,7 @@ const appServerSubcommand = "app-server"
 // klein cannot state per-thread — see codexConfigArgs.
 func command(settings *config.Settings) (string, []string, error) {
 	switch settings.LLM.Backend {
-	case BackendCodex:
+	case config.BackendCodex:
 		path := settings.Codex.CodexPath
 		if path == "" {
 			path = "codex"
@@ -82,7 +82,7 @@ func command(settings *config.Settings) (string, []string, error) {
 		}
 		args := append(slices.Clone(defaultAppServerArgs), codexConfigArgs(settings.Codex)...)
 		return path, args, nil
-	case BackendAppServer:
+	case config.BackendAppServer:
 		path := settings.AppServer.Command
 		if path == "" {
 			return "", nil, errors.New(
@@ -102,7 +102,7 @@ func command(settings *config.Settings) (string, []string, error) {
 // in the backend's own block wins over the mode default from opts.
 func approvalPolicy(settings *config.Settings, opts RunnerOptions) string {
 	explicit := settings.Codex.ApprovalPolicy
-	if settings.LLM.Backend == BackendAppServer {
+	if settings.LLM.Backend == config.BackendAppServer {
 		explicit = settings.AppServer.ApprovalPolicy
 	}
 	if explicit != "" {
@@ -146,7 +146,7 @@ func NewRunnerFromSettings(
 	// stays in control of what reaches the child. When a server config TOML is
 	// set, translate its [llm]/[agent] tables into the child's env.
 	var env []string
-	if settings.LLM.Backend == BackendAppServer && settings.AppServer.Config != "" {
+	if settings.LLM.Backend == config.BackendAppServer && settings.AppServer.Config != "" {
 		if env, err = appServerEnv(settings.AppServer.Config); err != nil {
 			return nil, err
 		}
@@ -156,7 +156,7 @@ func NewRunnerFromSettings(
 		Command:        path,
 		Args:           args,
 		Env:            env,
-		Backend:        settings.LLM.Backend,
+		Dialect:        dialectFor(settings.LLM.Backend),
 		Model:          settings.LLM.Model,
 		Effort:         settings.LLM.Effort,
 		ApprovalPolicy: approvalPolicy(settings, opts),

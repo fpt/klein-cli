@@ -544,9 +544,10 @@ func GetDefaultSettings() *Settings {
 // DefaultBackend is the backend used when none is configured.
 const DefaultBackend = "openai"
 
-// The whole-agent app-server backend ids. These mirror agentserver.BackendCodex
-// and agentserver.BackendAppServer, duplicated here because agentserver imports
-// this package (see isAgentServerBackend).
+// The whole-agent app-server backend ids — the values settings.json may name.
+// These live here rather than beside the app-server client because they are
+// settings vocabulary: the client is told which dialect it is driving
+// (agentserver.Dialect) and has no interest in what a config file called it.
 const (
 	BackendCodex     = "codex"
 	BackendAppServer = "appserver"
@@ -600,11 +601,10 @@ func GetDefaultLLMSettingsForBackend(backend string) LLMSettings {
 	}
 }
 
-// isAgentServerBackend reports whether the backend is a whole-agent app-server
-// backend, which owns its own model and credentials. Mirrors
-// agentserver.IsAgentBackend, duplicated here because agentserver imports this
-// package.
-func isAgentServerBackend(backend string) bool {
+// IsAgentServerBackend reports whether the backend is a whole-agent app-server
+// backend, which owns its own model and credentials — as opposed to a chat model
+// klein drives through its own ReAct loop.
+func IsAgentServerBackend(backend string) bool {
 	return backend == BackendCodex || backend == BackendAppServer
 }
 
@@ -621,7 +621,7 @@ func applyDefaults(settings *Settings) {
 	// GetDefaultSettings before the file is unmarshaled, so an omitted model
 	// surfaces here as the default chat model — clear that leak (an explicit model
 	// is kept).
-	if isAgentServerBackend(settings.LLM.Backend) {
+	if IsAgentServerBackend(settings.LLM.Backend) {
 		if settings.LLM.Model == defaults.LLM.Model {
 			settings.LLM.Model = ""
 		}
@@ -659,7 +659,7 @@ func ValidateSettings(settings *Settings) error {
 
 	// An app-server backend manages its own model and auth, so an empty model is
 	// fine and no API key is required here.
-	if !isAgentServerBackend(settings.LLM.Backend) && settings.LLM.Model == "" {
+	if !IsAgentServerBackend(settings.LLM.Backend) && settings.LLM.Model == "" {
 		return fmt.Errorf("LLM model is required")
 	}
 

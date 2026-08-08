@@ -15,23 +15,23 @@ const (
 	codexBinPath     = "/opt/codex"
 )
 
-// TestIsAgentBackend confirms only the whole-agent backends are recognized;
-// chat backends must keep running through klein's own ReAct loop.
-func TestIsAgentBackend(t *testing.T) {
+// TestDialectFor confirms only codex is driven as codex. Everything else — a
+// conforming server, an id this build has never heard of — is driven through the
+// protocol subset alone, which is what makes the subset a contract rather than a
+// list of programs klein recognizes.
+func TestDialectFor(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
 		backend string
-		want    bool
+		want    Dialect
 	}{
-		{BackendCodex, true},
-		{BackendAppServer, true},
-		{"openai", false},
-		{"anthropic", false},
-		{"gemini", false},
-		{"", false},
+		{config.BackendCodex, DialectCodex},
+		{config.BackendAppServer, DialectGeneric},
+		{"some-future-server", DialectGeneric},
+		{"", DialectGeneric},
 	} {
-		if got := IsAgentBackend(tc.backend); got != tc.want {
-			t.Errorf("IsAgentBackend(%q) = %v, want %v", tc.backend, got, tc.want)
+		if got := dialectFor(tc.backend); got != tc.want {
+			t.Errorf("dialectFor(%q) = %v, want %v", tc.backend, got, tc.want)
 		}
 	}
 }
@@ -45,8 +45,8 @@ func TestCommandDefaults(t *testing.T) {
 		command  string
 		wantPath string
 	}{
-		{backend: BackendCodex, wantPath: BackendCodex},
-		{backend: BackendAppServer, command: appServerBin, wantPath: appServerBin},
+		{backend: config.BackendCodex, wantPath: config.BackendCodex},
+		{backend: config.BackendAppServer, command: appServerBin, wantPath: appServerBin},
 	} {
 		s := &config.Settings{}
 		s.LLM.Backend = tc.backend
@@ -71,7 +71,7 @@ func TestCommandDefaults(t *testing.T) {
 func TestCommandAppServerRequiresCommand(t *testing.T) {
 	t.Parallel()
 	s := &config.Settings{}
-	s.LLM.Backend = BackendAppServer
+	s.LLM.Backend = config.BackendAppServer
 
 	if _, _, err := command(s); err == nil {
 		t.Fatal("expected an error when appserver.command is unset")
@@ -83,7 +83,7 @@ func TestCommandAppServerRequiresCommand(t *testing.T) {
 func TestCommandAppServerArgsOverride(t *testing.T) {
 	t.Parallel()
 	s := &config.Settings{}
-	s.LLM.Backend = BackendAppServer
+	s.LLM.Backend = config.BackendAppServer
 	s.AppServer.Command = "some-agent"
 	s.AppServer.Args = []string{"serve", "--rpc"}
 
@@ -102,7 +102,7 @@ func TestCommandExplicitPaths(t *testing.T) {
 	t.Parallel()
 
 	codexSettings := &config.Settings{}
-	codexSettings.LLM.Backend = BackendCodex
+	codexSettings.LLM.Backend = config.BackendCodex
 	codexSettings.Codex.CodexPath = codexBinPath
 	codexSettings.AppServer.Command = appServerBinPath // must be ignored
 
@@ -111,7 +111,7 @@ func TestCommandExplicitPaths(t *testing.T) {
 	}
 
 	appServerSettings := &config.Settings{}
-	appServerSettings.LLM.Backend = BackendAppServer
+	appServerSettings.LLM.Backend = config.BackendAppServer
 	appServerSettings.Codex.CodexPath = codexBinPath // must be ignored
 	appServerSettings.AppServer.Command = appServerBinPath
 
@@ -140,7 +140,7 @@ func TestApprovalPolicyPrefersBackendBlock(t *testing.T) {
 
 	// Explicit setting wins over the mode default.
 	appSrv := &config.Settings{}
-	appSrv.LLM.Backend = BackendAppServer
+	appSrv.LLM.Backend = config.BackendAppServer
 	appSrv.AppServer.ApprovalPolicy = ApprovalOnRequest
 	if got := approvalPolicy(appSrv, RunnerOptions{ApprovalPolicy: ApprovalNever}); got != ApprovalOnRequest {
 		t.Errorf("appserver explicit policy: got %q", got)
@@ -160,22 +160,9 @@ func TestApprovalPolicyPrefersBackendBlock(t *testing.T) {
 
 	// ...and codex still reads its own.
 	codex := &config.Settings{}
-	codex.LLM.Backend = BackendCodex
+	codex.LLM.Backend = config.BackendCodex
 	codex.Codex.ApprovalPolicy = ApprovalOnRequest
 	if got := approvalPolicy(codex, RunnerOptions{ApprovalPolicy: ApprovalNever}); got != ApprovalOnRequest {
 		t.Errorf("codex explicit policy: got %q", got)
-	}
-}
-
-// TestProbeReadySkipsNonCodex confirms the codex account probe never runs for
-// the generic backend. `account/read` is outside the protocol subset klein requires,
-// so probing it would reject a conforming server that has no account concept.
-// A nil client is the assertion: reaching the RPC call at all would panic.
-func TestProbeReadySkipsNonCodex(t *testing.T) {
-	t.Parallel()
-	for _, backend := range []string{BackendAppServer, "some-other-agent", ""} {
-		if err := probeReady(t.Context(), nil, backend); err != nil {
-			t.Errorf("probeReady(%q) = %v, want nil (no probe for non-codex)", backend, err)
-		}
 	}
 }

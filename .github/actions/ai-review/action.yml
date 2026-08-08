@@ -278,6 +278,34 @@ runs:
         echo "Previous unresolved bot comments: $(jq length /tmp/previous-comments.json)" \
              "(with $(jq '[.[].replies | length] | add // 0' /tmp/previous-comments.json) replies)"
 
+    # Top-level PR comments written since the last round, by people. This is
+    # where an author most naturally answers a review — the reply that motivated
+    # fpt/klein-cli#108 was one of these — and a reviewer reading only inline
+    # threads never sees them.
+    #
+    # Bots are excluded by user.type, which is what separates a person's comment
+    # from the sticky summary this action posts as github-actions[bot]. Capped at
+    # the 20 most recent so a long-running PR cannot crowd out the diff.
+    - name: Collect new PR comments
+      if: steps.scope.outputs.mode != 'skip'
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.github-token }}
+        PR: ${{ inputs.pr-number }}
+        SINCE: ${{ steps.scope.outputs.last_reviewed_at }}
+      run: |
+        set -euo pipefail
+        gh api "repos/$GITHUB_REPOSITORY/issues/$PR/comments" --paginate 2>/dev/null \
+          | jq -s --arg since "$SINCE" '
+              add // []
+              | [.[]
+                 | select(.user.type != "Bot")
+                 | select($since == "" or .created_at > $since)
+                 | {author: .user.login, body: .body}]
+              | .[-20:]' \
+          > /tmp/pr-comments.json || echo '[]' > /tmp/pr-comments.json
+        echo "New PR-level comments: $(jq length /tmp/pr-comments.json)"
+
     - name: Build review request
       if: steps.scope.outputs.mode != 'skip'
       shell: bash
@@ -292,13 +320,17 @@ runs:
         if [ "$MODE" = incremental ]; then
           jq --rawfile diff /tmp/pr-incremental.diff --rawfile full /tmp/pr-full.diff \
              --slurpfile prev /tmp/previous-comments.json \
+             --slurpfile prcomments /tmp/pr-comments.json \
             '{title: .title, body: (.body // ""), diff: $diff, full_diff: $full,
-              mode: "incremental", previous_comments: $prev[0]}' \
+              mode: "incremental", previous_comments: $prev[0],
+              pr_comments: $prcomments[0]}' \
             /tmp/pr-meta.json > /tmp/review-request.json
         else
           jq --rawfile diff /tmp/pr-full.diff --slurpfile prev /tmp/previous-comments.json \
+             --slurpfile prcomments /tmp/pr-comments.json \
             '{title: .title, body: (.body // ""), diff: $diff,
-              mode: "full", previous_comments: $prev[0]}' \
+              mode: "full", previous_comments: $prev[0],
+              pr_comments: $prcomments[0]}' \
             /tmp/pr-meta.json > /tmp/review-request.json
         fi
 

@@ -10,8 +10,6 @@ import (
 	"time"
 
 	"github.com/pmenglund/codex-sdk-go/rpc"
-
-	"github.com/fpt/klein-cli/pkg/agent/events"
 )
 
 // A turn klein never learned the id of cannot be interrupted, and finding that
@@ -194,7 +192,7 @@ func TestRunTurn_CanceledDuringTurnStart_StillInterrupts(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
 	defer cancel()
 
-	_, _, err := runner.RunTurn(ctx, "thread_1", "hi", "", func(events.EventType, any) {})
+	_, _, err := runner.RunTurn(ctx, "thread_1", "hi", "", discardObserver{})
 	if err == nil {
 		t.Fatal("a canceled turn should return an error")
 	}
@@ -216,7 +214,7 @@ func TestRunTurn_AlreadyCanceled_StartsNothing(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
-	if _, _, err := runner.RunTurn(ctx, "thread_1", "hi", "", func(events.EventType, any) {}); err == nil {
+	if _, _, err := runner.RunTurn(ctx, "thread_1", "hi", "", discardObserver{}); err == nil {
 		t.Fatal("want an error for an already-canceled context")
 	}
 	for _, req := range server.requests() {
@@ -242,7 +240,7 @@ func TestRunTurn_TurnStartAnswersAfterTheGrace_InterruptsAnyway(t *testing.T) {
 	defer cancel()
 
 	started := time.Now()
-	if _, _, err := runner.RunTurn(ctx, "thread_1", "hi", "", func(events.EventType, any) {}); err == nil {
+	if _, _, err := runner.RunTurn(ctx, "thread_1", "hi", "", discardObserver{}); err == nil {
 		t.Fatal("a canceled turn should return an error")
 	}
 	// The caller is not made to wait for the late answer.

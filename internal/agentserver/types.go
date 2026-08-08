@@ -26,3 +26,57 @@ package agentserver
 type Logger interface {
 	Warn(msg string, keysAndValues ...any)
 }
+
+// ToolCall is an action the backend has begun — a command it is running, a patch
+// it is applying, an MCP or dynamic tool it has called.
+//
+// Arguments are the call's input as the backend stated it, parsed but otherwise
+// untouched: no truncation, no summarization. Those are display decisions, and
+// the client does not know what the caller displays to. A payload that is not a
+// JSON object at all is carried whole under a single "input" key, since there is
+// nothing else useful to say about it.
+type ToolCall struct {
+	// Arguments leads for field alignment, not emphasis.
+	Arguments map[string]any
+	Name      string
+}
+
+// ToolCallResult is how one of those finished. Content is the output to show —
+// an error message, the tool's own output, or the bare status when the backend
+// offered nothing else.
+type ToolCallResult struct {
+	Name    string
+	Content string
+	IsError bool
+}
+
+// Observer receives a turn's intermediate activity as it streams in, so a caller
+// can show what the backend is doing instead of waiting out a silence and
+// getting only the final text.
+//
+// Calls arrive from the goroutine draining the backend's notifications, one at a
+// time, and the client makes no other promise about timing. An implementation
+// that blocks stalls the turn.
+//
+// A tool call is announced exactly once however the backend reports it (started
+// then completed, or completed alone), so ToolCallStarted without a matching
+// ToolCallCompleted means the turn ended first, not that the call was lost.
+//
+// A nil Observer discards everything, which is what a caller wanting only the
+// turn's text should pass.
+type Observer interface {
+	ToolCallStarted(ToolCall)
+	ToolCallCompleted(ToolCallResult)
+	// ReasoningSummary is a completed block of the backend's own reasoning,
+	// already joined into one string and free of trailing punctuation or
+	// newlines — how it is separated from surrounding output is the caller's call.
+	ReasoningSummary(text string)
+}
+
+// discardObserver is what a nil Observer becomes, so the render path can call
+// through unconditionally.
+type discardObserver struct{}
+
+func (discardObserver) ToolCallStarted(ToolCall)         {}
+func (discardObserver) ToolCallCompleted(ToolCallResult) {}
+func (discardObserver) ReasoningSummary(string)          {}

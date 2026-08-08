@@ -34,8 +34,6 @@ import (
 	"github.com/pmenglund/codex-sdk-go/rpc"
 
 	"github.com/fpt/klein-cli/pkg/agent/domain"
-	"github.com/fpt/klein-cli/pkg/agent/events"
-	"github.com/fpt/klein-cli/pkg/message"
 )
 
 // Config configures a Runner. Model/Effort come from klein's llm settings; the
@@ -160,13 +158,13 @@ func probeReady(ctx context.Context, client *rpc.Client, backend string) error {
 // always one we started this run. developerInstructions (the active skill
 // prompt) steers codex.
 func (r *Runner) RunTurn(
-	ctx context.Context, threadID, prompt, developerInstructions string, emit func(events.EventType, any),
+	ctx context.Context, threadID, prompt, developerInstructions string, obs Observer,
 ) (string, string, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	if emit == nil {
-		emit = func(events.EventType, any) {}
+	if obs == nil {
+		obs = discardObserver{}
 	}
 
 	if threadID == "" || !r.started[threadID] {
@@ -178,7 +176,7 @@ func (r *Runner) RunTurn(
 		threadID = id
 	}
 
-	resp, err := r.runTurn(ctx, threadID, prompt, emit)
+	resp, err := r.runTurn(ctx, threadID, prompt, obs)
 	if err != nil {
 		return threadID, "", err
 	}
@@ -221,10 +219,10 @@ func (r *Runner) startThread(ctx context.Context, developerInstructions string) 
 
 // runTurn starts a turn and drains notifications until the turn completes,
 // returning the last agent message text. Intermediate items (commands run,
-// reasoning, file changes, tool calls) are forwarded to emit as they stream in
-// so the caller can show what the backend is doing, not just the final text.
+// reasoning, file changes, tool calls) are reported to obs as they stream in so
+// the caller can show what the backend is doing, not just the final text.
 func (r *Runner) runTurn(
-	ctx context.Context, threadID, prompt string, emit func(events.EventType, any),
+	ctx context.Context, threadID, prompt string, obs Observer,
 ) (string, error) {
 	iter := r.client.SubscribeNotifications(0)
 	defer iter.Close()
@@ -246,7 +244,7 @@ func (r *Runner) runTurn(
 	}
 
 	progress := &turnProgress{
-		emit:      emit,
+		obs:       obs,
 		announced: map[string]bool{},
 		logger:    r.cfg.Logger,
 		reported:  map[string]bool{},
@@ -547,7 +545,7 @@ const (
 // tool call is shown exactly once whether codex emits item/started, only
 // item/completed, or both.
 type turnProgress struct {
-	emit      func(events.EventType, any)
+	obs       Observer
 	announced map[string]bool
 	// logger reports item types nothing renders. Optional; nil stays silent.
 	logger Logger
@@ -688,11 +686,11 @@ func (tp *turnProgress) render(raw json.RawMessage, completed bool) {
 	case "mcpToolCall", "dynamicToolCall":
 		tp.renderToolCall(it, completed)
 	case "webSearch":
-		tp.announce(it.ID, toolWebSearch, message.ToolArgumentValues{argQuery: it.Query})
+		tp.announce(it.ID, toolWebSearch, map[string]any{argQuery: it.Query})
 	case "reasoning":
 		if completed {
 			if s := strings.TrimSpace(strings.Join(it.Summary, "\n")); s != "" {
-				tp.emit(events.EventTypeThinkingChunk, events.ThinkingChunkData{Content: s + "\n"})
+				tp.obs.ReasoningSummary(s)
 			}
 		}
 	default:
@@ -701,14 +699,14 @@ func (tp *turnProgress) render(raw json.RawMessage, completed bool) {
 }
 
 func (tp *turnProgress) renderCommand(it codexItem, completed bool) {
-	tp.announce(it.ID, toolExec, message.ToolArgumentValues{argCommand: it.Command})
+	tp.announce(it.ID, toolExec, map[string]any{argCommand: it.Command})
 	if !completed {
 		return
 	}
-	tp.emit(events.EventTypeToolResult, events.ToolResultData{
-		ToolName: toolExec,
-		Content:  commandResultSummary(it.AggregatedOutput, it.ExitCode),
-		IsError:  it.Status == statusFailed || (it.ExitCode != nil && *it.ExitCode != 0),
+	tp.obs.ToolCallCompleted(ToolCallResult{
+		Name:    toolExec,
+		Content: commandResultSummary(it.AggregatedOutput, it.ExitCode),
+		IsError: it.Status == statusFailed || (it.ExitCode != nil && *it.ExitCode != 0),
 	})
 }
 
@@ -717,14 +715,14 @@ func (tp *turnProgress) renderFileChange(it codexItem, completed bool) {
 	for _, c := range it.Changes {
 		paths = append(paths, strings.TrimSpace(c.Kind+" "+c.Path))
 	}
-	tp.announce(it.ID, toolApplyPatch, message.ToolArgumentValues{argFiles: paths})
+	tp.announce(it.ID, toolApplyPatch, map[string]any{argFiles: paths})
 	if !completed {
 		return
 	}
-	tp.emit(events.EventTypeToolResult, events.ToolResultData{
-		ToolName: toolApplyPatch,
-		Content:  fmt.Sprintf("%d file(s): %s", len(it.Changes), statusOrDefault(it.Status, "applied")),
-		IsError:  it.Status == statusFailed,
+	tp.obs.ToolCallCompleted(ToolCallResult{
+		Name:    toolApplyPatch,
+		Content: fmt.Sprintf("%d file(s): %s", len(it.Changes), statusOrDefault(it.Status, "applied")),
+		IsError: it.Status == statusFailed,
 	})
 }
 
@@ -738,26 +736,27 @@ func (tp *turnProgress) renderToolCall(it codexItem, completed bool) {
 		return
 	}
 	content, isErr := toolCallOutcome(it)
-	tp.emit(events.EventTypeToolResult, events.ToolResultData{ToolName: name, Content: content, IsError: isErr})
+	tp.obs.ToolCallCompleted(ToolCallResult{Name: name, Content: content, IsError: isErr})
 }
 
-// maxArgValueLen bounds a single displayed argument value; the result content is
-// tail-truncated by the app layer, so only the input is capped here.
-const maxArgValueLen = 200
-
-// toolCallArgs parses a tool call's raw arguments into a display map, summarized
-// (via message.SummarizeToolArgs) exactly like native ReAct tool calls so tool
-// input is reported identically across backends. A non-object payload is shown
-// compactly under a single "input" key.
-func toolCallArgs(raw json.RawMessage) message.ToolArgumentValues {
+// toolCallArgs parses a tool call's raw arguments into a map for the Observer.
+// A payload that is not a JSON object has nothing useful to be said about its
+// shape, so it travels whole under a single "input" key.
+//
+// Nothing is truncated or summarized here. That was display policy living in the
+// client, and it was applied unevenly — dynamic and MCP calls were summarized,
+// exec and apply_patch were not — so the same argument read differently
+// depending on which kind of call produced it. The caller now decides, once, for
+// all of them.
+func toolCallArgs(raw json.RawMessage) map[string]any {
 	if len(raw) == 0 {
-		return message.ToolArgumentValues{}
+		return map[string]any{}
 	}
 	var obj map[string]any
 	if err := json.Unmarshal(raw, &obj); err == nil {
-		return message.SummarizeToolArgs(obj)
+		return obj
 	}
-	return message.ToolArgumentValues{"input": compactJSON(raw, maxArgValueLen)}
+	return map[string]any{"input": compactJSON(raw, 0)}
 }
 
 // toolCallOutcome extracts a displayable result + error flag for a completed
@@ -847,14 +846,14 @@ func truncateStr(s string, limit int) string {
 // announce emits a ToolCallStart for an item the first time it is seen, keyed by
 // item id, so a call announced at item/started is not repeated at
 // item/completed (and is still shown when only item/completed arrives).
-func (tp *turnProgress) announce(id, tool string, args message.ToolArgumentValues) {
+func (tp *turnProgress) announce(id, tool string, args map[string]any) {
 	if id != "" {
 		if tp.announced[id] {
 			return
 		}
 		tp.announced[id] = true
 	}
-	tp.emit(events.EventTypeToolCallStart, events.ToolCallStartData{ToolName: tool, Arguments: args})
+	tp.obs.ToolCallStarted(ToolCall{Name: tool, Arguments: args})
 }
 
 // commandResultSummary renders a command's output followed by its exit status.

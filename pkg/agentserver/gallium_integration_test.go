@@ -14,7 +14,7 @@ package agentserver
 // Skipped unless GALLIUM_BIN points at a gallium build, matching gallium's own opt-in
 // model tests:
 //
-//	GALLIUM_BIN=/path/to/gallium go test ./internal/agentserver/ -run Gallium
+//	GALLIUM_BIN=/path/to/gallium go test ./pkg/agentserver/ -run Gallium
 //
 // It needs no model: gallium's `scripted` engine replays a JSON script, so a
 // whole turn including a tool call finishes in milliseconds.
@@ -22,8 +22,10 @@ package agentserver
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -100,6 +102,16 @@ func galliumScript(t *testing.T) string {
 // hang rather than fail.
 func newGalliumRunner(t *testing.T, bin, script, workDir string) (*Runner, *bytes.Buffer) {
 	t.Helper()
+	runner, drift, _ := newGalliumRunnerWithTools(t, bin, script, workDir, nil)
+	return runner, drift
+}
+
+// newGalliumRunnerWithTools is newGalliumRunner plus a tool set offered to the
+// backend, for the one test that needs the callback direction.
+func newGalliumRunnerWithTools(
+	t *testing.T, bin, script, workDir string, tools DynamicTools,
+) (*Runner, *bytes.Buffer, Logger) {
+	t.Helper()
 	logger, drift := driftLog()
 	runner, err := NewRunner(context.Background(), Config{
 		Command:        bin,
@@ -109,12 +121,95 @@ func newGalliumRunner(t *testing.T, bin, script, workDir string) (*Runner, *byte
 		Dialect:        DialectGeneric,
 		Cwd:            workDir,
 		ApprovalPolicy: ApprovalNever,
+		Tools:          tools,
 	})
 	if err != nil {
 		t.Fatalf("spawning gallium: %v", err)
 	}
 	t.Cleanup(func() { _ = runner.Close() })
-	return runner, drift
+	return runner, drift, logger
+}
+
+// callbackTools offers one tool and records the arguments it was called with.
+type callbackTools struct {
+	called chan map[string]any
+}
+
+func (c callbackTools) Specs() []ToolSpec {
+	return []ToolSpec{{
+		Name:        "KleinPing",
+		Description: "Records a note on the caller's side. Call it with any text.",
+		Parameters: []Parameter{
+			{Name: "note", Type: jsonTypeString, Required: true, Description: "text to record"},
+		},
+	}}
+}
+
+func (c callbackTools) Call(_ context.Context, name string, args map[string]any) (string, error) {
+	if name != "KleinPing" {
+		return "", fmt.Errorf("unexpected tool %q", name)
+	}
+	select {
+	case c.called <- args:
+	default:
+	}
+	return "recorded", nil
+}
+
+// A dynamic tool is the one direction of this protocol that runs backwards: the
+// server calls the client, mid-turn, over the same connection. Every other test
+// here drives the client's side of a request it made itself.
+//
+// It went uncovered against a real backend until the client was extracted, and
+// the extraction is exactly what made it worth covering — Config.Tools is now an
+// interface an outside caller implements, and nothing but a real server proves
+// that a spec written through it is one the server can actually dispatch.
+func TestGallium_RealAppServer_CallsBackForADynamicTool(t *testing.T) {
+	t.Parallel()
+	bin := galliumBin(t)
+
+	script := writeScript(t, `{
+	  "steps": [
+	    { "toolCalls": [{ "id": "c1", "name": "KleinPing", "arguments": { "note": "from the backend" } }] },
+	    { "text": "I called your tool." }
+	  ]
+	}`)
+	tools := callbackTools{called: make(chan map[string]any, 1)}
+	runner, drift, _ := newGalliumRunnerWithTools(t, bin, script, t.TempDir(), tools)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+
+	var got []capturedEvent
+	_, text, err := runner.RunTurn(ctx, "", "ping yourself", "", recorder{got: &got})
+	if err != nil {
+		t.Fatalf("running a turn: %v", err)
+	}
+
+	// The tool ran in this process, with the arguments the backend chose.
+	select {
+	case args := <-tools.called:
+		if args["note"] != "from the backend" {
+			t.Errorf("arguments did not survive the round trip: %+v", args)
+		}
+	default:
+		t.Fatal("the backend never called back for the registered tool")
+	}
+
+	if !strings.Contains(text, "I called your tool") {
+		t.Errorf("turn text: got %q", text)
+	}
+	// And the call was reported, so a caller can see it happen.
+	var names []string
+	for _, e := range got {
+		if d, ok := e.Data.(ToolCall); ok {
+			names = append(names, d.Name)
+		}
+	}
+	if !slices.Contains(names, "KleinPing") {
+		t.Errorf("the dynamic tool call was not reported to the observer: %v", names)
+	}
+	assertNoDrift(t, drift)
 }
 
 func TestGallium_RealAppServer_RendersAToolCall(t *testing.T) {

@@ -19,7 +19,7 @@ func NewLLMClient(settings config.LLMSettings) (domain.LLM, error) {
 	case "gemini":
 		return gemini.NewGeminiClientWithTokens(settings.Model, settings.MaxTokens)
 	case "codex", "appserver":
-		// These are whole-agent backends routed via internal/agentserver; this
+		// These are whole-agent backends routed via internal/agentbackend; this
 		// stub only satisfies domain.LLM for agent construction (Chat is never
 		// called).
 		return &agentStubLLM{backend: settings.Backend, model: settings.Model}, nil

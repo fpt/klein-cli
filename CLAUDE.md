@@ -902,6 +902,14 @@ The `allowed-tools` frontmatter field controls which tools are available to a sk
   - `google.golang.org/protobuf` - Protocol Buffers runtime
   - `github.com/bwmarrin/discordgo` - Discord API bindings (WebSocket-based)
   - `golang.org/x/net` - h2c support for HTTP/2 cleartext
+  - `github.com/pmenglund/codex-sdk-go` - codex app-server protocol types + JSON-RPC client (used by `pkg/agentserver`)
+  - `github.com/BurntSushi/toml` - reads an app-server's config TOML (`internal/agentbackend/appserverconfig.go`)
+
+**`pkg/agentserver` is the one package with a dependency budget.** It is imported
+by programs outside this module, so everything it depends on it imposes on them.
+Today that is the standard library plus `codex-sdk-go` — 4 non-stdlib packages in
+total. Adding a dependency there is a decision about other people's builds; adding
+one anywhere else in klein is not.
 
 ## Prerequisites
 

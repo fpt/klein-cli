@@ -41,6 +41,55 @@ The three layers the rest of this doc drills into:
   the rest on demand via `ToolSearch`. A skill's `allowed-tools` filters what is
   reachable.
 
+### 1a. `pkg/` vs `internal/`, and what "public" actually costs
+
+Go's `internal/` rule is narrower than it looks. It stops *outside code* from
+naming an `internal/...` path — nothing more. A package under `pkg/` may import
+`internal/` freely and still be importable from another module, because the
+restriction is checked against the importing file's path, not the dependency
+graph. `pkg/client` does exactly this (it pulls `internal/config`) and an outside
+module can import it today.
+
+So `pkg/` does not mean "public API" here, and never did. It records the older
+DDD split — domain and reusable machinery in `pkg/`, application wiring in
+`internal/`. Most packages under `pkg/` are klein's own; they simply are not
+offered to anyone.
+
+**`pkg/agentserver` is the exception, and the only package held to a stricter
+rule**: it imports nothing of klein's, because it is meant to be used by other
+programs. That is not a stylistic preference — it is arithmetic. Every dependency
+a shared package has, it imposes on everyone who imports it. Before the
+extraction, the app-server client lived beside klein's tool managers and pulled
+**151** non-stdlib packages, so a program wanting to spawn an agent process and
+run a turn also compiled pdfcpu, goquery, mcp-go and modernc sqlite. It now pulls
+**4**. `TestPackageImportsNothingOfKleins` keeps it that way, because a boundary
+nothing checks is a boundary that drifts.
+
+**Adding to `pkg/agentserver`.** If the new code needs something of klein's, that
+is the signal it does not belong there. Take the klein type through a small
+interface in `pkg/agentserver/types.go` and adapt it in
+`internal/agentbackend/adapters.go`, which is where klein's side of this lives.
+The dividing question is **mechanism or policy**:
+
+| Belongs in the client (`pkg/agentserver`) | Belongs in klein (`internal/agentbackend`) |
+|---|---|
+| Parsing a `CommandAction` off the wire | Deciding which commands may run unattended |
+| Rendering parameters as JSON Schema | Knowing what a klein `ToolManager` is |
+| Knowing codex has an account to probe | Mapping a settings string to a `Dialect` |
+| Reporting that a tool call started | Truncating its arguments for display |
+| Asking whether a request is approved | Phrasing the question for a terminal |
+
+Every interface the client asks for is optional and nil-tolerant (`DynamicTools`,
+`Observer`, `Approver`, `Logger`), so a caller wanting only the final text of a
+turn passes none of them. Note the trap that recurs at each injection point: a
+nil *pointer* stored in an interface is a **non-nil interface**, so a `!= nil`
+guard passes it through and the panic lands later, at the first method call. The
+adapters convert at the boundary (`backendLogger`, `newToolHost`,
+`backendApprover`, and `isNil` for the interface-typed ones).
+
+Applying the same treatment to other `pkg/` packages is not planned. It is only
+worth its cost where someone actually wants the package on its own.
+
 ---
 
 ## 2. Entry points
@@ -644,6 +693,8 @@ nudges, keep them ephemeral so Anthropic prompt caching still hits (§5).
 | ReAct loop | `pkg/agent/react/` |
 | Message state / persistence | `pkg/agent/state/` |
 | Backend clients + capabilities | `pkg/client/`, `pkg/agent/domain/` |
+| App-server protocol client (standalone, no klein deps) | `pkg/agentserver/` |
+| klein's side of that client (adapters, settings, allowlist) | `internal/agentbackend/` |
 | Tools (composite, deferred, filesystem, memory, schedule, …) | `internal/tool/` |
 | Skills (load, filter, embedded SKILL.md) | `internal/skill/` |
 | Connect server (embed + blocking) | `internal/connectrpc/` |

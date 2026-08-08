@@ -478,6 +478,14 @@ func classifyNote(note rpc.Notification, threadID string, progress *turnProgress
 			return "", noteContinue
 		}
 		return "", noteFailed
+	default:
+		// Everything else is ignored, but not silently: an unhandled method is
+		// how a client and a backend drift apart. There is deliberately no arm
+		// for `turn/failed` — rs-gallium's own spelling, which gallium stopped
+		// sending once it reported failures the codex way (fpt/rs-gallium#77/
+		// #80) — so a backend old enough to still send it lands here and says
+		// so, rather than hanging the turn in silence.
+		progress.reportUnhandledMethod(note)
 	}
 	return "", noteContinue
 }
@@ -547,6 +555,10 @@ type turnProgress struct {
 	// reported dedupes those reports by type, so a backend that sends an
 	// unhandled variant on every item costs one line per turn, not one per item.
 	reported map[string]bool
+	// reportedMethods does the same for notification methods (see
+	// reportUnhandledMethod). Separate from reported: the two namespaces are
+	// unrelated, and one map would let an item type mask a method or vice versa.
+	reportedMethods map[string]bool
 }
 
 // itemTypesKnownUnrendered are variants this renderer recognises and
@@ -598,6 +610,50 @@ func (tp *turnProgress) reportUnrendered(itemType string) {
 	tp.logger.Warn(
 		"app-server sent an item type this build does not render",
 		"type", itemType,
+		"hint", "the backend may be newer than klein, or the two have drifted",
+	)
+}
+
+// reportUnhandledMethod logs a notification method classifyNote has no arm for,
+// when that method is one the codex protocol does not define either.
+//
+// It is the message-level twin of reportUnrendered, and exists for the same
+// reason: rs-gallium warns on every client notification it does not know
+// ("the client may speak a newer app-server protocol than this build
+// implements") because both ends of this protocol are hand-written against one
+// spec and drift apart quietly — fpt/rs-gallium#49 stayed invisible for exactly
+// as long as that took to notice by hand. klein was the half of that pair still
+// dropping unknown methods without a word.
+//
+// The "codex does not define it either" qualifier is what keeps the signal
+// readable. codex defines dozens of server notifications klein has nothing to do
+// with — the streaming deltas (item/agentMessage/delta, item/reasoning/textDelta,
+// item/commandExecution/outputDelta) arrive per token, and klein renders their
+// completed items instead. Warning on those would bury the one line that means
+// something under the backend's ordinary bookkeeping. A method nobody on either
+// side of the generated protocol claims is the real drift shape.
+//
+// rpc.Notification.Params is the discriminator, since the SDK's method table is
+// unexported: the client fills Params with the decoded payload for a method it
+// knows and leaves it nil otherwise. It is also nil for a known method whose
+// params failed to decode — drift of another kind, and equally worth the line.
+// The one false positive it admits is a known method whose payload type is one
+// of the SDK's `interface{}` fallbacks *and* which arrives with no params at
+// all; that costs a single deduped line, which is the cheaper mistake.
+func (tp *turnProgress) reportUnhandledMethod(note rpc.Notification) {
+	if tp.logger == nil || note.Method == "" || note.Params != nil {
+		return
+	}
+	if tp.reportedMethods == nil {
+		tp.reportedMethods = map[string]bool{}
+	}
+	if tp.reportedMethods[note.Method] {
+		return
+	}
+	tp.reportedMethods[note.Method] = true
+	tp.logger.Warn(
+		"app-server sent a notification this build does not handle",
+		"method", note.Method,
 		"hint", "the backend may be newer than klein, or the two have drifted",
 	)
 }

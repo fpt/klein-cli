@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/pmenglund/codex-sdk-go/protocol"
 	"github.com/pmenglund/codex-sdk-go/rpc"
 
 	"github.com/fpt/klein-cli/pkg/agent/events"
@@ -497,4 +498,84 @@ func TestClassify_NonRetriedErrorFailsTheTurn(t *testing.T) {
 	if _, got := classifyNote(errNote("model refused", false), testThread, progress); got != noteFailed {
 		t.Errorf("got %v, want noteFailed", got)
 	}
+}
+
+// unknownNote builds a notification the way the SDK hands one over for a method
+// its generated table has no entry for: raw params, no decoded payload.
+func unknownNote(method string) rpc.Notification {
+	raw, _ := json.Marshal(map[string]any{keyThreadID: testThread})
+	return rpc.Notification{Method: method, Raw: raw}
+}
+
+// A method no arm handles and codex does not define is a client and a backend
+// that have drifted apart — the message-level twin of an unrendered item type,
+// and silently dropping it is what klein used to do. rs-gallium warns on the
+// same shape coming the other way.
+func TestClassify_UnhandledMethod_IsReported(t *testing.T) {
+	t.Parallel()
+	progress, buf := newProgressWithLogger()
+
+	if _, got := classifyNote(unknownNote("turn/failed"), testThread, progress); got != noteContinue {
+		t.Errorf("an unhandled method must not decide the turn: got %v", got)
+	}
+	if !strings.Contains(buf.String(), "turn/failed") {
+		t.Errorf("unhandled method was not reported: %q", buf.String())
+	}
+}
+
+// A backend that repeats an unknown method costs one line per turn, not one per
+// notification — the same budget reportUnrendered keeps for item types.
+func TestClassify_UnhandledMethod_IsReportedOncePerTurn(t *testing.T) {
+	t.Parallel()
+	progress, buf := newProgressWithLogger()
+
+	for range 5 {
+		classifyNote(unknownNote("gallium/whatever"), testThread, progress)
+	}
+
+	if n := strings.Count(buf.String(), "gallium/whatever"); n != 1 {
+		t.Errorf("want 1 report, got %d: %q", n, buf.String())
+	}
+}
+
+// Notifications codex defines and klein simply has nothing to show for — the
+// per-token deltas above all — must stay silent, or the one line that means
+// something drowns in them. The SDK marks those by handing over a decoded
+// payload, which is the discriminator reportUnhandledMethod reads.
+func TestClassify_ProtocolKnownMethod_IsNotReported(t *testing.T) {
+	t.Parallel()
+	progress, buf := newProgressWithLogger()
+
+	raw, _ := json.Marshal(map[string]any{keyThreadID: testThread, "delta": "hel"})
+	n := rpc.Notification{
+		Method: "item/agentMessage/delta",
+		Params: protocol.AgentMessageDeltaNotification{},
+		Raw:    raw,
+	}
+	if _, got := classifyNote(n, testThread, progress); got != noteContinue {
+		t.Errorf("a known-but-unhandled method must not decide the turn: got %v", got)
+	}
+	if buf.Len() != 0 {
+		t.Errorf("codex's own streaming notifications must stay silent, logged: %q", buf.String())
+	}
+}
+
+// A handled method is obviously not drift.
+func TestClassify_HandledMethod_IsNotReported(t *testing.T) {
+	t.Parallel()
+	progress, buf := newProgressWithLogger()
+
+	classifyNote(turnEnd("completed"), testThread, progress)
+
+	if buf.Len() != 0 {
+		t.Errorf("a handled method should be silent, logged: %q", buf.String())
+	}
+}
+
+// The logger is optional here too, and the runner leaves it nil in tests.
+func TestClassify_UnhandledMethod_NilLoggerDoesNotPanic(t *testing.T) {
+	t.Parallel()
+	progress, _ := newProgress()
+
+	classifyNote(unknownNote("gallium/whatever"), testThread, progress)
 }

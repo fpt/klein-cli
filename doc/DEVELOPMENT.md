@@ -650,7 +650,7 @@ Test different skills to evaluate the skill-based system:
 
 ### Security Testing
 
-1. **Configuration Validation**: Test settings.json validation and error handling
+1. **Configuration Validation**: Test settings.toml validation and error handling
 2. **MCP Server Integration**: Verify MCP server connection failures are handled gracefully
 3. **Tool Capability Detection**: Test automatic detection of model tool calling capabilities
 4. **API Key Management**: Ensure API keys are never logged or exposed in debug output
@@ -733,7 +733,7 @@ cd testsuite
 - **Skill Execution**: Tests CODE and RESPOND skill workflows
 - **Backend Compatibility**: Tests all LLM backends (OpenAI, Anthropic, Gemini)
 - **Tool Integration**: Tests tool calling across different skills
-- **Configuration Management**: Tests settings.json and MCP configuration
+- **Configuration Management**: Tests settings.toml and MCP configuration
 
 **Before Submitting PRs:**
 - Ensure all unit tests pass (`make test`)

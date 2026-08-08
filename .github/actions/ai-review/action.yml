@@ -6,8 +6,9 @@ description: >
   reviewed commit and a hash of the full PR diff; later runs review only the
   changes since then, an unchanged diff hash (e.g. a web-UI "Rebase branch" /
   "Update branch" push) skips the run entirely, a real force-push falls back
-  to a full review, previous unresolved comments are fed back to the model,
-  and threads it verifies as fixed are resolved. All GitHub interaction
+  to a full review, previous unresolved comments are fed back to the model along
+  with any replies posted since the last round, and threads it verifies as fixed
+  are resolved. All GitHub interaction
   (gh/jq) happens here in the harness — klein itself never runs git or gh.
   The caller must check out the PR head with fetch-depth: 0; incremental
   reviews need full history, and a shallow checkout silently degrades every
@@ -159,6 +160,11 @@ runs:
         # force_full is set by the previous round when must-level findings
         # exceeded the comment cap: some were trimmed, so re-scan the whole PR.
         LAST_FORCE_FULL=$(printf '%s' "$STATE" | sed -n 's/.*"force_full":\(true\).*/\1/p')
+        # When the last review actually posted its summary. Replies older than
+        # this were already in front of the model on that round, so feeding them
+        # again would re-litigate a settled thread every turn. Empty on the first
+        # review, which correctly means "everything said so far is new".
+        LAST_REVIEWED_AT=$(printf '%s' "$STATE" | sed -n 's/.*"reviewed_at":"\([^"]*\)".*/\1/p')
         LAST_TURN=${LAST_TURN:-0}
         LAST_TOTAL=${LAST_TOTAL:-0}
 
@@ -174,10 +180,16 @@ runs:
             # reviewed incrementally from this (rewritten) head. turn/total
             # are carried over unchanged — no review happened.
             if [ -n "$STICKY_ID" ]; then
-              # Carry turn/total AND force_full over unchanged — no review ran.
+              # Carry turn/total, force_full AND reviewed_at over unchanged —
+              # no review ran. reviewed_at especially: this PATCH advances the
+              # sticky comment's own updated_at, so anything deriving "since the
+              # last review" from that would silently drop replies no review has
+              # seen.
               FF=""
               if [ "$LAST_FORCE_FULL" = "true" ]; then FF=',"force_full":true'; fi
-              NEW_MARKER="<!-- klein-review-state {\"head_sha\":\"$HEAD_SHA\",\"diff_sha\":\"$DIFF_SHA\",\"turn\":$LAST_TURN,\"total\":$LAST_TOTAL$FF} -->"
+              RA=""
+              if [ -n "$LAST_REVIEWED_AT" ]; then RA=",\"reviewed_at\":\"$LAST_REVIEWED_AT\""; fi
+              NEW_MARKER="<!-- klein-review-state {\"head_sha\":\"$HEAD_SHA\",\"diff_sha\":\"$DIFF_SHA\",\"turn\":$LAST_TURN,\"total\":$LAST_TOTAL$FF$RA} -->"
               jq -r .body /tmp/sticky.json \
                 | sed "s|<!-- klein-review-state {[^}]*} -->|$NEW_MARKER|" > /tmp/sticky-body.txt
               gh api --method PATCH "repos/$GITHUB_REPOSITORY/issues/comments/$STICKY_ID" \
@@ -211,16 +223,27 @@ runs:
           echo "sticky_id=$STICKY_ID"
           echo "turn=$((LAST_TURN + 1))"
           echo "prev_total=$LAST_TOTAL"
+          echo "last_reviewed_at=$LAST_REVIEWED_AT"
         } >> "$GITHUB_OUTPUT"
 
     # Unresolved inline threads from earlier bot reviews, as
-    # [{id, path, line, body}] — id is the GraphQL thread id used to resolve.
+    # [{id, path, line, body, replies}] — id is the GraphQL thread id used to
+    # resolve. `replies` is what was said back on the thread since the last
+    # review posted its summary; without it an author cannot contest a finding
+    # the reviewer got wrong, and the thread stays open forever
+    # (fpt/klein-cli#108).
+    #
+    # Only new replies. A reply the previous round already answered would
+    # otherwise arrive again every turn, growing the prompt and inviting the
+    # model to re-argue a thread it has settled. The comment body itself is
+    # always carried — that is the finding still standing, not discussion.
     - name: Collect previous review comments
       if: steps.scope.outputs.mode != 'skip'
       shell: bash
       env:
         GH_TOKEN: ${{ inputs.github-token }}
         PR: ${{ inputs.pr-number }}
+        SINCE: ${{ steps.scope.outputs.last_reviewed_at }}
       run: |
         set -euo pipefail
         gh api graphql \
@@ -230,19 +253,58 @@ runs:
                 reviewThreads(first: 100) {
                   nodes {
                     id isResolved path line originalLine
-                    comments(first: 1) { nodes { author { login } body } }
+                    comments(first: 30) { nodes { author { login } body createdAt } }
                   }
                 }
               }
             }
           }' \
           -f owner="${GITHUB_REPOSITORY%/*}" -f repo="${GITHUB_REPOSITORY#*/}" -F pr="$PR" \
-          --jq '[.data.repository.pullRequest.reviewThreads.nodes[]
-                 | select(.isResolved | not)
-                 | select(.comments.nodes[0].author.login == "github-actions")
-                 | {id, path, line: (.line // .originalLine // 0), body: .comments.nodes[0].body}]' \
-          > /tmp/previous-comments.json
-        echo "Previous unresolved bot comments: $(jq length /tmp/previous-comments.json)"
+          > /tmp/review-threads.json
+
+        # Filtered with jq rather than gh's --jq: gh has no way to pass a
+        # variable into that expression, and interpolating a timestamp into the
+        # program text is how quoting bugs get written.
+        jq --arg since "$SINCE" '
+          [.data.repository.pullRequest.reviewThreads.nodes[]
+           | select(.isResolved | not)
+           | select(.comments.nodes[0].author.login == "github-actions")
+           | {id, path, line: (.line // .originalLine // 0),
+              body: .comments.nodes[0].body,
+              replies: [.comments.nodes[1:][]
+                        | select($since == "" or .createdAt > $since)
+                        | {author: .author.login, body: .body}]}]' \
+          /tmp/review-threads.json > /tmp/previous-comments.json
+        echo "Previous unresolved bot comments: $(jq length /tmp/previous-comments.json)" \
+             "(with $(jq '[.[].replies | length] | add // 0' /tmp/previous-comments.json) replies)"
+
+    # Top-level PR comments written since the last round, by people. This is
+    # where an author most naturally answers a review — the reply that motivated
+    # fpt/klein-cli#108 was one of these — and a reviewer reading only inline
+    # threads never sees them.
+    #
+    # Bots are excluded by user.type, which is what separates a person's comment
+    # from the sticky summary this action posts as github-actions[bot]. Capped at
+    # the 20 most recent so a long-running PR cannot crowd out the diff.
+    - name: Collect new PR comments
+      if: steps.scope.outputs.mode != 'skip'
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.github-token }}
+        PR: ${{ inputs.pr-number }}
+        SINCE: ${{ steps.scope.outputs.last_reviewed_at }}
+      run: |
+        set -euo pipefail
+        gh api "repos/$GITHUB_REPOSITORY/issues/$PR/comments" --paginate 2>/dev/null \
+          | jq -s --arg since "$SINCE" '
+              add // []
+              | [.[]
+                 | select(.user.type != "Bot")
+                 | select($since == "" or .created_at > $since)
+                 | {author: .user.login, body: .body}]
+              | .[-20:]' \
+          > /tmp/pr-comments.json || echo '[]' > /tmp/pr-comments.json
+        echo "New PR-level comments: $(jq length /tmp/pr-comments.json)"
 
     - name: Build review request
       if: steps.scope.outputs.mode != 'skip'
@@ -258,13 +320,17 @@ runs:
         if [ "$MODE" = incremental ]; then
           jq --rawfile diff /tmp/pr-incremental.diff --rawfile full /tmp/pr-full.diff \
              --slurpfile prev /tmp/previous-comments.json \
+             --slurpfile prcomments /tmp/pr-comments.json \
             '{title: .title, body: (.body // ""), diff: $diff, full_diff: $full,
-              mode: "incremental", previous_comments: $prev[0]}' \
+              mode: "incremental", previous_comments: $prev[0],
+              pr_comments: $prcomments[0]}' \
             /tmp/pr-meta.json > /tmp/review-request.json
         else
           jq --rawfile diff /tmp/pr-full.diff --slurpfile prev /tmp/previous-comments.json \
+             --slurpfile prcomments /tmp/pr-comments.json \
             '{title: .title, body: (.body // ""), diff: $diff,
-              mode: "full", previous_comments: $prev[0]}' \
+              mode: "full", previous_comments: $prev[0],
+              pr_comments: $prcomments[0]}' \
             /tmp/pr-meta.json > /tmp/review-request.json
         fi
 
@@ -347,12 +413,19 @@ runs:
         TOTAL=$((PREV_TOTAL + N_NEW))
         ACTIVE=$((PREV_UNRESOLVED - N_RESOLVED + N_NEW))
 
+        # reviewed_at stamps when this summary went up. The next round feeds back
+        # only replies newer than it, so a thread's discussion is shown once
+        # rather than re-argued every turn. It advances only here — where a
+        # review actually ran — never on the skip path.
+        REVIEWED_AT=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+
         # force_full is stored in the marker only when true; the next scope
         # step reads it to run a full review after must-comments were trimmed.
         jq -r --arg mode "$MODE" --arg head "$HEAD_SHA" --arg diff "$DIFF_SHA" \
               --arg turn "$TURN" --arg total "$TOTAL" --arg active "$ACTIVE" \
               --arg nnew "$N_NEW" --arg nresolved "$N_RESOLVED" \
-              --arg trimmed "$N_TRIMMED" --argjson ff "$FORCE_FULL" '
+              --arg trimmed "$N_TRIMMED" --argjson ff "$FORCE_FULL" \
+              --arg reviewedat "$REVIEWED_AT" '
           "## 🤖 AI Review (klein) — turn " + $turn + "\n\n"
           + .summary
           + "\n\n---\n_turn " + $turn + " (" + $mode + " review of " + ($head[0:7]) + ") · "
@@ -362,7 +435,8 @@ runs:
           + ") · verdict: " + .verdict + "_"
           + "\n\n<!-- klein-review-state {\"head_sha\":\"" + $head + "\",\"diff_sha\":\"" + $diff
           + "\",\"turn\":" + $turn + ",\"total\":" + $total
-          + (if $ff then ",\"force_full\":true" else "" end) + "} -->"
+          + (if $ff then ",\"force_full\":true" else "" end)
+          + ",\"reviewed_at\":\"" + $reviewedat + "\"} -->"
         ' /tmp/review-result.json > /tmp/summary-body.txt
 
         if [ -n "$STICKY_ID" ]; then

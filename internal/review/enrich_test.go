@@ -240,9 +240,9 @@ func TestBuildPrompt_IncrementalWithPreviousComments(t *testing.T) {
 	t.Parallel()
 	req := Request{
 		Title: "T",
-		Mode:  "incremental",
+		Mode:  modeIncremental,
 		PreviousComments: []PreviousComment{
-			{ID: "PRRT_1", Path: "a.go", Line: 9, Body: "bad divisor\nsecond line"},
+			{ID: "PRRT_1", Path: testPath, Line: 9, Body: "bad divisor\nsecond line"},
 		},
 	}
 	p := BuildPrompt(req, "DIFF", "")

@@ -1,4 +1,4 @@
-package agentserver
+package agentbackend
 
 import (
 	"context"
@@ -8,6 +8,7 @@ import (
 
 	"github.com/fpt/klein-cli/pkg/agent/domain"
 	"github.com/fpt/klein-cli/pkg/agent/events"
+	"github.com/fpt/klein-cli/pkg/agentserver"
 	"github.com/fpt/klein-cli/pkg/message"
 )
 
@@ -30,7 +31,7 @@ type toolHost struct{ tools domain.ToolManager }
 // wrap into a toolHost that registers a tool set and panics enumerating it.
 // Nothing calls it that way today, but "no caller does this yet" is not what the
 // doc above says, so isNil makes the claim true instead of narrowing it.
-func newToolHost(tm domain.ToolManager) DynamicTools {
+func newToolHost(tm domain.ToolManager) agentserver.DynamicTools {
 	if isNil(tm) {
 		return nil
 	}
@@ -59,19 +60,19 @@ func isNil(v any) bool {
 
 // Specs describes klein's tools in the client's vocabulary. Ordering follows map
 // iteration, as it always has — the backend matches on name, not position.
-func (h toolHost) Specs() []ToolSpec {
-	out := make([]ToolSpec, 0, len(h.tools.GetTools()))
+func (h toolHost) Specs() []agentserver.ToolSpec {
+	out := make([]agentserver.ToolSpec, 0, len(h.tools.GetTools()))
 	for name, t := range h.tools.GetTools() {
-		params := make([]Parameter, 0, len(t.Arguments()))
+		params := make([]agentserver.Parameter, 0, len(t.Arguments()))
 		for _, a := range t.Arguments() {
-			params = append(params, Parameter{
+			params = append(params, agentserver.Parameter{
 				Name:        string(a.Name),
 				Description: string(a.Description),
 				Type:        a.Type,
 				Required:    a.Required,
 			})
 		}
-		out = append(out, ToolSpec{
+		out = append(out, agentserver.ToolSpec{
 			Name:        string(name),
 			Description: t.Description().String(),
 			Parameters:  params,
@@ -114,14 +115,14 @@ type eventObserver struct {
 	emit func(events.EventType, any)
 }
 
-func (o eventObserver) ToolCallStarted(call ToolCall) {
+func (o eventObserver) ToolCallStarted(call agentserver.ToolCall) {
 	o.emit(events.EventTypeToolCallStart, events.ToolCallStartData{
 		ToolName:  call.Name,
 		Arguments: message.SummarizeToolArgs(call.Arguments),
 	})
 }
 
-func (o eventObserver) ToolCallCompleted(res ToolCallResult) {
+func (o eventObserver) ToolCallCompleted(res agentserver.ToolCallResult) {
 	o.emit(events.EventTypeToolResult, events.ToolResultData{
 		ToolName: res.Name,
 		Content:  res.Content,
@@ -142,16 +143,20 @@ func (o eventObserver) ReasoningSummary(text string) {
 // The two no longer share a RunTurn signature, and deliberately so: the app layer
 // speaks klein's event stream, the client speaks Observer, and this is the one
 // place that has to know both.
-type turnRunner struct{ runner *Runner }
+type turnRunner struct{ runner *agentserver.Runner }
 
 func (t turnRunner) RunTurn(
 	ctx context.Context, threadID, prompt, developerInstructions string, emit func(events.EventType, any),
 ) (string, string, error) {
 	// A nil emit means the caller wants no progress, and must stay nil rather
 	// than become an observer that calls it — the client already discards for us.
-	var obs Observer
+	var obs agentserver.Observer
 	if emit != nil {
 		obs = eventObserver{emit: emit}
 	}
-	return t.runner.RunTurn(ctx, threadID, prompt, developerInstructions, obs)
+	newThreadID, text, err := t.runner.RunTurn(ctx, threadID, prompt, developerInstructions, obs)
+	if err != nil {
+		return newThreadID, text, fmt.Errorf("app-server turn: %w", err)
+	}
+	return newThreadID, text, nil
 }

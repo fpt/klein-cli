@@ -204,6 +204,15 @@ This is a Go-based skill-driven coding agent that uses SKILL.md-configured skill
   - `discord.go` - Discord adapter using `bwmarrin/discordgo`
 - `internal/gen/agentv1/` - Generated protobuf + Connect stubs (from `internal/proto/agent.proto`)
 - `klein/claw_command.go` - `klein claw` subcommand (embeds the agent server, runs the gateway; `repl` = interactive CLI sharing claw's tools/backend with its own session)
+- `pkg/agentserver/` - Standalone app-server (codex-protocol) client; **imports nothing of klein's**, so other Go programs can use it:
+  - `runner.go` - `Runner` driving thread/turn lifecycle over JSON-RPC
+  - `types.go` - the interfaces a caller supplies: `DynamicTools`, `Observer`, `Approver`, `Logger`, `Dialect` (all optional, all nil-tolerant)
+  - `transport.go` / `dynamictools.go` - stdio spawn with env control; dynamic-tool registration + callbacks
+  - Boundary is enforced by `TestPackageImportsNothingOfKleins` — klein types belong behind an interface, adapted in `internal/agentbackend`
+- `internal/agentbackend/` - klein's side of that client (the `codex`/`appserver` backends):
+  - `adapters.go` - klein types → the client's interfaces (`toolHost`, `eventObserver`, `turnRunner`, `backendLogger`)
+  - `settings.go` / `backend.go` - settings→`Config` plumbing and the `domain.AgentBackend` implementations
+  - `autoapprove.go` - the command allowlist (klein policy, not protocol)
 - `pkg/agent/` - Agent domain layer:
   - `domain/` - Domain interfaces and types
   - `react/` - ReAct pattern implementation with thinking channel support

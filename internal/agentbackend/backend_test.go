@@ -1,10 +1,11 @@
-package agentserver
+package agentbackend
 
 import (
 	"reflect"
 	"testing"
 
 	"github.com/fpt/klein-cli/internal/config"
+	"github.com/fpt/klein-cli/pkg/agentserver"
 )
 
 // Stand-ins for a real app-server binary; "appserver" names a protocol, so these
@@ -23,12 +24,12 @@ func TestDialectFor(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
 		backend string
-		want    Dialect
+		want    agentserver.Dialect
 	}{
-		{config.BackendCodex, DialectCodex},
-		{config.BackendAppServer, DialectGeneric},
-		{"some-future-server", DialectGeneric},
-		{"", DialectGeneric},
+		{config.BackendCodex, agentserver.DialectCodex},
+		{config.BackendAppServer, agentserver.DialectGeneric},
+		{"some-future-server", agentserver.DialectGeneric},
+		{"", agentserver.DialectGeneric},
 	} {
 		if got := dialectFor(tc.backend); got != tc.want {
 			t.Errorf("dialectFor(%q) = %v, want %v", tc.backend, got, tc.want)
@@ -141,28 +142,32 @@ func TestApprovalPolicyPrefersBackendBlock(t *testing.T) {
 	// Explicit setting wins over the mode default.
 	appSrv := &config.Settings{}
 	appSrv.LLM.Backend = config.BackendAppServer
-	appSrv.AppServer.ApprovalPolicy = ApprovalOnRequest
-	if got := approvalPolicy(appSrv, RunnerOptions{ApprovalPolicy: ApprovalNever}); got != ApprovalOnRequest {
+	appSrv.AppServer.ApprovalPolicy = agentserver.ApprovalOnRequest
+	got := approvalPolicy(appSrv, RunnerOptions{ApprovalPolicy: agentserver.ApprovalNever})
+	if got != agentserver.ApprovalOnRequest {
 		t.Errorf("appserver explicit policy: got %q", got)
 	}
 
 	// Absent setting falls back to the mode default.
 	appSrv.AppServer.ApprovalPolicy = ""
-	if got := approvalPolicy(appSrv, RunnerOptions{ApprovalPolicy: ApprovalNever}); got != ApprovalNever {
+	got = approvalPolicy(appSrv, RunnerOptions{ApprovalPolicy: agentserver.ApprovalNever})
+	if got != agentserver.ApprovalNever {
 		t.Errorf("appserver default policy: got %q", got)
 	}
 
 	// An appserver thread must not pick up codex's policy.
-	appSrv.Codex.ApprovalPolicy = ApprovalOnRequest
-	if got := approvalPolicy(appSrv, RunnerOptions{ApprovalPolicy: ApprovalNever}); got != ApprovalNever {
+	appSrv.Codex.ApprovalPolicy = agentserver.ApprovalOnRequest
+	got = approvalPolicy(appSrv, RunnerOptions{ApprovalPolicy: agentserver.ApprovalNever})
+	if got != agentserver.ApprovalNever {
 		t.Errorf("appserver must ignore codex.approval_policy: got %q", got)
 	}
 
 	// ...and codex still reads its own.
 	codex := &config.Settings{}
 	codex.LLM.Backend = config.BackendCodex
-	codex.Codex.ApprovalPolicy = ApprovalOnRequest
-	if got := approvalPolicy(codex, RunnerOptions{ApprovalPolicy: ApprovalNever}); got != ApprovalOnRequest {
+	codex.Codex.ApprovalPolicy = agentserver.ApprovalOnRequest
+	got = approvalPolicy(codex, RunnerOptions{ApprovalPolicy: agentserver.ApprovalNever})
+	if got != agentserver.ApprovalOnRequest {
 		t.Errorf("codex explicit policy: got %q", got)
 	}
 }

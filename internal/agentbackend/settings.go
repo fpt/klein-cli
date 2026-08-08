@@ -1,4 +1,4 @@
-package agentserver
+package agentbackend
 
 import (
 	"context"
@@ -10,6 +10,7 @@ import (
 	"github.com/fpt/klein-cli/internal/tool"
 	"github.com/fpt/klein-cli/internal/tool/memorydb"
 	"github.com/fpt/klein-cli/pkg/agent/domain"
+	"github.com/fpt/klein-cli/pkg/agentserver"
 	pkgLogger "github.com/fpt/klein-cli/pkg/logger"
 )
 
@@ -17,7 +18,7 @@ import (
 type RunnerOptions struct {
 	// Approver decides on-request approvals (the repl prompts the user); nil for
 	// headless modes, which auto-accept.
-	Approver Approver
+	Approver agentserver.Approver
 	// ApprovalPolicy is the mode default ("never" for headless claw/serve,
 	// "on-request" for the interactive repl). An explicit approval_policy in the
 	// backend's settings block overrides it.
@@ -35,7 +36,7 @@ type RunnerOptions struct {
 // interface holding a nil pointer — so the client's `logger != nil` guards would
 // all pass and the first drift report would panic on a nil receiver. The
 // conversion has to happen here, the last place the concrete type is visible.
-func backendLogger(l *pkgLogger.Logger) Logger {
+func backendLogger(l *pkgLogger.Logger) agentserver.Logger {
 	if l == nil {
 		return nil
 	}
@@ -49,7 +50,7 @@ func backendLogger(l *pkgLogger.Logger) Logger {
 // as a typed-nil pointer is a non-nil interface, so the client's "nil accepts
 // everything" guard would miss it and panic on the first approval — mid-turn,
 // with a backend waiting on the answer.
-func backendApprover(a Approver) Approver {
+func backendApprover(a agentserver.Approver) agentserver.Approver {
 	if isNil(a) {
 		return nil
 	}
@@ -121,7 +122,7 @@ func approvalPolicy(settings *config.Settings, opts RunnerOptions) string {
 //     backend hits the same live tool-manager instances (same files, same locks).
 func NewRunnerFromSettings(
 	ctx context.Context, settings *config.Settings, workingDir string, opts RunnerOptions,
-) (*Runner, error) {
+) (*agentserver.Runner, error) {
 	nativeManagers := []domain.ToolManager{
 		tool.NewMemoryToolManager(settings.MemoryDir()),
 		tool.NewScheduleToolManager(settings.SchedulesFile()),
@@ -152,7 +153,7 @@ func NewRunnerFromSettings(
 		}
 	}
 
-	return NewRunner(ctx, Config{
+	runner, err := agentserver.NewRunner(ctx, agentserver.Config{
 		Command:        path,
 		Args:           args,
 		Env:            env,
@@ -167,4 +168,8 @@ func NewRunnerFromSettings(
 		Approver:       backendApprover(opts.Approver),
 		Logger:         backendLogger(opts.Logger),
 	})
+	if err != nil {
+		return nil, fmt.Errorf("starting the %s app-server: %w", settings.LLM.Backend, err)
+	}
+	return runner, nil
 }

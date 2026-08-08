@@ -1,6 +1,6 @@
 # Runs the app-server integration tests against a real rs-gallium build.
 #
-# Every other test in internal/agentserver checks klein's *beliefs* about the
+# Every other test in pkg/agentserver checks klein's *beliefs* about the
 # protocol: notifications are hand-built and fed to the renderer. That is how
 # fpt/rs-gallium#49 stayed hidden — gallium sent an item type klein had no case
 # for, both projects' suites passed, and every tool call displayed as a
@@ -13,12 +13,12 @@ on:
   pull_request:
     branches: [main]
     paths:
-      - "internal/agentserver/**"
+      - "pkg/agentserver/**"
       - ".github/workflows/gallium-integration.yml"
   push:
     branches: [main]
     paths:
-      - "internal/agentserver/**"
+      - "pkg/agentserver/**"
       - ".github/workflows/gallium-integration.yml"
   # Drift usually arrives from rs-gallium, not from here, so check daily even
   # when klein is untouched.
@@ -82,4 +82,4 @@ jobs:
         working-directory: klein
         env:
           GALLIUM_BIN: ${{ github.workspace }}/rs-gallium/target/release/gallium
-        run: go test ./internal/agentserver/ -run Gallium -v
+        run: go test ./pkg/agentserver/ -run Gallium -v

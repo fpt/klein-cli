@@ -49,7 +49,7 @@ test-gallium: ## App-server integration test against a real gallium (GALLIUM_BIN
 		echo "  build one: cargo build --release -p gallium-agent --no-default-features"; \
 		echo "  (in a rs-gallium checkout; no model backends needed)"; \
 		exit 1; }
-	GALLIUM_BIN="$(GALLIUM_BIN)" go test ./internal/agentserver/ -run Gallium -v
+	GALLIUM_BIN="$(GALLIUM_BIN)" go test ./pkg/agentserver/ -run Gallium -v
 
 test-capabilities: ## Capability testing
 	go build -o output/test-capabilities ./cmd/test-capabilities

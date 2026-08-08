@@ -1,4 +1,4 @@
-package agentserver
+package agentbackend
 
 import (
 	"bytes"
@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/fpt/klein-cli/pkg/agentserver"
 	pkgLogger "github.com/fpt/klein-cli/pkg/logger"
 )
 
@@ -15,6 +16,11 @@ import (
 // without also letting it write through the same binary.
 const (
 	ghRunList = "gh run list"
+	// keyType and argCommand are the app-server's own key names in a
+	// CommandAction payload; these tests build one by hand.
+	keyType    = "type"
+	argCommand = "command"
+	argQuery   = "query"
 	// actionUnknown is the CommandAction type an ordinary program arrives as.
 	actionUnknown = "unknown"
 )
@@ -23,23 +29,25 @@ var ghAllowed = []string{ghRunList, "gh run view"}
 
 // recordingApprover adapts a plain decision function to the Approver interface,
 // so these tests can keep stating a verdict inline.
-type recordingApprover func(ApprovalRequest) bool
+type recordingApprover func(agentserver.ApprovalRequest) bool
 
-func (f recordingApprover) Approve(_ context.Context, req ApprovalRequest) bool { return f(req) }
+func (f recordingApprover) Approve(_ context.Context, req agentserver.ApprovalRequest) bool {
+	return f(req)
+}
 
 // cmdReq builds a command approval request carrying the given parsed commands.
-func cmdReq(commands ...string) ApprovalRequest {
-	return ApprovalRequest{Kind: ApprovalCommand, Summary: "…", Commands: commands}
+func cmdReq(commands ...string) agentserver.ApprovalRequest {
+	return agentserver.ApprovalRequest{Kind: agentserver.ApprovalCommand, Summary: "…", Commands: commands}
 }
 
 // approverFor returns an auto-approving Approver plus a flag reporting whether
 // the request fell through to the next approver, and the log it wrote.
-func approverFor(t *testing.T, allowlist []string) (Approver, *bool, *bytes.Buffer) {
+func approverFor(t *testing.T, allowlist []string) (agentserver.Approver, *bool, *bytes.Buffer) {
 	t.Helper()
 	var buf bytes.Buffer
 	prompted := false
 	logger := pkgLogger.NewLoggerWithConsoleWriter(pkgLogger.LogLevelInfo, &buf)
-	next := recordingApprover(func(ApprovalRequest) bool {
+	next := recordingApprover(func(agentserver.ApprovalRequest) bool {
 		prompted = true
 		return false // a declined prompt, so an auto-approval is unmistakable
 	})
@@ -167,7 +175,11 @@ func TestAutoApprove_NeverAppliesToFileChanges(t *testing.T) {
 	t.Parallel()
 	approve, prompted, _ := approverFor(t, []string{"gh", "git", "ls"})
 
-	if approve.Approve(t.Context(), ApprovalRequest{Kind: ApprovalFileChange, Summary: "apply proposed file changes"}) {
+	fileChange := agentserver.ApprovalRequest{
+		Kind:    agentserver.ApprovalFileChange,
+		Summary: "apply proposed file changes",
+	}
+	if approve.Approve(t.Context(), fileChange) {
 		t.Error("a file-change request must not be auto-approved")
 	}
 	if !*prompted {
@@ -178,8 +190,8 @@ func TestAutoApprove_NeverAppliesToFileChanges(t *testing.T) {
 // An empty allowlist has to leave behavior exactly as it was before this existed.
 func TestAutoApprove_EmptyAllowlistIsTransparent(t *testing.T) {
 	t.Parallel()
-	var seen []ApprovalRequest
-	next := recordingApprover(func(req ApprovalRequest) bool {
+	var seen []agentserver.ApprovalRequest
+	next := recordingApprover(func(req agentserver.ApprovalRequest) bool {
 		seen = append(seen, req)
 		return true
 	})

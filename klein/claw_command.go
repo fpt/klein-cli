@@ -10,7 +10,7 @@ import (
 	"strings"
 	"syscall"
 
-	"github.com/fpt/klein-cli/internal/agentserver"
+	"github.com/fpt/klein-cli/internal/agentbackend"
 	"github.com/fpt/klein-cli/internal/app"
 	"github.com/fpt/klein-cli/internal/config"
 	connectserver "github.com/fpt/klein-cli/internal/connectrpc"
@@ -20,6 +20,7 @@ import (
 	"github.com/fpt/klein-cli/internal/tool"
 	"github.com/fpt/klein-cli/internal/tool/memorydb"
 	"github.com/fpt/klein-cli/pkg/agent/domain"
+	"github.com/fpt/klein-cli/pkg/agentserver"
 	client "github.com/fpt/klein-cli/pkg/client"
 	pkgLogger "github.com/fpt/klein-cli/pkg/logger"
 )
@@ -100,8 +101,8 @@ func runClawCommand(args []string) int {
 		if backendWorkingDir == "" {
 			backendWorkingDir = "."
 		}
-		backendRunner, startErr := agentserver.Start(
-			ctx, settings, backendWorkingDir, logger, agentserver.RunnerOptions{ApprovalPolicy: agentserver.ApprovalNever},
+		backendRunner, startErr := agentbackend.Start(
+			ctx, settings, backendWorkingDir, logger, agentbackend.RunnerOptions{ApprovalPolicy: agentserver.ApprovalNever},
 		)
 		if startErr != nil {
 			fmt.Fprintf(os.Stderr, "Failed to start agent backend: %v\n", startErr)
@@ -109,7 +110,7 @@ func runClawCommand(args []string) int {
 		}
 		var agentBackend domain.AgentBackend
 		if backendRunner != nil {
-			agentBackend = agentserver.NewSharedBackend(backendRunner)
+			agentBackend = agentbackend.NewSharedBackend(backendRunner)
 			defer backendRunner.Close()
 		}
 
@@ -265,10 +266,10 @@ func runClawREPL(args []string) int {
 	fsRepo := infra.NewOSFilesystemRepository()
 
 	// Codex backend for the interactive claw REPL — prompts for on-request approvals.
-	// agentserver.Select returns nil for backends that need no external process, leaving the ReAct loop in place.
-	backendOpts := agentserver.RunnerOptions{
+	// agentbackend.Select returns nil for backends that need no external process, leaving the ReAct loop in place.
+	backendOpts := agentbackend.RunnerOptions{
 		ApprovalPolicy: agentserver.ApprovalOnRequest,
-		Approver: agentserver.WithAutoApprove(
+		Approver: agentbackend.WithAutoApprove(
 			settings.AutoApproveCommands, logger, terminalApprover{backend: settings.LLM.Backend}),
 	}
 	a, cleanup, err := app.NewAgentWithOptions(ctx, app.AgentOptions{
@@ -280,7 +281,7 @@ func runClawREPL(args []string) int {
 		FsRepo:            fsRepo,
 		IsInteractiveMode: true,
 		LLMClient:         llmClient,
-		AgentBackend:      agentserver.Select(settings, logger, backendOpts),
+		AgentBackend:      agentbackend.Select(settings, logger, backendOpts),
 	})
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Failed to create agent: %v\n", err)

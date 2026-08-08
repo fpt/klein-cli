@@ -467,6 +467,16 @@ go test -v ./pkg/llmclient/react/
 make test
 ```
 
+#### Working on `pkg/agentserver`
+
+That package is imported by programs outside this module, so it imports nothing
+of klein's and carries 4 non-stdlib dependencies. `TestPackageImportsNothingOfKleins`
+fails the build if a klein import appears in it. When you need a klein type there,
+that is the signal it belongs on the other side: put a small interface in
+`pkg/agentserver/types.go` and adapt it in `internal/agentbackend/adapters.go`.
+See [DESIGN.md §1a](DESIGN.md) for the mechanism/policy split that decides which
+side a change lands on.
+
 #### App-server integration tests (opt-in)
 
 `pkg/agentserver` is tested twice over. The unit tests hand-build

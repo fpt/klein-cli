@@ -9,7 +9,7 @@ import (
 
 // agentStubLLM is a placeholder domain.LLM for the whole-agent backends (codex,
 // appserver). Those backends do not use the chat interface — app.Agent routes their
-// turns to an agentserver.Runner (see internal/agentserver) — so Chat must never
+// turns to an agentserver.Runner (see pkg/agentserver) — so Chat must never
 // be called. The stub exists only so agent construction has a valid,
 // model-identifying client.
 type agentStubLLM struct {

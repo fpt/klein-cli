@@ -433,6 +433,35 @@ Schedules the agent creates itself (via the `Schedule*` tools) are stored in `<b
 Every `claw` field — plus `base_dir`, the `discord`/`memory`/`schedules` blocks, and multi-instance setup — is documented in **[§5 of the Configuration Reference](doc/CONFIGS.md#5-gateway-configuration-klein-claw)**.
 
 
+## Using the app-server client in your own Go program
+
+`pkg/agentserver` is klein's client for the **codex app-server protocol**, split
+out so it can be used on its own. It spawns an agent process (codex,
+[rs-gallium](https://github.com/fpt/rs-gallium), or anything speaking the same
+subset), starts threads, runs turns, and reports progress as it happens.
+
+It imports nothing of klein's — the standard library plus the codex SDK, four
+non-stdlib packages in total — so importing it does not drag klein in with it.
+
+```go
+import "github.com/fpt/klein-cli/pkg/agentserver"
+
+runner, err := agentserver.NewRunner(ctx, agentserver.Config{
+    Command: "gallium",
+    Args:    []string{"app-server"},
+    Cwd:     workdir,
+})
+defer runner.Close()
+
+threadID, text, err := runner.RunTurn(ctx, "", "what changed today?", "", nil)
+```
+
+That last `nil` is an `Observer`. Supply one to watch a turn as it runs, and
+optionally a `DynamicTools` to offer the agent tools **your** program services,
+an `Approver` to answer permission requests, and a `Logger` for protocol drift.
+Each is a small interface, each is optional, and none of them mentions a klein
+type — see `pkg/agentserver/types.go`.
+
 ## Development
 
 **[📖 Development Guide](doc/DEVELOPMENT.md)**

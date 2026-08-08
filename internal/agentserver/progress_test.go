@@ -11,7 +11,6 @@ import (
 	"github.com/pmenglund/codex-sdk-go/protocol"
 	"github.com/pmenglund/codex-sdk-go/rpc"
 
-	"github.com/fpt/klein-cli/pkg/agent/events"
 	pkgLogger "github.com/fpt/klein-cli/pkg/logger"
 )
 
@@ -25,21 +24,45 @@ const (
 	kArgs = "arguments"
 )
 
-// capturedEvent records one emitted progress event for assertions.
+// eventKind discriminates what a recorded Observer call was, so the assertions
+// can keep reading as a flat ordered list of "what the turn reported".
+type eventKind int
+
+const (
+	kindToolCall eventKind = iota
+	kindToolResult
+	kindReasoning
+)
+
+// capturedEvent records one Observer call for assertions. Data holds the
+// argument it carried: a ToolCall, a ToolCallResult, or the reasoning string.
 type capturedEvent struct {
 	Data any
-	Type events.EventType
+	Type eventKind
 }
 
-// newProgress returns a turnProgress whose emitted events are appended to the
+// recorder is an Observer that appends every call to a slice.
+type recorder struct{ got *[]capturedEvent }
+
+func (r recorder) ToolCallStarted(c ToolCall) {
+	*r.got = append(*r.got, capturedEvent{Type: kindToolCall, Data: c})
+}
+
+func (r recorder) ToolCallCompleted(res ToolCallResult) {
+	*r.got = append(*r.got, capturedEvent{Type: kindToolResult, Data: res})
+}
+
+func (r recorder) ReasoningSummary(text string) {
+	*r.got = append(*r.got, capturedEvent{Type: kindReasoning, Data: text})
+}
+
+// newProgress returns a turnProgress whose observed calls are appended to the
 // returned slice.
 func newProgress() (*turnProgress, *[]capturedEvent) {
 	var got []capturedEvent
 	tp := &turnProgress{
 		announced: map[string]bool{},
-		emit: func(t events.EventType, d any) {
-			got = append(got, capturedEvent{Type: t, Data: d})
-		},
+		obs:       recorder{got: &got},
 	}
 	return tp, &got
 }
@@ -80,10 +103,10 @@ func cmd(id, command, status string, exitCode int, output string) map[string]any
 	})
 }
 
-func toolResults(got []capturedEvent) []events.ToolResultData {
-	var out []events.ToolResultData
+func toolResults(got []capturedEvent) []ToolCallResult {
+	var out []ToolCallResult
 	for _, e := range got {
-		if d, ok := e.Data.(events.ToolResultData); ok {
+		if d, ok := e.Data.(ToolCallResult); ok {
 			out = append(out, d)
 		}
 	}
@@ -104,17 +127,17 @@ func TestProgress_CommandExecution_StartedThenCompleted(t *testing.T) {
 	if len(*got) != 2 {
 		t.Fatalf("expected 2 events, got %d: %+v", len(*got), *got)
 	}
-	if (*got)[0].Type != events.EventTypeToolCallStart {
+	if (*got)[0].Type != kindToolCall {
 		t.Fatalf("event 0 = %+v, want ToolCallStart", (*got)[0])
 	}
-	start := (*got)[0].Data.(events.ToolCallStartData)
-	if start.ToolName != toolExec || start.Arguments[argCommand] != "go build ./..." {
+	start := (*got)[0].Data.(ToolCall)
+	if start.Name != toolExec || start.Arguments[argCommand] != "go build ./..." {
 		t.Errorf("ToolCallStart = %+v", start)
 	}
-	if (*got)[1].Type != events.EventTypeToolResult {
+	if (*got)[1].Type != kindToolResult {
 		t.Fatalf("event 1 = %+v, want ToolResult", (*got)[1])
 	}
-	res := (*got)[1].Data.(events.ToolResultData)
+	res := (*got)[1].Data.(ToolCallResult)
 	if res.IsError || res.Content == "" {
 		t.Errorf("exit 0 should be a non-error result carrying output: %+v", res)
 	}
@@ -127,7 +150,7 @@ func TestProgress_CommandExecution_CompletedOnly_StillAnnounces(t *testing.T) {
 	// Some backends may only emit item/completed. The command must still be shown.
 	feed(progress, completed(cmd("item_9", "ls", stCompleted, 0, "")))
 
-	if len(*got) != 2 || (*got)[0].Type != events.EventTypeToolCallStart {
+	if len(*got) != 2 || (*got)[0].Type != kindToolCall {
 		t.Fatalf("completed-only should still announce the call: %+v", *got)
 	}
 }
@@ -152,11 +175,11 @@ func TestProgress_Reasoning_EmitsThinking(t *testing.T) {
 		"summary": []any{"Plan the build", "Then run it"},
 	})))
 
-	if len(*got) != 1 || (*got)[0].Type != events.EventTypeThinkingChunk {
+	if len(*got) != 1 || (*got)[0].Type != kindReasoning {
 		t.Fatalf("reasoning should emit one thinking chunk: %+v", *got)
 	}
-	if d := (*got)[0].Data.(events.ThinkingChunkData); d.Content == "" {
-		t.Errorf("thinking content should join the summary lines")
+	if text := (*got)[0].Data.(string); text == "" {
+		t.Errorf("reasoning text should join the summary lines")
 	}
 }
 
@@ -169,23 +192,23 @@ func TestProgress_FileChange_EmitsPatch(t *testing.T) {
 		"changes": []any{map[string]any{"path": "main.go", "kind": "update", "diff": "..."}},
 	})))
 
-	if len(*got) != 2 || (*got)[0].Type != events.EventTypeToolCallStart {
+	if len(*got) != 2 || (*got)[0].Type != kindToolCall {
 		t.Fatalf("fileChange should announce + report: %+v", *got)
 	}
-	if start := (*got)[0].Data.(events.ToolCallStartData); start.ToolName != toolApplyPatch {
-		t.Errorf("fileChange tool = %q, want %q", start.ToolName, toolApplyPatch)
+	if start := (*got)[0].Data.(ToolCall); start.Name != toolApplyPatch {
+		t.Errorf("fileChange tool = %q, want %q", start.Name, toolApplyPatch)
 	}
 }
 
-func firstStart(t *testing.T, got []capturedEvent) events.ToolCallStartData {
+func firstStart(t *testing.T, got []capturedEvent) ToolCall {
 	t.Helper()
 	for _, e := range got {
-		if d, ok := e.Data.(events.ToolCallStartData); ok {
+		if d, ok := e.Data.(ToolCall); ok {
 			return d
 		}
 	}
-	t.Fatal("no ToolCallStart event emitted")
-	return events.ToolCallStartData{}
+	t.Fatal("no tool call was announced")
+	return ToolCall{}
 }
 
 func TestProgress_ToolCall_ShowsArgumentsAndResult(t *testing.T) {
@@ -201,7 +224,7 @@ func TestProgress_ToolCall_ShowsArgumentsAndResult(t *testing.T) {
 
 	// The call announces its input arguments (not an empty map).
 	start := firstStart(t, *got)
-	if start.ToolName != "Recall" || start.Arguments[argQuery] != "sqlite" {
+	if start.Name != "Recall" || start.Arguments[argQuery] != "sqlite" {
 		t.Fatalf("ToolCallStart = %+v", start)
 	}
 	// The result carries the tool's real output (not just "completed").
@@ -225,7 +248,7 @@ func TestProgress_ToolCall_MCPContentItems(t *testing.T) {
 		},
 	})))
 
-	if name := firstStart(t, *got).ToolName; name != "godoc/search" {
+	if name := firstStart(t, *got).Name; name != "godoc/search" {
 		t.Errorf("tool name = %q, want godoc/search", name)
 	}
 	res := toolResults(*got)
@@ -276,7 +299,10 @@ func TestProgress_ToolCall_FallsBackToStatus(t *testing.T) {
 	}
 }
 
-func TestProgress_ToolCall_TruncatesLongArgValue(t *testing.T) {
+// The client hands arguments over as the backend stated them. Truncating here
+// was display policy inside a protocol client, and it reached only some kinds of
+// call — see eventObserver, which now applies one rule to all of them.
+func TestProgress_ToolCall_ArgumentsArePassedThroughWhole(t *testing.T) {
 	t.Parallel()
 	progress, got := newProgress()
 
@@ -286,14 +312,9 @@ func TestProgress_ToolCall_TruncatesLongArgValue(t *testing.T) {
 		kArgs: map[string]any{"content": long},
 	})))
 
-	// Arguments are summarized via message.SummarizeToolArgs, so a long value is
-	// truncated well below its original length and ends with an ellipsis.
 	v, _ := firstStart(t, *got).Arguments["content"].(string)
-	if n := len([]rune(v)); n == 0 || n >= 500 {
-		t.Fatalf("long arg not truncated: %d runes", n)
-	}
-	if !strings.HasSuffix(v, "…") {
-		t.Errorf("truncated value should end with ellipsis: %q", v)
+	if n := len([]rune(v)); n != 500 {
+		t.Errorf("argument should reach the observer intact: got %d runes, want 500", n)
 	}
 }
 
@@ -331,7 +352,7 @@ func newProgressWithLogger() (*turnProgress, *bytes.Buffer) {
 		announced: map[string]bool{},
 		reported:  map[string]bool{},
 		logger:    pkgLogger.NewLoggerWithConsoleWriter(pkgLogger.LogLevelWarn, &buf),
-		emit:      func(events.EventType, any) {},
+		obs:       discardObserver{},
 	}
 	return tp, &buf
 }

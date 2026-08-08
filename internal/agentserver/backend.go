@@ -94,7 +94,7 @@ func (b *lazyBackend) EnsureBackendProcess(
 	if err != nil {
 		return nil, noop, err
 	}
-	return runner, func() { _ = runner.Close() }, nil
+	return turnRunner{runner: runner}, func() { _ = runner.Close() }, nil
 }
 
 // sharedBackend wraps an already-started Runner. EnsureBackendProcess returns it
@@ -110,7 +110,7 @@ func NewSharedBackend(runner *Runner) domain.AgentBackend {
 }
 
 func (b *sharedBackend) EnsureBackendProcess(_ context.Context, _ string) (domain.BackendRunner, func(), error) {
-	return b.runner, noop, nil
+	return turnRunner{runner: b.runner}, noop, nil
 }
 
 // Select returns an AgentBackend for the configured backend, or nil when the

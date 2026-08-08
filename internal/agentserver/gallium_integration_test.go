@@ -28,7 +28,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/fpt/klein-cli/pkg/agent/events"
 	pkgLogger "github.com/fpt/klein-cli/pkg/logger"
 )
 
@@ -133,11 +132,8 @@ func TestGallium_RealAppServer_RendersAToolCall(t *testing.T) {
 	defer cancel()
 
 	var got []capturedEvent
-	emit := func(typ events.EventType, data any) {
-		got = append(got, capturedEvent{Type: typ, Data: data})
-	}
 
-	_, text, err := runner.RunTurn(ctx, "", "what is here?", "", emit)
+	_, text, err := runner.RunTurn(ctx, "", "what is here?", "", recorder{got: &got})
 	if err != nil {
 		t.Fatalf("running a turn: %v", err)
 	}
@@ -150,17 +146,17 @@ func TestGallium_RealAppServer_RendersAToolCall(t *testing.T) {
 	// The tool call must be announced as the tool it is. Before
 	// fpt/rs-gallium#50 this arrived as `commandExecution` and rendered as a
 	// shell named `exec`.
-	var starts []events.ToolCallStartData
+	var starts []ToolCall
 	for _, e := range got {
-		if d, ok := e.Data.(events.ToolCallStartData); ok {
+		if d, ok := e.Data.(ToolCall); ok {
 			starts = append(starts, d)
 		}
 	}
 	if len(starts) != 1 {
 		t.Fatalf("want 1 tool-call start, got %d: %+v", len(starts), got)
 	}
-	if starts[0].ToolName != "LS" {
-		t.Errorf("tool name: want LS, got %q", starts[0].ToolName)
+	if starts[0].Name != "LS" {
+		t.Errorf("tool name: want LS, got %q", starts[0].Name)
 	}
 
 	// And its real output must reach the client. Before #50 the result item
@@ -202,11 +198,8 @@ func TestGallium_RealAppServer_RendersAFailingToolCall(t *testing.T) {
 	defer cancel()
 
 	var got []capturedEvent
-	emit := func(typ events.EventType, data any) {
-		got = append(got, capturedEvent{Type: typ, Data: data})
-	}
 
-	if _, _, err := runner.RunTurn(ctx, "", "read it", "", emit); err != nil {
+	if _, _, err := runner.RunTurn(ctx, "", "read it", "", recorder{got: &got}); err != nil {
 		t.Fatalf("running a turn: %v", err)
 	}
 
@@ -245,13 +238,11 @@ func TestGallium_RealAppServer_CancelledTurnFreesTheThread(t *testing.T) {
 	}`)
 	runner, drift := newGalliumRunner(t, bin, script, t.TempDir())
 
-	emit := func(events.EventType, any) {}
-
 	// Turn 1, canceled while the tool is still running. This is Ctrl+C.
 	ctx1, cancel1 := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel1()
 	started := time.Now()
-	threadID, _, err1 := runner.RunTurn(ctx1, "", "sleep please", "", emit)
+	threadID, _, err1 := runner.RunTurn(ctx1, "", "sleep please", "", discardObserver{})
 	if err1 == nil {
 		t.Fatal("a canceled turn should return an error")
 	}
@@ -264,7 +255,7 @@ func TestGallium_RealAppServer_CancelledTurnFreesTheThread(t *testing.T) {
 	// Turn 2 is the next thing the user types. It must be served.
 	ctx2, cancel2 := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel2()
-	_, text, err2 := runner.RunTurn(ctx2, threadID, "still there?", "", emit)
+	_, text, err2 := runner.RunTurn(ctx2, threadID, "still there?", "", discardObserver{})
 	if err2 != nil {
 		t.Fatalf("the thread was left unusable by the canceled turn: %v", err2)
 	}
@@ -296,7 +287,7 @@ func TestGallium_RealAppServer_FailedTurnIsAnError(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 
-	_, text, err := runner.RunTurn(ctx, "", "list it", "", func(events.EventType, any) {})
+	_, text, err := runner.RunTurn(ctx, "", "list it", "", discardObserver{})
 	if err == nil {
 		t.Fatalf("a failed turn returned success with text %q", text)
 	}

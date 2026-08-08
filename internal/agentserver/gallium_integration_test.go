@@ -53,21 +53,22 @@ func galliumBin(t *testing.T) string {
 
 // driftLog returns a logger to hand the Runner, plus the buffer its reports land
 // in. Passing it is what makes these tests cover the *other* half of the drift
-// defense: turnProgress warns about item types nothing renders, and only a real
-// backend can produce a type klein did not think of. assertNoDrift then fails the
-// test on one, so a future gallium that adds an item type says so here rather
-// than in a user's log.
+// defense: turnProgress warns about item types nothing renders and notification
+// methods nothing handles, and only a real backend can produce either one klein
+// did not think of. assertNoDrift then fails the test on one, so a future
+// gallium that adds an item type or a method says so here rather than in a
+// user's log.
 func driftLog() (*pkgLogger.Logger, *bytes.Buffer) {
 	var buf bytes.Buffer
 	return pkgLogger.NewLoggerWithConsoleWriter(pkgLogger.LogLevelWarn, &buf), &buf
 }
 
-// assertNoDrift fails if the turn produced an unrendered-item report. Call after
-// RunTurn returns: reports are written from the same goroutine.
+// assertNoDrift fails if the turn produced an unrendered-item or unhandled-method
+// report. Call after RunTurn returns: reports are written from the same goroutine.
 func assertNoDrift(t *testing.T, buf *bytes.Buffer) {
 	t.Helper()
 	if buf.Len() != 0 {
-		t.Errorf("gallium sent an item type klein does not render: %s", buf.String())
+		t.Errorf("gallium sent something klein does not handle: %s", buf.String())
 	}
 }
 

@@ -2,7 +2,10 @@ package agentserver
 
 import (
 	"context"
+	"errors"
+	"fmt"
 
+	"github.com/fpt/klein-cli/pkg/agent/domain"
 	"github.com/fpt/klein-cli/pkg/agent/events"
 	"github.com/fpt/klein-cli/pkg/message"
 )
@@ -11,6 +14,65 @@ import (
 // that carry klein's types across a boundary the client itself knows nothing
 // about. Everything klein-specific about driving an app-server should end up
 // here rather than inside the client. See types.go.
+
+// toolHost offers klein's tools to the backend. The backend calls back for them
+// over the app-server connection, so they run against the same live manager the
+// rest of klein uses — same files, same locks — rather than a copy.
+type toolHost struct{ tools domain.ToolManager }
+
+// newToolHost wraps a tool manager, or returns nil when there is none to offer.
+// The nil check matters for the same reason backendLogger's does: a nil
+// domain.ToolManager placed in a DynamicTools field is a non-nil interface, and
+// the client would register a tool set it then panics trying to enumerate.
+func newToolHost(tm domain.ToolManager) DynamicTools {
+	if tm == nil {
+		return nil
+	}
+	return toolHost{tools: tm}
+}
+
+// Specs describes klein's tools in the client's vocabulary. Ordering follows map
+// iteration, as it always has — the backend matches on name, not position.
+func (h toolHost) Specs() []ToolSpec {
+	out := make([]ToolSpec, 0, len(h.tools.GetTools()))
+	for name, t := range h.tools.GetTools() {
+		params := make([]Parameter, 0, len(t.Arguments()))
+		for _, a := range t.Arguments() {
+			params = append(params, Parameter{
+				Name:        string(a.Name),
+				Description: string(a.Description),
+				Type:        a.Type,
+				Required:    a.Required,
+			})
+		}
+		out = append(out, ToolSpec{
+			Name:        string(name),
+			Description: t.Description().String(),
+			Parameters:  params,
+		})
+	}
+	return out
+}
+
+// Call runs one of klein's tools for the backend.
+//
+// klein reports a failed tool two ways — a returned error, or a ToolResult
+// carrying an Error string — and the protocol has room for neither distinction:
+// one bit and a message. So both flatten into an error here, which is what the
+// client asks for and what the old code did anyway once it reached the wire.
+//
+// Images on the result are dropped, as they always have been; the dynamic-tool
+// response carries text.
+func (h toolHost) Call(ctx context.Context, name string, args map[string]any) (string, error) {
+	res, err := h.tools.CallTool(ctx, message.ToolName(name), message.ToolArgumentValues(args))
+	if err != nil {
+		return "", fmt.Errorf("calling %s: %w", name, err)
+	}
+	if res.Error != "" {
+		return "", errors.New(res.Error)
+	}
+	return res.Text, nil
+}
 
 // eventObserver reports a turn's activity onto klein's event stream, so a
 // backend turn renders through the same path as the native ReAct loop.

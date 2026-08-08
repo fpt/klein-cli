@@ -149,7 +149,7 @@ func NewRunnerFromSettings(
 		SandboxMode:    settings.Codex.SandboxMode,
 		Cwd:            workingDir,
 		MCPServers:     MCPServersConfig(settings.MCP.Servers),
-		Tools:          nativeTools,
+		Tools:          newToolHost(nativeTools),
 		Approver:       opts.Approver,
 		Logger:         backendLogger(opts.Logger),
 	})

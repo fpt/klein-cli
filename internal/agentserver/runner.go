@@ -32,14 +32,12 @@ import (
 
 	"github.com/pmenglund/codex-sdk-go/protocol"
 	"github.com/pmenglund/codex-sdk-go/rpc"
-
-	"github.com/fpt/klein-cli/pkg/agent/domain"
 )
 
 // Config configures a Runner. Model/Effort come from klein's llm settings; the
 // rest from the optional "codex"/"appserver" settings block.
 type Config struct {
-	Tools      domain.ToolManager
+	Tools      DynamicTools
 	MCPServers map[string]any
 	Approver   Approver // decides on-request approvals (nil = auto-accept, for headless)
 	// Command and Args spawn the app-server ("codex app-server", "gallium app-server").

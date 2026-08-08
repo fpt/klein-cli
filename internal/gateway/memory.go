@@ -11,8 +11,8 @@ import (
 
 // MemoryConfig holds memory system configuration.
 type MemoryConfig struct {
-	BaseDir  string `json:"base_dir"`
-	MaxNotes int    `json:"max_notes"`
+	BaseDir  string `toml:"base_dir"`
+	MaxNotes int    `toml:"max_notes"`
 }
 
 // MemoryManager manages MEMORY.md and daily notes.

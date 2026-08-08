@@ -1,9 +1,22 @@
 package gateway
 
 import (
+	"github.com/BurntSushi/toml"
+
 	"path/filepath"
 	"testing"
 )
+
+// clawBlock decodes a claw section written as TOML into the generic block
+// ParseClawConfig receives, which is what config.Settings hands it at runtime.
+func clawBlock(t *testing.T, text string) map[string]any {
+	t.Helper()
+	var block map[string]any
+	if _, err := toml.Decode(text, &block); err != nil {
+		t.Fatalf("test fixture is not valid TOML: %v", err)
+	}
+	return block
+}
 
 // TestParseClawConfigDefaults confirms an empty claw block yields defaults and
 // derives every path-shaped field from the shared base dir.
@@ -45,13 +58,24 @@ func TestParseClawConfigDefaults(t *testing.T) {
 // paths are still base-derived (the block cannot set them).
 func TestParseClawConfigOverrides(t *testing.T) {
 	base := t.TempDir()
-	raw := []byte(`{
-		"agent_addr": "http://remote:50051",
-		"discord": {"token": "abc", "mention_only": true},
-		"memory": {"max_notes": 10},
-		"schedules": [{"name": "j", "enabled": true, "cron": "0 8 * * *", "timezone": "Asia/Tokyo", "prompt": "go"}]
-	}`)
-	cfg, err := ParseClawConfig(raw, base)
+	block := clawBlock(t, `
+agent_addr = "http://remote:50051"
+
+[discord]
+token = "abc"
+mention_only = true
+
+[memory]
+max_notes = 10
+
+[[schedules]]
+name = "j"
+enabled = true
+cron = "0 8 * * *"
+timezone = "Asia/Tokyo"
+prompt = "go"
+`)
+	cfg, err := ParseClawConfig(block, base)
 	if err != nil {
 		t.Fatalf("parse: %v", err)
 	}

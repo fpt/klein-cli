@@ -7,23 +7,73 @@ import (
 	"strings"
 
 	"github.com/fpt/klein-cli/internal/config"
+	"github.com/fpt/klein-cli/internal/config/tomledit"
 	"github.com/fpt/klein-cli/pkg/agent/domain"
 )
 
+// editSettings applies edit to the settings file's text and writes it back.
+//
+// The file is spliced rather than decoded and re-encoded, because it is a file
+// people write by hand: re-encoding would hand it back stripped of every comment
+// and reordered into struct order. A missing file is an empty document, which is
+// how `klein mcp add` works before any settings exist.
+func editSettings(path string, edit func([]byte) ([]byte, error)) error {
+	src, err := os.ReadFile(path) //nolint:gosec // the path is the user's own settings file
+	if err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("reading %s: %w", path, err)
+	}
+
+	out, err := edit(src)
+	if err != nil {
+		return err
+	}
+
+	//nolint:gosec // path is the settings file the user named (--settings) or klein's default
+	if mkErr := os.MkdirAll(filepath.Dir(path), 0o755); mkErr != nil {
+		return fmt.Errorf("creating %s: %w", filepath.Dir(path), mkErr)
+	}
+	//nolint:gosec // same: this is the file the command exists to edit
+	if err := os.WriteFile(path, out, 0o600); err != nil {
+		return fmt.Errorf("writing %s: %w", path, err)
+	}
+	return nil
+}
+
+// takeSettingsFlag pulls an optional `--settings <path>` out of args, falling
+// back to the default location. It is hand-parsed rather than given to a
+// FlagSet because `mcp add` ends in a `--` separated command line that a FlagSet
+// would try to interpret.
+func takeSettingsFlag(args []string) (string, []string) {
+	for i := 0; i < len(args); i++ {
+		if args[i] == "--" {
+			break // everything after this belongs to the server being added
+		}
+		if args[i] != "--settings" {
+			continue
+		}
+		if i+1 >= len(args) {
+			break // no value; fall through to the default and let usage explain
+		}
+		rest := append(append([]string{}, args[:i]...), args[i+2:]...)
+		return args[i+1], rest
+	}
+	return defaultSettingsPath(), args
+}
+
 // runMCPCommand implements the `klein mcp <add|list|remove>` subcommands, which
-// edit the MCP servers in the settings file (default ~/.klein/settings.json).
+// edit the MCP servers in the settings file (default ~/.klein/settings.toml).
 // The `add` form mirrors Claude Code:
 //
 //	klein mcp add browser-sandbox -- docker run -i --rm chromedp-container-mcp:latest
 //	klein mcp add docs --url https://example.com/mcp
 //	klein mcp add x -e API_KEY=... -- my-server
 func runMCPCommand(args []string) int {
+	settingsPath, args := takeSettingsFlag(args)
 	if len(args) == 0 {
 		fmt.Println(mcpUsage)
 		return 1
 	}
 
-	settingsPath := defaultSettingsPath()
 	switch args[0] {
 	case "add":
 		return mcpAdd(settingsPath, args[1:])
@@ -46,14 +96,15 @@ Examples:
   klein mcp add browser-sandbox -- docker run -i --rm --init --shm-size 1g chromedp-container-mcp:latest
   klein mcp add docs --url https://example.com/mcp
 
-Edits the "mcp" block in ~/.klein/settings.json.`
+Edits the [mcp.*] tables in ~/.klein/settings.toml, or in the file named by
+--settings. Comments and formatting elsewhere in the file are left alone.`
 
 func defaultSettingsPath() string {
 	home, err := os.UserHomeDir()
 	if err != nil {
-		return filepath.Join(".klein", "settings.json")
+		return filepath.Join(".klein", "settings.toml")
 	}
-	return filepath.Join(home, ".klein", "settings.json")
+	return filepath.Join(home, ".klein", "settings.toml")
 }
 
 // parseMCPAdd turns `mcp add` arguments into an MCPServerConfig (no I/O).
@@ -130,17 +181,20 @@ func mcpAdd(settingsPath string, args []string) int {
 	replaced := false
 	for i := range settings.MCP.Servers {
 		if settings.MCP.Servers[i].Name == name {
-			settings.MCP.Servers[i] = srv
 			replaced = true
 			break
 		}
 	}
-	if !replaced {
-		settings.MCP.Servers = append(settings.MCP.Servers, srv)
-	}
 
-	if err := settings.Save(); err != nil {
-		fmt.Printf("Failed to save settings %s: %v\n", settingsPath, err)
+	body, err := config.MCPServerTOML(srv)
+	if err != nil {
+		fmt.Printf("%v\n", err)
+		return 1
+	}
+	if err := editSettings(settingsPath, func(src []byte) ([]byte, error) {
+		return tomledit.SetTable(src, "mcp."+name, body)
+	}); err != nil {
+		fmt.Printf("Failed to update settings %s: %v\n", settingsPath, err)
 		return 1
 	}
 
@@ -192,22 +246,26 @@ func mcpRemove(settingsPath string, args []string) int {
 		fmt.Printf("Failed to load settings %s: %v\n", settingsPath, err)
 		return 1
 	}
-	out := settings.MCP.Servers[:0]
-	removed := false
+	found := false
 	for _, s := range settings.MCP.Servers {
 		if s.Name == name {
-			removed = true
-			continue
+			found = true
+			break
 		}
-		out = append(out, s)
 	}
-	if !removed {
+	if !found {
 		fmt.Printf("No MCP server named %q in %s\n", name, settingsPath)
 		return 1
 	}
-	settings.MCP.Servers = out
-	if err := settings.Save(); err != nil {
-		fmt.Printf("Failed to save settings %s: %v\n", settingsPath, err)
+
+	if err := editSettings(settingsPath, func(src []byte) ([]byte, error) {
+		out, _, err := tomledit.DeleteTable(src, "mcp."+name)
+		if err != nil {
+			return nil, fmt.Errorf("removing the server's table: %w", err)
+		}
+		return out, nil
+	}); err != nil {
+		fmt.Printf("Failed to update settings %s: %v\n", settingsPath, err)
 		return 1
 	}
 	fmt.Printf("Removed MCP server %q from %s\n", name, settingsPath)

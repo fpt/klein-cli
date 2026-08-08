@@ -1,0 +1,7 @@
+name = "appserver"
+
+[llm]
+backend = "appserver"
+
+[appserver]
+command = "gallium"

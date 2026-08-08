@@ -22,8 +22,8 @@ func TestLoadAgentBackendModelNotLeaked(t *testing.T) {
 		t.Run(backend, func(t *testing.T) {
 			t.Parallel()
 			dir := t.TempDir()
-			p := filepath.Join(dir, "settings.json")
-			body := `{"llm":{"backend":"` + backend + `"},"base_dir":"` + dir + `"}`
+			p := filepath.Join(dir, "settings.toml")
+			body := "[llm]\nbackend = \"" + backend + "\"\nbase_dir = \"" + dir + "\"\n"
 			if err := os.WriteFile(p, []byte(body), 0o644); err != nil {
 				t.Fatal(err)
 			}
@@ -48,10 +48,10 @@ func TestLoadAgentBackendModelExplicitKept(t *testing.T) {
 		t.Run(backend, func(t *testing.T) {
 			t.Parallel()
 			dir := t.TempDir()
-			p := filepath.Join(dir, "settings.json")
+			p := filepath.Join(dir, "settings.toml")
 			// Deliberately NOT the default model: the leak-clearing heuristic keys off
 			// equality with the default, so an explicit model must differ to be testable.
-			body := `{"llm":{"backend":"` + backend + `","model":"gpt-5.6-sol"}}`
+			body := "[llm]\nbackend = \"" + backend + "\"\nmodel = \"gpt-5.6-sol\"\n"
 			if err := os.WriteFile(p, []byte(body), 0o644); err != nil {
 				t.Fatal(err)
 			}
@@ -107,9 +107,15 @@ func TestAgentBackendDefault(t *testing.T) {
 func TestAppServerSettingsRoundTrip(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
-	p := filepath.Join(dir, "settings.json")
-	body := `{"llm":{"backend":"` + BackendAppServer + `"},"appserver":{"command":"/opt/gallium","args":["serve"],` +
-		`"config":"/etc/agent.toml","approval_policy":"on-request"}}`
+	p := filepath.Join(dir, "settings.toml")
+	body := "[llm]\nbackend = \"" + BackendAppServer + `"
+
+[appserver]
+command = "/opt/gallium"
+args = ["serve"]
+config = "/etc/agent.toml"
+approval_policy = "on-request"
+`
 	if err := os.WriteFile(p, []byte(body), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -131,12 +137,12 @@ func TestAppServerSettingsRoundTrip(t *testing.T) {
 	}
 }
 
-// loadCodexBlock writes a settings file whose codex block is codexJSON and
-// returns the parsed block.
-func loadCodexBlock(t *testing.T, codexJSON string) CodexSettings {
+// loadCodexBlock writes a settings file carrying codexTOML (the [codex] tables,
+// written out in full) and returns the parsed block.
+func loadCodexBlock(t *testing.T, codexTOML string) CodexSettings {
 	t.Helper()
-	p := filepath.Join(t.TempDir(), "settings.json")
-	body := `{"llm":{"backend":"` + BackendCodex + `"},"codex":` + codexJSON + `}`
+	p := filepath.Join(t.TempDir(), "settings.toml")
+	body := "[llm]\nbackend = \"" + BackendCodex + "\"\n\n" + codexTOML
 	if err := os.WriteFile(p, []byte(body), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -165,8 +171,12 @@ func wantBool(t *testing.T, field string, got *bool, want bool) {
 // sandbox the user thought they had changed.
 func TestSandboxWorkspaceWriteRoundTrip(t *testing.T) {
 	t.Parallel()
-	c := loadCodexBlock(t, `{"sandbox_workspace_write":{"network_access":true,`+
-		`"exclude_tmpdir_env_var":false,"exclude_slash_tmp":true,"writable_roots":["/srv/cache"]}}`)
+	c := loadCodexBlock(t, `[codex.sandbox_workspace_write]
+network_access = true
+exclude_tmpdir_env_var = false
+exclude_slash_tmp = true
+writable_roots = ["/srv/cache"]
+`)
 
 	sw := c.SandboxWorkspaceWrite
 	wantBool(t, "network_access", sw.NetworkAccess, true)
@@ -179,9 +189,15 @@ func TestSandboxWorkspaceWriteRoundTrip(t *testing.T) {
 
 func TestShellEnvironmentPolicyRoundTrip(t *testing.T) {
 	t.Parallel()
-	c := loadCodexBlock(t, `{"shell_environment_policy":{"inherit":"all",`+
-		`"ignore_default_excludes":true,"exclude":["AWS_*"],"include_only":["PATH"],`+
-		`"set":{"GH_TOKEN":"t"}}}`)
+	c := loadCodexBlock(t, `[codex.shell_environment_policy]
+inherit = "all"
+ignore_default_excludes = true
+exclude = ["AWS_*"]
+include_only = ["PATH"]
+
+[codex.shell_environment_policy.set]
+GH_TOKEN = "t"
+`)
 
 	sep := c.ShellEnvironmentPolicy
 	if sep.Inherit != "all" {
@@ -203,7 +219,7 @@ func TestShellEnvironmentPolicyRoundTrip(t *testing.T) {
 // it and the user's own ~/.codex/config.toml stays in charge.
 func TestCodexConfigTablesDefaultToUnset(t *testing.T) {
 	t.Parallel()
-	c := loadCodexBlock(t, `{}`)
+	c := loadCodexBlock(t, "")
 
 	if c.SandboxWorkspaceWrite.NetworkAccess != nil {
 		t.Errorf("network_access should be unset, got %v", *c.SandboxWorkspaceWrite.NetworkAccess)
@@ -225,7 +241,7 @@ func TestValidateRejectsUnknownBackend(t *testing.T) {
 
 // TestValidateRejectsRenamedACPBackend confirms the removed `acp` id is not
 // silently aliased to BackendAppServer, and that the error names the new id —
-// an existing settings.json is otherwise valid-looking JSON that would just stop
+// an existing settings.toml is otherwise valid-looking JSON that would just stop
 // working with no hint why.
 func TestValidateRejectsRenamedACPBackend(t *testing.T) {
 	t.Parallel()

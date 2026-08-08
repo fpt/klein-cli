@@ -114,8 +114,7 @@ is_backend_available() {
             # backend file names in appserver.command. Its model comes from
             # appserver.config (the server's own TOML) or its environment, so there
             # is no klein-side API key to check — just the binary.
-            appserver_bin=$(jq -r '.appserver.command // ""' \
-                "${script_dir}/backends/${backend_name}.json" 2>/dev/null || echo "")
+            appserver_bin=$(toml_get "${script_dir}/backends/${backend_name}.toml" "appserver.command")
             if [ -z "$appserver_bin" ]; then
                 log_both "${YELLOW}⚠️  Skipping $backend_name: no appserver.command in the backend file${NC}"
                 return 1
@@ -141,10 +140,29 @@ is_backend_available() {
 # listed: those testcases can still succeed via the backend's own capabilities.)
 KLEIN_LOOP_ONLY_TOOLS="EnterPlanMode ExitPlanMode spawn_agent Task"
 
+# toml_get <file> <dotted.key> — prints a scalar from a TOML file, or "".
+# The backend files moved from JSON to TOML, so jq no longer reads them; python3
+# ships tomllib, and this script already relies on python3 elsewhere.
+toml_get() {
+    python3 - "$1" "$2" <<'PYEOF' 2>/dev/null || echo ""
+import sys, tomllib
+try:
+    with open(sys.argv[1], "rb") as f:
+        cur = tomllib.load(f)
+except Exception:
+    print(""); raise SystemExit(0)
+for part in sys.argv[2].split("."):
+    if not isinstance(cur, dict) or part not in cur:
+        print(""); raise SystemExit(0)
+    cur = cur[part]
+print(cur if not isinstance(cur, (dict, list)) else "")
+PYEOF
+}
+
 # is_whole_agent_backend <backend> — true when the backend delegates the whole
 # turn to an external app-server (codex/appserver) rather than klein's ReAct loop.
 is_whole_agent_backend() {
-    case "$(jq -r '.llm.backend // ""' "${script_dir}/backends/${1}.json" 2>/dev/null)" in
+    case "$(toml_get "${script_dir}/backends/${1}.toml" "llm.backend")" in
         codex|appserver) return 0 ;;
         *) return 1 ;;
     esac
@@ -178,8 +196,8 @@ testcase_names="${testcase_names# }"  # trim leading space
 
 # Collect backends (apply BACKENDS filter + availability check)
 available_backends=""
-for backend_file in $(find "${script_dir}/backends" -maxdepth 1 -name "*.json" | sort); do
-    name=$(basename "$backend_file" .json)
+for backend_file in $(find "${script_dir}/backends" -maxdepth 1 -name "*.toml" | sort); do
+    name=$(basename "$backend_file" .toml)
     in_filter "$name" "$BACKENDS" || continue
     is_backend_available "$name" || continue
     available_backends="$available_backends $name"
@@ -215,7 +233,7 @@ failed_tests=0
 skipped_tests=0
 
 for backend_name in $available_backends; do
-    backend_file="${script_dir}/backends/${backend_name}.json"
+    backend_file="${script_dir}/backends/${backend_name}.toml"
     for testcase_name in $testcase_names; do
         if ! testcase_applies "$testcase_name" "$backend_name"; then
             log_both "${YELLOW}⊘ SKIP: $testcase_name × $backend_name (needs a klein-loop-only tool; N/A for a whole-agent backend)${NC}"

@@ -393,3 +393,28 @@ func TestFindTable_HeaderWithCarriageReturn(t *testing.T) {
 		t.Errorf("a CRLF header was not recognized: found=%v err=%v", found, err)
 	}
 }
+
+// A comment above a deleted table is kept (see DeleteTable), and the blank line
+// that separated the table from the next one is kept with it — otherwise the
+// orphan is pulled down against the following header and reads as its note.
+func TestDeleteTable_KeepsTheSeparatorAboveTheNextTable(t *testing.T) {
+	t.Parallel()
+	src := []byte(`# godoc: gives the agent Go documentation
+[mcp.godoc]
+command = "godevmcp"
+
+[agent]
+max_iterations = 30
+`)
+
+	got, found, err := DeleteTable(src, "mcp.godoc")
+	if err != nil || !found {
+		t.Fatalf("DeleteTable: found=%v err=%v", found, err)
+	}
+	if strings.Contains(string(got), "Go documentation\n[agent]") {
+		t.Errorf("the orphaned comment was pulled onto the next table:\n%s", got)
+	}
+	if !strings.Contains(string(got), "Go documentation\n\n[agent]") {
+		t.Errorf("the blank separator was not kept:\n%q", got)
+	}
+}

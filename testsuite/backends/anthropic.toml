@@ -1,0 +1,5 @@
+name = "anthropic"
+
+[llm]
+backend = "anthropic"
+model = "claude-sonnet-4-6"

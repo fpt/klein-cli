@@ -19,7 +19,7 @@ func TestCreateDefaultSettingsFile(t *testing.T) {
 	defer os.RemoveAll(tempDir)
 
 	// Test creating settings file at a specific path
-	settingsPath := filepath.Join(tempDir, ".klein", "settings.json")
+	settingsPath := filepath.Join(tempDir, ".klein", "settings.toml")
 	settings, err := createSettingsFileAtPath(settingsPath)
 	if err != nil {
 		t.Fatalf("createSettingsFileAtPath failed: %v", err)
@@ -76,20 +76,20 @@ func TestLoadSettingsCreatesFileWhenNoneExists(t *testing.T) {
 	}
 
 	// Verify file was created in the fake home directory
-	expectedPath := filepath.Join(tempDir, ".klein", "settings.json")
+	expectedPath := filepath.Join(tempDir, ".klein", "settings.toml")
 	if _, err := os.Stat(expectedPath); os.IsNotExist(err) {
 		t.Fatal("Settings file was not created in home directory")
 	}
 }
 
 // TestLoadSettingsMalformedReportsError verifies a settings file that exists but
-// contains invalid JSON surfaces an error instead of silently falling back to
+// contains invalid TOML surfaces an error instead of silently falling back to
 // defaults — and is not overwritten in the process.
 func TestLoadSettingsMalformedReportsError(t *testing.T) {
 	t.Parallel()
 	tempDir := t.TempDir()
-	path := filepath.Join(tempDir, "settings.json")
-	bad := []byte(`{"llm": {"backend": "` + testBackend + `",}}`) // trailing comma = invalid JSON
+	path := filepath.Join(tempDir, "settings.toml")
+	bad := []byte("[llm\nbackend = \"" + testBackend + "\"\n") // unclosed table header
 	if err := os.WriteFile(path, bad, 0o600); err != nil {
 		t.Fatalf("write: %v", err)
 	}
@@ -126,7 +126,7 @@ func TestLoadSettingsMalformedFoundBySearch(t *testing.T) {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		t.Fatalf("mkdir: %v", err)
 	}
-	if err := os.WriteFile(filepath.Join(dir, "settings.json"), []byte("not json at all"), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "settings.toml"), []byte("not toml at all"), 0o600); err != nil {
 		t.Fatalf("write: %v", err)
 	}
 
@@ -139,8 +139,8 @@ func TestLoadSettingsMalformedFoundBySearch(t *testing.T) {
 func TestLoadSettingsValidLoads(t *testing.T) {
 	t.Parallel()
 	tempDir := t.TempDir()
-	path := filepath.Join(tempDir, "settings.json")
-	content := []byte(`{"llm": {"backend": "` + testBackend + `", "model": "claude-x"}}`)
+	path := filepath.Join(tempDir, "settings.toml")
+	content := []byte("[llm]\nbackend = \"" + testBackend + "\"\nmodel = \"claude-x\"\n")
 	if err := os.WriteFile(path, content, 0o600); err != nil {
 		t.Fatalf("write: %v", err)
 	}

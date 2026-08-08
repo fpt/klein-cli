@@ -99,11 +99,16 @@ func TestScheduler_DisabledOrEmpty(t *testing.T) {
 // heartbeat key still parses (unknown JSON fields are ignored) and produces no
 // schedules from it.
 func TestConfigIgnoresRetiredHeartbeat(t *testing.T) {
-	raw := []byte(`{
-		"agent_addr": "http://localhost:50051",
-		"heartbeat": {"enabled": true, "interval": "24h", "prompt": "Daily digest", "channel_id": "1"}
-	}`)
-	cfg, err := ParseClawConfig(raw, t.TempDir())
+	block := clawBlock(t, `
+agent_addr = "http://localhost:50051"
+
+[heartbeat]
+enabled = true
+interval = "24h"
+prompt = "Daily digest"
+channel_id = "1"
+`)
+	cfg, err := ParseClawConfig(block, t.TempDir())
 	if err != nil {
 		t.Fatalf("claw block with heartbeat should still parse: %v", err)
 	}

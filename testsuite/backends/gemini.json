@@ -1,8 +1,0 @@
-{
-  "name": "gemini",
-  "llm": {
-    "backend": "gemini",
-    "model": "gemini-3-flash-preview",
-    "maxTokens": 2048
-  }
-}

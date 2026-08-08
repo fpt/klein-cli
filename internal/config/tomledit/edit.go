@@ -94,6 +94,14 @@ func DeleteTable(src []byte, path string) ([]byte, bool, error) {
 		return src, false, nil
 	}
 
+	// Keep the blank lines that separated this table from the next one. They are
+	// part of the block by position only, and removing them pulls whatever
+	// comment sat above the deleted header down against the following table,
+	// where it reads as that table's note instead of an orphan.
+	for end > start && strings.TrimSpace(lines[end-1]) == "" {
+		end--
+	}
+
 	out := append([]string{}, lines[:start]...)
 	out = append(out, lines[end:]...)
 

@@ -87,7 +87,7 @@ func command(settings *config.Settings) (string, []string, error) {
 		path := settings.AppServer.Command
 		if path == "" {
 			return "", nil, errors.New(
-				`backend "appserver" requires appserver.command in settings.json (path to the app-server binary)`)
+				`backend "appserver" requires appserver.command in settings.toml (path to the app-server binary)`)
 		}
 		args := settings.AppServer.Args
 		if len(args) == 0 {

@@ -1,23 +1,24 @@
 package gateway
 
 import (
-	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
+
+	"github.com/fpt/klein-cli/internal/config"
 )
 
 // GatewayConfig is the configuration for the klein claw gateway. On disk it is
-// the "claw" section of settings.json (see internal/config.Settings.Claw); this
+// the "claw" section of settings.toml (see internal/config.Settings.Claw); this
 // package owns its schema. Path-shaped state (sessions, memory, schedule store)
 // is NOT configured here — it is derived from the shared base dir so the CLI and
 // the gateway agree on locations. See ParseClawConfig.
 type GatewayConfig struct {
-	AgentAddr      string        `json:"agent_addr"`      // Connect server address; empty = start an embedded in-process server
-	WorkingDir     string        `json:"working_dir"`     // Agent working directory
-	SessionTimeout string        `json:"session_timeout"` // Inactivity timeout for sessions (Go duration, default: "30m")
-	Discord        DiscordConfig `json:"discord"`
-	Memory         MemoryConfig  `json:"memory"` // Only MaxNotes is read from JSON; BaseDir is derived from the shared base dir.
+	AgentAddr      string        `toml:"agent_addr"`      // Connect server address; empty = start an embedded in-process server
+	WorkingDir     string        `toml:"working_dir"`     // Agent working directory
+	SessionTimeout string        `toml:"session_timeout"` // Inactivity timeout for sessions (Go duration, default: "30m")
+	Discord        DiscordConfig `toml:"discord"`
+	Memory         MemoryConfig  `toml:"memory"` // Only MaxNotes is read from the file; BaseDir is derived from the shared base dir.
 
 	// Schedules is the multi-job scheduler. Each entry runs on its own
 	// goroutine, fires on a cron expression evaluated in its timezone, and can
@@ -25,36 +26,36 @@ type GatewayConfig struct {
 	// chat channel).
 	//
 	// A leftover "heartbeat" key from the retired single-job block is ignored
-	// (unknown JSON fields don't error).
-	Schedules []ScheduleConfig `json:"schedules,omitempty"`
+	// (unknown fields don't error).
+	Schedules []ScheduleConfig `toml:"schedules,omitempty"`
 
 	// Derived from the shared base dir (set by ParseClawConfig, not from the
-	// claw JSON block). SessionsDir and SchedulesFile are used directly; the
+	// claw block). SessionsDir and SchedulesFile are used directly; the
 	// memory directory is written into Memory.BaseDir.
-	BaseDir       string `json:"-"`
-	SessionsDir   string `json:"-"`
-	SchedulesFile string `json:"-"`
+	BaseDir       string `toml:"-"`
+	SessionsDir   string `toml:"-"`
+	SchedulesFile string `toml:"-"`
 }
 
 // DiscordConfig holds Discord bot configuration.
 type DiscordConfig struct {
-	Token             string   `json:"token"`
-	AllowedGuildIDs   []string `json:"allowed_guild_ids"`
-	AllowedChannelIDs []string `json:"allowed_channel_ids"`
-	AllowedUserIDs    []string `json:"allowed_user_ids"`
-	MentionOnly       bool     `json:"mention_only"` // In guilds, only respond when @mentioned
+	Token             string   `toml:"token"`
+	AllowedGuildIDs   []string `toml:"allowed_guild_ids"`
+	AllowedChannelIDs []string `toml:"allowed_channel_ids"`
+	AllowedUserIDs    []string `toml:"allowed_user_ids"`
+	MentionOnly       bool     `toml:"mention_only"` // In guilds, only respond when @mentioned
 }
 
-// ParseClawConfig decodes the "claw" section of settings.json (raw may be nil or
-// empty for an all-defaults gateway) and derives all path-shaped state from the
-// shared base dir: <base>/sessions, <base>/schedules.json, <base>/memory. This
+// ParseClawConfig decodes the "claw" section of settings.toml (block may be nil
+// or empty for an all-defaults gateway) and derives all path-shaped state from
+// the shared base dir: <base>/sessions, <base>/schedules.json, <base>/memory. This
 // keeps the agent's Schedule* tools and the scheduler pointed at the same file,
 // and the [SESSION LOG] path the gateway injects at the same directory the agent
 // server persists to.
-func ParseClawConfig(raw json.RawMessage, baseDir string) (*GatewayConfig, error) {
+func ParseClawConfig(block map[string]any, baseDir string) (*GatewayConfig, error) {
 	cfg := DefaultGatewayConfig()
-	if len(raw) > 0 {
-		if err := json.Unmarshal(raw, cfg); err != nil {
+	if len(block) > 0 {
+		if err := config.DecodeBlock(block, cfg); err != nil {
 			return nil, fmt.Errorf("failed to parse claw config: %w", err)
 		}
 	}

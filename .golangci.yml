@@ -38,6 +38,13 @@ linters:
       line-length: 120
     misspell:
       locale: US
+    tagliatelle:
+      # The settings schema is TOML now, and tagliatelle has no default rule for
+      # toml tags — without this, the on-disk key names stopped being checked at
+      # all when they moved off json.
+      case:
+        rules:
+          toml: snake
     whitespace:
       multi-if: true
   exclusions:

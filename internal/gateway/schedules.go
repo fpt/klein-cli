@@ -13,26 +13,32 @@ import (
 	pkgLogger "github.com/fpt/klein-cli/pkg/logger"
 )
 
+// ScheduleConfig carries both sets of tags on purpose. The same struct is
+// decoded from two files in two formats: the schedules[] array of the settings
+// TOML, and the schedules.json store the agent's Schedule* tools write and this
+// scheduler reconciles against. The store stays JSON because nobody edits it by
+// hand — it is a queue, not a config.
+//
 // ScheduleConfig defines one recurring agent invocation. A schedule fires
 // either on a fixed Interval (Go duration) OR daily at a wall-clock time (At +
 // Timezone) when At is set. Multiple schedules run in the same gateway, each on
 // its own goroutine.
 type ScheduleConfig struct {
-	Name    string `json:"name"` // Human-readable id (unique; used for logs + reconciliation)
-	Enabled bool   `json:"enabled"`
+	Name    string `json:"name" toml:"name"` // Human-readable id (unique; used for logs + reconciliation)
+	Enabled bool   `json:"enabled" toml:"enabled"`
 	// Cron is a standard 5-field cron expression ("0 8 * * 1-5" = weekdays at
 	// 08:00), evaluated in Timezone. Required — the legacy at/interval timing
 	// fields are retired ("08:00 daily" = "0 8 * * *"; "every 6h" = "0 */6 * * *").
-	Cron string `json:"cron"`
+	Cron string `json:"cron" toml:"cron"`
 	// Timezone is a required IANA name ("Asia/Tokyo") that Cron is evaluated
 	// in. Required so schedules never silently depend on server-local time.
-	Timezone    string `json:"timezone"`
-	Prompt      string `json:"prompt"`       // The user-message the scheduled agent will see
-	Skill       string `json:"skill"`        // Skill to invoke under (e.g. "report")
-	Silent      bool   `json:"silent"`       // If true, run the prompt but never post the response
-	ChannelType string `json:"channel_type"` // Output channel — required unless Silent
-	ChannelID   string `json:"channel_id"`
-	RunAtStart  bool   `json:"run_at_start"` // If true, fire once immediately when (re)started
+	Timezone    string `json:"timezone" toml:"timezone"`
+	Prompt      string `json:"prompt" toml:"prompt"`             // The user-message the scheduled agent will see
+	Skill       string `json:"skill" toml:"skill"`               // Skill to invoke under (e.g. "report")
+	Silent      bool   `json:"silent" toml:"silent"`             // If true, run the prompt but never post the response
+	ChannelType string `json:"channel_type" toml:"channel_type"` // Output channel — required unless Silent
+	ChannelID   string `json:"channel_id" toml:"channel_id"`
+	RunAtStart  bool   `json:"run_at_start" toml:"run_at_start"` // If true, fire once immediately when (re)started
 }
 
 // scheduleSig is a change signature: reconciliation restarts a job only when

@@ -66,7 +66,7 @@ func (fr *FileSettingsRepository) Save(data []byte) error {
 			configPath = foundPath
 		} else {
 			// No existing file, save to .agents in current directory
-			configPath = filepath.Join(".agents", "settings.json")
+			configPath = filepath.Join(".agents", "settings.toml")
 		}
 	}
 
@@ -85,7 +85,7 @@ func (fr *FileSettingsRepository) Save(data []byte) error {
 
 func (fr *FileSettingsRepository) FindSettingsFile() (string, error) {
 	// Check .agents in current directory
-	currentDirPath := filepath.Join(".agents", "settings.json")
+	currentDirPath := filepath.Join(".agents", "settings.toml")
 	if _, err := os.Stat(currentDirPath); err == nil {
 		return currentDirPath, nil
 	}
@@ -93,7 +93,7 @@ func (fr *FileSettingsRepository) FindSettingsFile() (string, error) {
 	// Check $HOME/.klein
 	homeDir, err := os.UserHomeDir()
 	if err == nil {
-		homeDirPath := filepath.Join(homeDir, ".klein", "settings.json")
+		homeDirPath := filepath.Join(homeDir, ".klein", "settings.toml")
 		if _, err := os.Stat(homeDirPath); err == nil {
 			return homeDirPath, nil
 		}

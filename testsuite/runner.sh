@@ -49,8 +49,8 @@ if [ $# -eq 0 ]; then
     done
     echo ""
     echo -e "${BLUE}🔧 Available Backends:${NC}"
-    find "${script_dir}/backends" -maxdepth 1 -name "*.json" | sort | while read backend_file; do
-        backend_name=$(basename "$backend_file" .json)
+    find "${script_dir}/backends" -maxdepth 1 -name "*.toml" | sort | while read backend_file; do
+        backend_name=$(basename "$backend_file" .toml)
         echo "  • $backend_name"
     done
     echo ""
@@ -74,12 +74,12 @@ if [ ! -d "$testcase_dir" ]; then
 fi
 
 # Validate backend
-backend_file="${script_dir}/backends/${backend_name}.json"
+backend_file="${script_dir}/backends/${backend_name}.toml"
 if [ ! -f "$backend_file" ]; then
     echo -e "${RED}Error: Backend '$backend_name' not found${NC}"
     echo "Available backends:"
-    find "${script_dir}/backends" -maxdepth 1 -name "*.json" | sort | while read file; do
-        echo "  • $(basename "$file" .json)"
+    find "${script_dir}/backends" -maxdepth 1 -name "*.toml" | sort | while read file; do
+        echo "  • $(basename "$file" .toml)"
     done
     exit 1
 fi

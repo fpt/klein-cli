@@ -1,13 +1,16 @@
 package config
 
 import (
-	"encoding/json"
+	"bytes"
 	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"slices"
 	"sort"
+	"strings"
+
+	"github.com/BurntSushi/toml"
 
 	"github.com/fpt/klein-cli/internal/infra"
 	"github.com/fpt/klein-cli/internal/repository"
@@ -20,30 +23,35 @@ const DefaultAgentMaxIterations = 30
 
 // Settings represents the main application settings
 type Settings struct {
-	LLM   LLMSettings   `json:"llm"`
-	MCP   MCPSettings   `json:"mcp"`
-	Agent AgentSettings `json:"agent"`
-	Bash  BashSettings  `json:"bash,omitempty"`
+	LLM   LLMSettings   `toml:"llm"`
+	MCP   MCPSettings   `toml:"mcp"`
+	Agent AgentSettings `toml:"agent"`
+	Bash  BashSettings  `toml:"bash,omitempty"`
 
 	// BaseDir is the root for shared per-user state (sessions, memory, the
 	// schedule store). Empty resolves to ~/.klein. It is env-expanded on load.
 	// Both the CLI and the `klein claw` gateway derive their paths from it, so
 	// pointing --settings at a file with a different base_dir yields a fully
 	// isolated instance.
-	BaseDir string `json:"base_dir,omitempty"`
+	BaseDir string `toml:"base_dir,omitempty"`
 
 	// Claw carries the gateway configuration as an opaque block. It is parsed by
 	// internal/gateway (which owns its schema) so this package stays free of the
 	// gateway's heavy dependencies (discordgo, connect, cron).
-	Claw json.RawMessage `json:"claw,omitempty"`
+	//
+	// TOML has no json.RawMessage: the decoder hands back decoded values, not the
+	// bytes they came from. A generic map is the honest equivalent — this package
+	// stays ignorant of the schema, and gateway.ParseClawConfig re-encodes the map
+	// and decodes it into its own types.
+	Claw map[string]any `toml:"claw,omitempty"`
 
 	// Codex configures the codex app-server backend (used only when
 	// llm.backend == "codex"). Model/effort still come from the llm block.
-	Codex CodexSettings `json:"codex,omitempty"`
+	Codex CodexSettings `toml:"codex,omitempty"`
 
 	// AppServer configures the generic app-server backend (used only when
 	// llm.backend == "appserver"). The server owns its own model configuration.
-	AppServer AppServerSettings `json:"appserver,omitempty"`
+	AppServer AppServerSettings `toml:"appserver,omitempty"`
 
 	// AutoApproveCommands lists command prefixes an app-server backend may run
 	// without asking. It sits here rather than in the codex/appserver blocks
@@ -60,10 +68,10 @@ type Settings struct {
 	// Matching is prefix-on-word-boundary against the command with its shell
 	// wrapper removed, and never applies to a command carrying shell chaining or
 	// substitution. See agentserver.WithAutoApprove.
-	AutoApproveCommands []string `json:"auto_approve_commands,omitempty"` //nolint:tagliatelle
+	AutoApproveCommands []string `toml:"auto_approve_commands,omitempty"`
 
 	// Repository for persistence (nil for in-memory only)
-	settingsRepository repository.SettingsRepository `json:"-"`
+	settingsRepository repository.SettingsRepository `toml:"-"`
 }
 
 // ResolvedBaseDir returns the env-expanded base directory, defaulting to
@@ -100,20 +108,18 @@ func (s *Settings) MemoryDBFile() string {
 }
 
 // LLMSettings contains LLM client configuration.
-//
-//nolint:tagliatelle // json keys are the established on-disk settings schema
 type LLMSettings struct {
-	Backend   string `json:"backend"`              // "openai", "anthropic", "gemini", "codex", or "appserver"
-	Model     string `json:"model"`                // model name
-	BaseURL   string `json:"base_url,omitempty"`   // optional provider base URL (OpenAI/Azure-compatible)
-	Thinking  bool   `json:"thinking,omitempty"`   // enable thinking mode
-	MaxTokens int    `json:"max_tokens,omitempty"` // maximum tokens for model responses (0 = use model default)
+	Backend   string `toml:"backend"`              // "openai", "anthropic", "gemini", "codex", or "appserver"
+	Model     string `toml:"model"`                // model name
+	BaseURL   string `toml:"base_url,omitempty"`   // optional provider base URL (OpenAI/Azure-compatible)
+	Thinking  bool   `toml:"thinking,omitempty"`   // enable thinking mode
+	MaxTokens int    `toml:"max_tokens,omitempty"` // maximum tokens for model responses (0 = use model default)
 	// Effort sets the reasoning effort for reasoning-capable models (primarily
 	// OpenAI GPT-5). Empty = backend default. The full vocabulary is in
 	// ValidEfforts, but actual support is model-dependent — e.g. gpt-5.6-luna accepts
 	// none/low/medium/high/xhigh but not minimal. Ignored by models without
 	// reasoning effort.
-	Effort string `json:"effort,omitempty"`
+	Effort string `toml:"effort,omitempty"`
 }
 
 // ValidEfforts lists every reasoning-effort value accepted by the OpenAI API
@@ -127,32 +133,35 @@ func IsValidEffort(e string) bool {
 	return e == "" || slices.Contains(ValidEfforts, e)
 }
 
-// MCPSettings contains MCP server configuration. On the wire it uses the
-// Claude-Code/Cursor "map of name → server" shape:
+// MCPSettings contains MCP server configuration. On disk it is a table per
+// server, keyed by name — the same shape Claude Code and Cursor use, so a server
+// definition is recognizable when moved between them:
 //
-//	"mcp": {
-//	  "browser-sandbox": { "command": "docker", "args": ["run", "..."] },
-//	  "docs":            { "url": "https://example.com/mcp" }
-//	}
+//	[mcp.browser-sandbox]
+//	command = "docker"
+//	args    = ["run", "..."]
+//
+//	[mcp.docs]
+//	url = "https://example.com/mcp"
 //
 // enabled defaults to true and type is inferred (command → stdio, url → sse).
 // Internally it is kept as a slice for the rest of the code.
 type MCPSettings struct {
-	Servers []domain.MCPServerConfig `json:"-"`
+	Servers []domain.MCPServerConfig `toml:"-"`
 }
 
 // mcpServerSpec is the per-server on-disk shape (Claude Code style). enabled is
 // a pointer so an omitted value defaults to true; env is a map like Claude Code.
 type mcpServerSpec struct {
-	Enabled            *bool                `json:"enabled,omitempty"`
-	Type               domain.MCPServerType `json:"type,omitempty"`
-	Command            string               `json:"command,omitempty"`
-	Args               []string             `json:"args,omitempty"`
-	Env                map[string]string    `json:"env,omitempty"`
-	URL                string               `json:"url,omitempty"`
-	AuthorizationToken string               `json:"authorization_token,omitempty"`
-	Headers            map[string]string    `json:"headers,omitempty"`
-	AllowedTools       []string             `json:"allowed_tools,omitempty"`
+	Enabled            *bool                `toml:"enabled,omitempty"`
+	Type               domain.MCPServerType `toml:"type,omitempty"`
+	Command            string               `toml:"command,omitempty"`
+	Args               []string             `toml:"args,omitempty"`
+	Env                map[string]string    `toml:"env,omitempty"`
+	URL                string               `toml:"url,omitempty"`
+	AuthorizationToken string               `toml:"authorization_token,omitempty"`
+	Headers            map[string]string    `toml:"headers,omitempty"`
+	AllowedTools       []string             `toml:"allowed_tools,omitempty"`
 }
 
 func (s mcpServerSpec) toConfig(name string) domain.MCPServerConfig {
@@ -183,6 +192,39 @@ func (s mcpServerSpec) toConfig(name string) domain.MCPServerConfig {
 	}
 }
 
+// MCPServerTOML renders one server as the body of its [mcp.<name>] table, ready
+// to hand to tomledit.SetTable.
+//
+// It encodes the whole `[mcp.<name>]` table and then drops the header line,
+// rather than encoding the spec on its own. That is not a detail: a spec encoded
+// alone emits its env map as a bare `[env]` header, which under the table would
+// read as a *top-level* `[env]` and silently move the server's environment out
+// of the server. Encoding at the full path makes the encoder write
+// `[mcp.<name>.env]`, which is where it belongs.
+func MCPServerTOML(c domain.MCPServerConfig) ([]byte, error) {
+	block := map[string]any{"mcp": map[string]any{c.Name: specFromConfig(c)}}
+
+	var buf bytes.Buffer
+	enc := toml.NewEncoder(&buf)
+	enc.Indent = "" // the body is spliced under a header, not nested in one
+	if err := enc.Encode(block); err != nil {
+		return nil, fmt.Errorf("rendering mcp server %q: %w", c.Name, err)
+	}
+
+	// Drop the `[mcp.<name>]` header the encoder wrote; SetTable supplies it.
+	// Matched by name rather than by position: the encoder puts a blank line
+	// before the header, so taking "everything after the first line" silently
+	// leaves the header in the body and defines the table twice.
+	header := "[mcp." + c.Name + "]"
+	lines := strings.Split(strings.TrimRight(buf.String(), "\n"), "\n")
+	for i, line := range lines {
+		if strings.TrimSpace(line) == header {
+			return []byte(strings.Join(lines[i+1:], "\n") + "\n"), nil
+		}
+	}
+	return nil, fmt.Errorf("rendering mcp server %q: encoder wrote no %s table", c.Name, header)
+}
+
 func specFromConfig(c domain.MCPServerConfig) mcpServerSpec {
 	s := mcpServerSpec{
 		Type:               c.Type,
@@ -201,34 +243,54 @@ func specFromConfig(c domain.MCPServerConfig) mcpServerSpec {
 	return s
 }
 
-// UnmarshalJSON decodes the Claude-Code/Cursor map shape into Servers.
-func (m *MCPSettings) UnmarshalJSON(data []byte) error {
-	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
-		return err
+// UnmarshalTOML turns each [mcp.<name>] table into a server config.
+//
+// The decoder hands over the already-decoded block, so this re-encodes each
+// server's table and decodes it into mcpServerSpec rather than reading the map
+// field by field. That keeps one definition of the on-disk shape — the struct
+// tags — instead of a second one written in type switches here.
+func (m *MCPSettings) UnmarshalTOML(data any) error {
+	raw, ok := data.(map[string]any)
+	if !ok {
+		return fmt.Errorf(`the "mcp" block must be a table of servers, e.g. [mcp.godoc] with command = "..."`)
 	}
+
 	names := make([]string, 0, len(raw))
 	for name := range raw {
 		names = append(names, name)
 	}
 	sort.Strings(names) // deterministic order
+
 	for _, name := range names {
+		table, ok := raw[name].(map[string]any)
+		if !ok {
+			return fmt.Errorf("mcp server %q must be a table, e.g. [mcp.%s] with command = \"...\"", name, name)
+		}
 		var spec mcpServerSpec
-		if err := json.Unmarshal(raw[name], &spec); err != nil {
-			return fmt.Errorf("mcp server %q: %w — expected Claude Code map style, e.g. \"mcp\": { %q: { \"command\": \"...\" } }", name, err, name)
+		if err := DecodeBlock(table, &spec); err != nil {
+			return fmt.Errorf("mcp server %q: %w", name, err)
 		}
 		m.Servers = append(m.Servers, spec.toConfig(name))
 	}
 	return nil
 }
 
-// MarshalJSON writes the map shape so a re-saved config round-trips.
-func (m MCPSettings) MarshalJSON() ([]byte, error) {
-	out := make(map[string]mcpServerSpec, len(m.Servers))
-	for _, c := range m.Servers {
-		out[c.Name] = specFromConfig(c)
+// DecodeBlock decodes an already-decoded TOML block into v.
+//
+// The TOML decoder hands back values, not the bytes they came from, so a block
+// held generically (Settings.Claw, an [mcp.*] table) cannot simply be re-parsed.
+// Re-encoding it and decoding into the target type keeps the struct tags as the
+// single description of the shape, instead of a second one written by hand in
+// type assertions.
+func DecodeBlock(block map[string]any, v any) error {
+	var buf bytes.Buffer
+	if err := toml.NewEncoder(&buf).Encode(block); err != nil {
+		return fmt.Errorf("re-encoding block: %w", err)
 	}
-	return json.Marshal(out)
+	if _, err := toml.Decode(buf.String(), v); err != nil {
+		return fmt.Errorf("decoding block: %w", err)
+	}
+	return nil
 }
 
 // envMapToSlice converts a {"KEY":"VAL"} map into sorted "KEY=VAL" entries.
@@ -275,25 +337,24 @@ func indexByte(s string, b byte) int {
 
 // AgentSettings contains agent behavior configuration
 type AgentSettings struct {
-	MaxIterations int    `json:"max_iterations"`
-	LogLevel      string `json:"log_level"`
+	MaxIterations int    `toml:"max_iterations"`
+	LogLevel      string `toml:"log_level"`
 
 	// MaxToolResultRunes caps how much of a single tool result stays inline in
 	// the conversation; anything longer is offloaded to a file under the
 	// project's tool_results/ directory and replaced with a stub the model can
 	// read back. Counted in runes, so CJK text gets the same budget as ASCII.
 	// 0 selects tool.DefaultMaxToolResultRunes.
-	//nolint:tagliatelle // snake_case matches the established on-disk settings schema
-	MaxToolResultRunes int `json:"max_tool_result_runes,omitempty"`
+	MaxToolResultRunes int `toml:"max_tool_result_runes,omitempty"`
 }
 
 // CodexSettings configures the codex app-server backend. Model and effort are
 // taken from LLMSettings; these fields cover codex-specific behavior. All are
 // optional with headless-friendly defaults.
 type CodexSettings struct {
-	CodexPath      string `json:"codex_path,omitempty"`      // path to the codex binary ("" → "codex" on PATH)
-	ApprovalPolicy string `json:"approval_policy,omitempty"` //nolint:tagliatelle // never|on-request|untrusted|granular
-	SandboxMode    string `json:"sandbox_mode,omitempty"`    // read-only|workspace-write|danger-full-access ("" → workspace-write)
+	CodexPath      string `toml:"codex_path,omitempty"`      // path to the codex binary ("" → "codex" on PATH)
+	ApprovalPolicy string `toml:"approval_policy,omitempty"` // never|on-request|untrusted|granular
+	SandboxMode    string `toml:"sandbox_mode,omitempty"`    // read-only|workspace-write|danger-full-access ("" → workspace-write)
 	// SandboxWorkspaceWrite and ShellEnvironmentPolicy mirror the codex config
 	// tables of the same names. Unlike the three fields above — which klein
 	// states per-thread on thread/start — these have no thread-scoped equivalent,
@@ -301,10 +362,10 @@ type CodexSettings struct {
 	// (see agentserver.codexConfigArgs). Every field is optional and an unset one
 	// is not passed at all, leaving ~/.codex/config.toml in charge of it.
 	//
-	// Every json tag below spells a codex config key, so all of them are
-	// snake_case whatever klein's own convention would be — hence the nolints.
-	SandboxWorkspaceWrite  SandboxWorkspaceWriteSettings  `json:"sandbox_workspace_write,omitempty"`  //nolint:tagliatelle
-	ShellEnvironmentPolicy ShellEnvironmentPolicySettings `json:"shell_environment_policy,omitempty"` //nolint:tagliatelle
+	// Every tag below spells a codex config key verbatim, which is why they are
+	// snake_case: these names are codex's, not klein's.
+	SandboxWorkspaceWrite  SandboxWorkspaceWriteSettings  `toml:"sandbox_workspace_write,omitempty"`
+	ShellEnvironmentPolicy ShellEnvironmentPolicySettings `toml:"shell_environment_policy,omitempty"`
 }
 
 // SandboxWorkspaceWriteSettings mirrors codex's [sandbox_workspace_write] table,
@@ -319,13 +380,13 @@ type CodexSettings struct {
 // codex defaults them to false, and klein passing a false the user never asked
 // for would override a true in their own config.
 type SandboxWorkspaceWriteSettings struct {
-	NetworkAccess       *bool `json:"network_access,omitempty"`         //nolint:tagliatelle
-	ExcludeTmpdirEnvVar *bool `json:"exclude_tmpdir_env_var,omitempty"` //nolint:tagliatelle
-	ExcludeSlashTmp     *bool `json:"exclude_slash_tmp,omitempty"`      //nolint:tagliatelle
+	NetworkAccess       *bool `toml:"network_access,omitempty"`
+	ExcludeTmpdirEnvVar *bool `toml:"exclude_tmpdir_env_var,omitempty"`
+	ExcludeSlashTmp     *bool `toml:"exclude_slash_tmp,omitempty"`
 	// WritableRoots are extra paths writable beyond the workspace itself.
 	// Last by fieldalignment: a slice's pointer sits at its front, so ending on
 	// one leaves the trailing len/cap words outside the GC's scan range.
-	WritableRoots []string `json:"writable_roots,omitempty"` //nolint:tagliatelle
+	WritableRoots []string `toml:"writable_roots,omitempty"`
 }
 
 // ShellEnvironmentPolicySettings mirrors codex's [shell_environment_policy]
@@ -334,16 +395,16 @@ type SandboxWorkspaceWriteSettings struct {
 // exported does not necessarily reach a tool.
 type ShellEnvironmentPolicySettings struct {
 	// Inherit is core|all|none — the exact set codex accepts. "" leaves it unset.
-	Inherit string `json:"inherit,omitempty"`
+	Inherit string `toml:"inherit,omitempty"`
 	// IgnoreDefaultExcludes disables codex's built-in filtering of names that
 	// look like secrets (*KEY*, *TOKEN*, *SECRET*).
-	IgnoreDefaultExcludes *bool `json:"ignore_default_excludes,omitempty"` //nolint:tagliatelle
+	IgnoreDefaultExcludes *bool `toml:"ignore_default_excludes,omitempty"`
 	// Set adds or overrides variables outright.
-	Set map[string]string `json:"set,omitempty"`
+	Set map[string]string `toml:"set,omitempty"`
 	// Exclude and IncludeOnly are case-insensitive glob patterns over variable
 	// names, applied after Inherit. Last by fieldalignment, as above.
-	Exclude     []string `json:"exclude,omitempty"`
-	IncludeOnly []string `json:"include_only,omitempty"` //nolint:tagliatelle
+	Exclude     []string `toml:"exclude,omitempty"`
+	IncludeOnly []string `toml:"include_only,omitempty"`
 }
 
 // ShellEnvironmentInheritModes are the values codex accepts for
@@ -363,24 +424,24 @@ var ShellEnvironmentInheritModes = []string{"core", "all", "none"}
 type AppServerSettings struct {
 	// Command is the app-server binary (e.g. "gallium", or an absolute path).
 	// Required — this backend has no default binary.
-	Command string `json:"command,omitempty"`
+	Command string `toml:"command,omitempty"`
 	// ApprovalPolicy is never|on-request ("" → the mode default).
-	ApprovalPolicy string `json:"approval_policy,omitempty"` //nolint:tagliatelle // established settings schema
+	ApprovalPolicy string `toml:"approval_policy,omitempty"`
 	// Config is an optional path to the server's own TOML config (e.g.
 	// ../rs-gallium/configs/gemma4.toml). Servers of this kind are configured by
 	// environment variables, so klein reads the file's [llm]/[agent] tables and
 	// passes them to the child as env; frontend-only tables are ignored. Values
 	// here win over the ambient environment.
-	Config string `json:"config,omitempty"`
+	Config string `toml:"config,omitempty"`
 	// Args overrides the subcommand used to enter app-server mode.
 	// Empty → ["app-server"], the protocol's conventional entry point.
 	// Last field by fieldalignment: the only one carrying a slice header.
-	Args []string `json:"args,omitempty"`
+	Args []string `toml:"args,omitempty"`
 }
 
 // BashSettings contains bash tool configuration
 type BashSettings struct {
-	WhitelistedCommands []string `json:"whitelisted_commands,omitempty"` // Commands that don't require approval
+	WhitelistedCommands []string `toml:"whitelisted_commands,omitempty"` // Commands that don't require approval
 }
 
 // NewSettings creates new settings with in-memory repository
@@ -412,7 +473,7 @@ func (s *Settings) Load() error {
 		return fmt.Errorf("failed to load settings: %w", err)
 	}
 
-	if err := json.Unmarshal(data, s); err != nil {
+	if _, err := toml.Decode(string(data), s); err != nil {
 		return fmt.Errorf("failed to parse settings: %w", err)
 	}
 
@@ -421,21 +482,7 @@ func (s *Settings) Load() error {
 	return nil
 }
 
-// Save saves settings to the repository
-func (s *Settings) Save() error {
-	if s.settingsRepository == nil {
-		return fmt.Errorf("no settings repository configured")
-	}
-
-	data, err := json.MarshalIndent(s, "", "  ")
-	if err != nil {
-		return fmt.Errorf("failed to marshal settings: %w", err)
-	}
-
-	return s.settingsRepository.Save(data)
-}
-
-// LoadSettings loads application settings from a JSON file
+// LoadSettings loads application settings from a TOML file
 func LoadSettings(configPath string) (*Settings, error) {
 	// Create settings with file repository
 	settings := NewSettingsWithPath(configPath)
@@ -455,6 +502,7 @@ func LoadSettings(configPath string) (*Settings, error) {
 			return createSettingsFileAtPath(configPath)
 		}
 		// Nothing configured anywhere: create a default file and use defaults.
+		warnAboutLegacyJSONSettings()
 		return createDefaultSettingsFile()
 	}
 
@@ -466,42 +514,6 @@ func LoadSettings(configPath string) (*Settings, error) {
 	}
 
 	return settings, nil
-}
-
-// SaveSettings saves application settings to a JSON file
-func SaveSettings(configPath string, settings *Settings) error {
-	if settings.settingsRepository != nil {
-		// Use the injected repository
-		return settings.Save()
-	}
-
-	// Fallback to direct file operations (for backward compatibility)
-	if configPath == "" {
-		// Try to find existing settings file first
-		configPath = findSettingsFile()
-		if configPath == "" {
-			// No existing file, save to .agents in current directory
-			configPath = filepath.Join(".agents", "settings.json")
-		}
-	}
-
-	// Ensure directory exists
-	if err := os.MkdirAll(filepath.Dir(configPath), 0755); err != nil {
-		return fmt.Errorf("failed to create config directory: %w", err)
-	}
-
-	// Marshal to JSON with pretty formatting
-	data, err := json.MarshalIndent(settings, "", "  ")
-	if err != nil {
-		return fmt.Errorf("failed to marshal settings: %w", err)
-	}
-
-	// Write to file
-	if err := os.WriteFile(configPath, data, 0644); err != nil {
-		return fmt.Errorf("failed to write settings file: %w", err)
-	}
-
-	return nil
 }
 
 // GetDefaultSettings returns default application settings
@@ -544,7 +556,7 @@ func GetDefaultSettings() *Settings {
 // DefaultBackend is the backend used when none is configured.
 const DefaultBackend = "openai"
 
-// The whole-agent app-server backend ids — the values settings.json may name.
+// The whole-agent app-server backend ids — the values settings.toml may name.
 // These live here rather than beside the app-server client because they are
 // settings vocabulary: the client is told which dialect it is driving
 // (agentserver.Dialect) and has no interest in what a config file called it.
@@ -711,13 +723,13 @@ func ValidateSettings(settings *Settings) error {
 	return nil
 }
 
-// findSettingsFile searches for settings.json in order of preference:
-// 1. .agents/settings.json in current directory
-// 2. $HOME/.klein/settings.json
+// findSettingsFile searches for settings.toml in order of preference:
+// 1. .agents/settings.toml in current directory
+// 2. $HOME/.klein/settings.toml
 // Returns empty string if none found
 func findSettingsFile() string {
 	// Check .agents in current directory
-	currentDirPath := filepath.Join(".agents", "settings.json")
+	currentDirPath := filepath.Join(".agents", "settings.toml")
 	if _, err := os.Stat(currentDirPath); err == nil {
 		return currentDirPath
 	}
@@ -725,7 +737,7 @@ func findSettingsFile() string {
 	// Check $HOME/.klein
 	homeDir, err := os.UserHomeDir()
 	if err == nil {
-		homeDirPath := filepath.Join(homeDir, ".klein", "settings.json")
+		homeDirPath := filepath.Join(homeDir, ".klein", "settings.toml")
 		if _, err := os.Stat(homeDirPath); err == nil {
 			return homeDirPath
 		}
@@ -757,7 +769,39 @@ func ValidateMCPServerConfig(config domain.MCPServerConfig) error {
 	return nil
 }
 
-// createDefaultSettingsFile creates a default settings.json file in ~/.klein/
+// warnAboutLegacyJSONSettings says something when a settings.json is sitting
+// where a settings.toml should be.
+//
+// klein reads TOML now and does not read the old file — that is the intended
+// change, not an oversight. But scaffolding a fresh default on top of someone's
+// existing configuration without a word would look exactly like klein having
+// forgotten it: same command, different backend, no explanation. One line costs
+// nothing and turns a mystery into a chore.
+func warnAboutLegacyJSONSettings() {
+	for _, legacy := range legacySettingsPaths() {
+		if _, err := os.Stat(legacy); err != nil {
+			continue
+		}
+		pkgLogger.NewComponentLogger("settings").WarnWithIntention(
+			pkgLogger.IntentionConfig,
+			"found a settings.json from an older klein; settings are TOML now and this file is not read",
+			"path", legacy,
+			"hint", "port it to "+strings.TrimSuffix(legacy, ".json")+".toml",
+		)
+		return
+	}
+}
+
+// legacySettingsPaths are the places the JSON settings file used to live.
+func legacySettingsPaths() []string {
+	paths := []string{filepath.Join(".agents", "settings.json")}
+	if home, err := os.UserHomeDir(); err == nil {
+		paths = append(paths, filepath.Join(home, ".klein", "settings.json"))
+	}
+	return paths
+}
+
+// createDefaultSettingsFile creates a default settings.toml file in ~/.klein/
 func createDefaultSettingsFile() (*Settings, error) {
 	// Determine where to create the file (prefer home directory)
 	homeDir, err := os.UserHomeDir()
@@ -765,17 +809,47 @@ func createDefaultSettingsFile() (*Settings, error) {
 		return GetDefaultSettings(), nil // Fall back to defaults without file creation
 	}
 
-	settingsPath := filepath.Join(homeDir, ".klein", "settings.json")
+	settingsPath := filepath.Join(homeDir, ".klein", "settings.toml")
 	return createSettingsFileAtPath(settingsPath)
 }
+
+// defaultSettingsTemplate is the file a first run leaves behind.
+//
+// It is a written template rather than an encoded struct, which is the one real
+// gain of the move to TOML: the file that appears in someone's home directory
+// can explain itself. An encoder would emit every zero value with no hint what
+// any of them mean.
+const defaultSettingsTemplate = `# klein settings — see doc/CONFIGS.md for every field.
+# Edit freely; klein only rewrites the [mcp.*] tables, and only via ` + "`klein mcp`" + `.
+
+[llm]
+backend = "%s"
+model   = "%s"
+# thinking   = true
+# max_tokens = 8192
+# effort     = "medium"   # reasoning models only
+
+[agent]
+max_iterations = %d
+log_level      = "%s"
+
+# MCP servers, one table each. Add them by hand or with ` + "`klein mcp add`" + `.
+# [mcp.godoc]
+# command = "godevmcp"
+# args    = ["serve"]
+`
 
 // createSettingsFileAtPath creates a default settings file at the specified path
 func createSettingsFileAtPath(settingsPath string) (*Settings, error) {
 	// Create settings with file repository
 	settings := NewSettingsWithPath(settingsPath)
 
-	// Save default settings to file
-	if err := settings.Save(); err != nil {
+	defaults := GetDefaultSettings()
+	body := fmt.Sprintf(defaultSettingsTemplate,
+		defaults.LLM.Backend, defaults.LLM.Model,
+		defaults.Agent.MaxIterations, defaults.Agent.LogLevel)
+
+	if err := settings.settingsRepository.Save([]byte(body)); err != nil {
 		// Return defaults without repository if saving fails
 		return GetDefaultSettings(), nil
 	}

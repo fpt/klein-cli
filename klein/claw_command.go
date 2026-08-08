@@ -27,7 +27,7 @@ import (
 
 // runClawCommand implements `klein claw`, the messaging gateway. It is a
 // subcommand rather than a binary of its own: it reads the "claw" section of
-// settings.json and derives all state (sessions, memory, schedule store) from
+// settings.toml and derives all state (sessions, memory, schedule store) from
 // the shared base dir, so `klein claw --settings other.json` — with a different
 // base_dir and Discord token — runs a fully isolated instance.
 //
@@ -51,7 +51,7 @@ func runClawCommand(args []string) int {
 	}
 
 	fs := flag.NewFlagSet("claw", flag.ContinueOnError)
-	settingsPath := fs.String("settings", "", "Path to settings file (default: .agents/settings.json or ~/.klein/settings.json)")
+	settingsPath := fs.String("settings", "", "Path to settings file (default: .agents/settings.toml or ~/.klein/settings.toml)")
 	logLevel := fs.String("log-level", "info", "Log level (debug, info, warn, error)")
 	agentAddr := fs.String("agent-addr", "", "Dial a remote klein --serve at this address instead of embedding the agent (overrides claw.agent_addr)")
 	serveAddr := fs.String("serve-addr", "127.0.0.1:0", "Listen address for the embedded agent server (ephemeral loopback by default)")
@@ -163,7 +163,7 @@ const clawUsage = `Usage:
   klein claw repl [--settings <path>] [--role <name>]
 
 Runs the messaging gateway. Configuration lives in the "claw" section of
-settings.json; sessions, memory, and the schedule store are derived from the
+settings.toml; sessions, memory, and the schedule store are derived from the
 shared "base_dir" (default ~/.klein).
 
   repl     Interactive terminal chat sharing claw's tools (memory, schedules,
@@ -212,7 +212,7 @@ func buildClawToolManagers(ctx context.Context, settings *config.Settings, cfg *
 // running `klein claw` gateway live-reloads.
 func runClawREPL(args []string) int {
 	fs := flag.NewFlagSet("claw repl", flag.ContinueOnError)
-	settingsPath := fs.String("settings", "", "Path to settings file (default: .agents/settings.json or ~/.klein/settings.json)")
+	settingsPath := fs.String("settings", "", "Path to settings file (default: .agents/settings.toml or ~/.klein/settings.toml)")
 	roleFlag := fs.String("role", gateway.ClawRole, "Role (startup prompt) to open the session with")
 	verbose := fs.Bool("v", false, "Enable verbose (debug) logging")
 	if err := fs.Parse(args); err != nil {

@@ -14,16 +14,17 @@ testsuite/
 ├── runner.sh              # Main test runner script
 ├── matrix_runner.sh       # Run tests across multiple backends
 ├── backends/              # Backend configuration files
-│   ├── anthropic.json
-│   ├── appserver.json
-│   ├── codex.json
-│   ├── gemini.json
-│   └── openai.json
+│   ├── anthropic.toml
+│   ├── appserver.toml
+│   ├── codex.toml
+│   ├── gemini.toml
+│   └── openai.toml
 ├── testcases/             # Individual test cases
-│   ├── code_scenario/     # Simple code generation test
-│   ├── fibonacci_test/    # Multi-step Fibonacci implementation
+│   ├── coding/            # Simple code generation test
+│   ├── fibonacci/         # Multi-step Fibonacci implementation
 │   ├── memory_state/      # Memory and state management test
-│   └── research_scenario/ # Web research capabilities
+│   ├── research_scenario/ # Web research capabilities
+│   └── …                  # long_text, plan_mode, refactoring, sub_agent_explore, web_search
 └── results/               # Test execution results
 ```
 
@@ -81,7 +82,7 @@ Backend files under `backends/` are klein settings files (`llm` block) passed vi
 
 ### codex backend
 
-`backends/codex.json` runs the **codex app-server backend** (`llm.backend =
+`backends/codex.toml` runs the **codex app-server backend** (`llm.backend =
 "codex"`). It's a whole-agent backend: codex does the work with its own
 tools, while klein's native tools (memory/schedule) are exposed to it via
 `dynamicTools`. Included so codex can be compared against the chat backends on
@@ -122,15 +123,21 @@ BACKENDS=codex CLI=output/klein ./testsuite/matrix_runner.sh
 
 ## Backend Configurations
 
-### openai.json
+Backend files are TOML (`llm.backend`, `llm.model`, and whatever that backend
+needs). They are ordinary klein settings files, passed straight to `--settings`.
+
+### openai.toml
 - **Model**: gpt-5.6-luna
 - **Features**: Native tool calling, structured output, vision
-- **Token Limit**: 2000 tokens
 
-### gemini.json
+### gemini.toml
 - **Model**: gemini-2.5-flash-lite
 - **Features**: Native schema, structured output
-- **Token Limit**: 2000 tokens
+
+> These carried a `maxTokens = 2048` key until #107. The schema spells it
+> `max_tokens`, so it never applied and the suite has always run with each
+> model's default — the key was dropped rather than corrected, to keep the tests
+> exercising what they have actually been exercising.
 
 ## Security Model
 

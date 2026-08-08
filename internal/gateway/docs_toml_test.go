@@ -15,7 +15,9 @@ import (
 
 // docFiles are the documents whose ```toml blocks are settings examples people
 // copy. Anything else in them would have to be excluded here.
-var docFiles = []string{"README.md", "CLAUDE.md", "doc/CONFIGS.md", "doc/DESIGN.md"}
+var docFiles = []string{
+	"README.md", "CLAUDE.md", "doc/CONFIGS.md", "doc/DESIGN.md", "testsuite/README.md",
+}
 
 var tomlBlock = regexp.MustCompile("(?sm)^```toml\n(.*?)^```$")
 

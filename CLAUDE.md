@@ -19,7 +19,7 @@ go run klein/main.go --serve -b anthropic    # Start Connect-gRPC server on :500
 
 # Gateway (klein claw subcommand — reads the [claw] section of settings.toml)
 go run klein/main.go claw                     # Start the gateway (embedded agent server)
-go run klein/main.go claw --settings other.json   # Isolated instance (own base_dir + Discord)
+go run klein/main.go claw --settings other.toml   # Isolated instance (own base_dir + Discord)
 go run klein/main.go claw repl                # Interactive CLI sharing claw's tools/backend (own session)
 
 # AI code review (harness-driven; klein never runs git/gh)

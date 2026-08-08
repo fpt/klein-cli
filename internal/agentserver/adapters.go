@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"reflect"
 
 	"github.com/fpt/klein-cli/pkg/agent/domain"
 	"github.com/fpt/klein-cli/pkg/agent/events"
@@ -21,14 +22,39 @@ import (
 type toolHost struct{ tools domain.ToolManager }
 
 // newToolHost wraps a tool manager, or returns nil when there is none to offer.
-// The nil check matters for the same reason backendLogger's does: a nil
-// domain.ToolManager placed in a DynamicTools field is a non-nil interface, and
-// the client would register a tool set it then panics trying to enumerate.
+//
+// The guard is the same idea as backendLogger's and not the same code, because
+// the parameter is an interface rather than a concrete pointer. `tm == nil`
+// therefore catches only a caller that passed a literal nil; a nil
+// *tool.CompositeToolManager arrives as a non-nil domain.ToolManager, and would
+// wrap into a toolHost that registers a tool set and panics enumerating it.
+// Nothing calls it that way today, but "no caller does this yet" is not what the
+// doc above says, so isNil makes the claim true instead of narrowing it.
 func newToolHost(tm domain.ToolManager) DynamicTools {
-	if tm == nil {
+	if isNil(tm) {
 		return nil
 	}
 	return toolHost{tools: tm}
+}
+
+// isNil reports whether an interface value is nil or holds a nil pointer.
+//
+// The second case is the one worth the reflection: a nil pointer stored in an
+// interface makes the interface itself non-nil, so an `== nil` guard passes it
+// through and the panic lands later, at the first method call, somewhere that
+// has no idea where the value came from.
+func isNil(v any) bool {
+	if v == nil {
+		return true
+	}
+	rv := reflect.ValueOf(v)
+	switch rv.Kind() {
+	case reflect.Pointer, reflect.Interface, reflect.Map, reflect.Slice, reflect.Chan, reflect.Func:
+		return rv.IsNil()
+	default:
+		// A non-nilable kind (a struct value, say) is never nil.
+		return false
+	}
 }
 
 // Specs describes klein's tools in the client's vocabulary. Ordering follows map

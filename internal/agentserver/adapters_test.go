@@ -77,6 +77,27 @@ func TestToolHost_NilManagerStaysNil(t *testing.T) {
 	}
 }
 
+// The case an `== nil` guard cannot see: a nil pointer arrives as a non-nil
+// domain.ToolManager, so the wrap succeeds and the panic surfaces later, at the
+// first enumeration, far from whoever passed it.
+func TestToolHost_TypedNilManagerIsAlsoNil(t *testing.T) {
+	t.Parallel()
+	var absent *tool.CompositeToolManager
+
+	if got := newToolHost(absent); got != nil {
+		t.Fatalf("a typed-nil manager should not wrap: got %v", got)
+	}
+	// And the panic it would otherwise cause is real, not hypothetical.
+	func() {
+		defer func() {
+			if recover() == nil {
+				t.Error("enumerating a typed-nil manager no longer panics; isNil may be dead code")
+			}
+		}()
+		_ = toolHost{tools: absent}.Specs()
+	}()
+}
+
 // klein signals a failed tool two ways; the protocol has room for one. Both have
 // to arrive as a failure, or the backend treats an error message as output and
 // carries on as though the tool had worked.

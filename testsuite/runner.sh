@@ -79,7 +79,7 @@ if [ ! -f "$backend_file" ]; then
     echo -e "${RED}Error: Backend '$backend_name' not found${NC}"
     echo "Available backends:"
     find "${script_dir}/backends" -maxdepth 1 -name "*.toml" | sort | while read file; do
-        echo "  • $(basename "$file" .json)"
+        echo "  • $(basename "$file" .toml)"
     done
     exit 1
 fi

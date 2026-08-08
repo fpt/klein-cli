@@ -1,6 +1,8 @@
 package config
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -142,5 +144,48 @@ TOKEN = "abc"
 		if !strings.Contains(string(doc), keep) {
 			t.Errorf("comment %q was lost:\n%s", keep, doc)
 		}
+	}
+}
+
+// The decoder hook has to fire on the path klein actually uses, not only on a
+// direct toml.Decode in a test. MCPSettings.Servers is tagged `toml:"-"`, so if
+// UnmarshalTOML were ever not invoked — a library change, a signature drift —
+// every settings file would load with no MCP servers at all and nothing would
+// say so. That failure is silent by construction, which is what earns it a test
+// through LoadSettings rather than through the decoder.
+func TestLoadSettings_PopulatesMCPServersFromFile(t *testing.T) {
+	t.Parallel()
+	path := filepath.Join(t.TempDir(), "settings.toml")
+	body := `[llm]
+backend = "anthropic"
+
+[mcp.godoc]
+command = "godevmcp"
+args = ["serve"]
+
+[mcp.docs]
+url = "https://example.com/mcp"
+`
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+
+	s, err := LoadSettings(path)
+	if err != nil {
+		t.Fatalf("LoadSettings: %v", err)
+	}
+	if len(s.MCP.Servers) != 2 {
+		t.Fatalf("LoadSettings dropped the mcp tables: got %d servers, want 2", len(s.MCP.Servers))
+	}
+
+	byName := map[string]domain.MCPServerConfig{}
+	for _, srv := range s.MCP.Servers {
+		byName[srv.Name] = srv
+	}
+	if got := byName["godoc"]; got.Command != "godevmcp" || string(got.Type) != "stdio" {
+		t.Errorf("godoc: %+v", got)
+	}
+	if got := byName["docs"]; got.URL != "https://example.com/mcp" || string(got.Type) != "sse" {
+		t.Errorf("docs: %+v", got)
 	}
 }

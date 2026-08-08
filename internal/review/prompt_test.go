@@ -12,6 +12,7 @@ const (
 	modeIncremental = "incremental"
 	testPath        = "a.go"
 	testFinding     = "finding"
+	testAuthor      = "youichi"
 )
 
 // A diff carrying Harmony control tokens must reach the model with the pipes
@@ -58,7 +59,7 @@ func TestBuildPromptRendersRepliesUnderTheirComment(t *testing.T) {
 			ID: "T1", Path: "internal/config/settings.go", Line: 252,
 			Body: "**[must]** wrong unmarshaler signature",
 			Replies: []Reply{
-				{Author: "youichi", Body: "decode.go:20 declares UnmarshalTOML(any) error"},
+				{Author: testAuthor, Body: "decode.go:20 declares UnmarshalTOML(any) error"},
 				{Author: "github-actions", Body: "acknowledged"},
 			},
 		}},
@@ -175,5 +176,25 @@ func TestRequestDecodesHarnessPreviousComments(t *testing.T) {
 	}
 	if len(req.PreviousComments[1].Replies) != 0 {
 		t.Errorf("an unanswered thread gained replies: %+v", req.PreviousComments[1])
+	}
+}
+
+// The harness sends only replies newer than the last summary, so an empty
+// Replies means "nothing new was said" rather than "nobody answered". The
+// prompt has to say which, or the model reads silence as agreement.
+func TestBuildPromptExplainsThatRepliesAreNew(t *testing.T) {
+	t.Parallel()
+
+	req := Request{Title: "t", Diff: "d", PreviousComments: []PreviousComment{{
+		ID: "T1", Path: testPath, Line: 1, Body: testFinding,
+		Replies: []Reply{{Author: testAuthor, Body: "see decode.go:20"}},
+	}}}
+	got := BuildPrompt(req, "[  1] + x", "en")
+
+	if !strings.Contains(got, "NEW since your last round") {
+		t.Errorf("the prompt does not say the replies are new:\n%s", got)
+	}
+	if !strings.Contains(got, "nothing new said about it") {
+		t.Errorf("the prompt does not explain an empty reply list:\n%s", got)
 	}
 }

@@ -269,7 +269,7 @@ func runClawREPL(args []string) int {
 	backendOpts := agentserver.RunnerOptions{
 		ApprovalPolicy: agentserver.ApprovalOnRequest,
 		Approver: agentserver.WithAutoApprove(
-			settings.AutoApproveCommands, logger, terminalApprover(settings.LLM.Backend)),
+			settings.AutoApproveCommands, logger, terminalApprover{backend: settings.LLM.Backend}),
 	}
 	a, cleanup, err := app.NewAgentWithOptions(ctx, app.AgentOptions{
 		Settings:          settings,

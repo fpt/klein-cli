@@ -2,6 +2,7 @@ package agentserver
 
 import (
 	"bytes"
+	"context"
 	"slices"
 	"strings"
 	"testing"
@@ -20,9 +21,15 @@ const (
 
 var ghAllowed = []string{ghRunList, "gh run view"}
 
+// recordingApprover adapts a plain decision function to the Approver interface,
+// so these tests can keep stating a verdict inline.
+type recordingApprover func(ApprovalRequest) bool
+
+func (f recordingApprover) Approve(_ context.Context, req ApprovalRequest) bool { return f(req) }
+
 // cmdReq builds a command approval request carrying the given parsed commands.
 func cmdReq(commands ...string) ApprovalRequest {
-	return ApprovalRequest{Kind: "run a command", Summary: "…", Commands: commands}
+	return ApprovalRequest{Kind: ApprovalCommand, Summary: "…", Commands: commands}
 }
 
 // approverFor returns an auto-approving Approver plus a flag reporting whether
@@ -32,10 +39,10 @@ func approverFor(t *testing.T, allowlist []string) (Approver, *bool, *bytes.Buff
 	var buf bytes.Buffer
 	prompted := false
 	logger := pkgLogger.NewLoggerWithConsoleWriter(pkgLogger.LogLevelInfo, &buf)
-	next := func(ApprovalRequest) bool {
+	next := recordingApprover(func(ApprovalRequest) bool {
 		prompted = true
 		return false // a declined prompt, so an auto-approval is unmistakable
-	}
+	})
 	return WithAutoApprove(allowlist, logger, next), &prompted, &buf
 }
 
@@ -43,7 +50,7 @@ func TestAutoApprove_AllowlistedCommandIsApprovedWithoutPrompting(t *testing.T) 
 	t.Parallel()
 	approve, prompted, log := approverFor(t, ghAllowed)
 
-	if !approve(cmdReq("gh run list --repo example-org/example-service --limit 20")) {
+	if !approve.Approve(t.Context(), cmdReq("gh run list --repo example-org/example-service --limit 20")) {
 		t.Error("an allowlisted command should be approved")
 	}
 	if *prompted {
@@ -71,7 +78,7 @@ func TestAutoApprove_UsesTheBackendsUnwrappedCommand(t *testing.T) {
 	}
 
 	approve, prompted, _ := approverFor(t, ghAllowed)
-	if !approve(cmdReq(got...)) || *prompted {
+	if !approve.Approve(t.Context(), cmdReq(got...)) || *prompted {
 		t.Error("the unwrapped command should be matched and approved")
 	}
 }
@@ -99,7 +106,7 @@ func TestAutoApprove_RefusesChainedCommands(t *testing.T) {
 		t.Run(cmd, func(t *testing.T) {
 			t.Parallel()
 			approve, prompted, _ := approverFor(t, []string{"gh", ghRunList})
-			if approve(cmdReq(cmd)) {
+			if approve.Approve(t.Context(), cmdReq(cmd)) {
 				t.Errorf("%q must not be auto-approved", cmd)
 			}
 			if !*prompted {
@@ -115,13 +122,13 @@ func TestAutoApprove_RequiresAWordBoundary(t *testing.T) {
 	t.Parallel()
 	approve, _, _ := approverFor(t, []string{"gh"})
 
-	if approve(cmdReq("ghost --delete-everything")) {
+	if approve.Approve(t.Context(), cmdReq("ghost --delete-everything")) {
 		t.Error("`gh` must not match `ghost`")
 	}
-	if !approve(cmdReq("gh")) {
+	if !approve.Approve(t.Context(), cmdReq("gh")) {
 		t.Error("an exact match should be approved")
 	}
-	if !approve(cmdReq("gh\trun list")) {
+	if !approve.Approve(t.Context(), cmdReq("gh\trun list")) {
 		t.Error("a tab after the entry is still a word boundary")
 	}
 }
@@ -132,7 +139,7 @@ func TestAutoApprove_MultiWordEntryDoesNotAllowTheWholeBinary(t *testing.T) {
 	t.Parallel()
 	approve, prompted, _ := approverFor(t, ghAllowed)
 
-	if approve(cmdReq("gh api --method DELETE /repos/example-org/x")) {
+	if approve.Approve(t.Context(), cmdReq("gh api --method DELETE /repos/example-org/x")) {
 		t.Error("`gh run list` must not allow every gh subcommand")
 	}
 	if !*prompted {
@@ -146,7 +153,7 @@ func TestAutoApprove_AllCommandsMustMatch(t *testing.T) {
 	t.Parallel()
 	approve, prompted, _ := approverFor(t, ghAllowed)
 
-	if approve(cmdReq(ghRunList, "curl https://evil.example")) {
+	if approve.Approve(t.Context(), cmdReq(ghRunList, "curl https://evil.example")) {
 		t.Error("one unallowlisted command must sink the whole request")
 	}
 	if !*prompted {
@@ -160,7 +167,7 @@ func TestAutoApprove_NeverAppliesToFileChanges(t *testing.T) {
 	t.Parallel()
 	approve, prompted, _ := approverFor(t, []string{"gh", "git", "ls"})
 
-	if approve(ApprovalRequest{Kind: "edit files", Summary: "apply proposed file changes"}) {
+	if approve.Approve(t.Context(), ApprovalRequest{Kind: ApprovalFileChange, Summary: "apply proposed file changes"}) {
 		t.Error("a file-change request must not be auto-approved")
 	}
 	if !*prompted {
@@ -172,13 +179,13 @@ func TestAutoApprove_NeverAppliesToFileChanges(t *testing.T) {
 func TestAutoApprove_EmptyAllowlistIsTransparent(t *testing.T) {
 	t.Parallel()
 	var seen []ApprovalRequest
-	next := func(req ApprovalRequest) bool {
+	next := recordingApprover(func(req ApprovalRequest) bool {
 		seen = append(seen, req)
 		return true
-	}
+	})
 	for _, allowlist := range [][]string{nil, {}, {"", "  "}} {
 		approve := WithAutoApprove(allowlist, nil, next)
-		if !approve(cmdReq(ghRunList)) {
+		if !approve.Approve(t.Context(), cmdReq(ghRunList)) {
 			t.Errorf("allowlist %q: the next approver's answer should stand", allowlist)
 		}
 	}
@@ -193,7 +200,7 @@ func TestAutoApprove_NilNextStillAccepts(t *testing.T) {
 	t.Parallel()
 	approve := WithAutoApprove([]string{"gh"}, nil, nil)
 
-	if !approve(cmdReq("curl https://example.com")) {
+	if !approve.Approve(t.Context(), cmdReq("curl https://example.com")) {
 		t.Error("a nil next approver means accept, matched or not")
 	}
 }
@@ -222,7 +229,7 @@ func TestAutoApprove_UnreadableActionsAreNotApproved(t *testing.T) {
 			}
 			// ...and the request goes to the prompt rather than through.
 			approve, prompted, _ := approverFor(t, ghAllowed)
-			if approve(cmdReq(commandActionCommands(actions)...)) {
+			if approve.Approve(t.Context(), cmdReq(commandActionCommands(actions)...)) {
 				t.Error("must not be auto-approved")
 			}
 			if !*prompted {

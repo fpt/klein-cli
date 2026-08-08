@@ -27,8 +27,6 @@ import (
 	"strings"
 	"testing"
 	"time"
-
-	pkgLogger "github.com/fpt/klein-cli/pkg/logger"
 )
 
 // galliumBin returns the gallium to test against, or skips.
@@ -57,9 +55,9 @@ func galliumBin(t *testing.T) string {
 // did not think of. assertNoDrift then fails the test on one, so a future
 // gallium that adds an item type or a method says so here rather than in a
 // user's log.
-func driftLog() (*pkgLogger.Logger, *bytes.Buffer) {
+func driftLog() (Logger, *bytes.Buffer) {
 	var buf bytes.Buffer
-	return pkgLogger.NewLoggerWithConsoleWriter(pkgLogger.LogLevelWarn, &buf), &buf
+	return bufLogger{buf: &buf}, &buf
 }
 
 // assertNoDrift fails if the turn produced an unrendered-item or unhandled-method

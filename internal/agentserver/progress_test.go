@@ -10,8 +10,6 @@ import (
 
 	"github.com/pmenglund/codex-sdk-go/protocol"
 	"github.com/pmenglund/codex-sdk-go/rpc"
-
-	pkgLogger "github.com/fpt/klein-cli/pkg/logger"
 )
 
 const (
@@ -344,6 +342,19 @@ func TestProgress_OtherThreadIgnored(t *testing.T) {
 	}
 }
 
+// bufLogger is a Logger that writes each report into a buffer. A stub, not
+// klein's logger: what these tests assert is that a report happened and what it
+// named, and the client's own tests should need nothing of klein's to say so.
+type bufLogger struct{ buf *bytes.Buffer }
+
+func (l bufLogger) Warn(msg string, keysAndValues ...any) {
+	fmt.Fprint(l.buf, msg)
+	for _, kv := range keysAndValues {
+		fmt.Fprintf(l.buf, " %v", kv)
+	}
+	fmt.Fprintln(l.buf)
+}
+
 // newProgressWithLogger returns a turnProgress that reports unrendered item
 // types into the returned buffer, so the reports can be asserted on.
 func newProgressWithLogger() (*turnProgress, *bytes.Buffer) {
@@ -351,7 +362,7 @@ func newProgressWithLogger() (*turnProgress, *bytes.Buffer) {
 	tp := &turnProgress{
 		announced: map[string]bool{},
 		reported:  map[string]bool{},
-		logger:    pkgLogger.NewLoggerWithConsoleWriter(pkgLogger.LogLevelWarn, &buf),
+		logger:    bufLogger{buf: &buf},
 		obs:       discardObserver{},
 	}
 	return tp, &buf

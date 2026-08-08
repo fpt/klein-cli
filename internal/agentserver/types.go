@@ -67,6 +67,46 @@ type DynamicTools interface {
 	Call(ctx context.Context, name string, args map[string]any) (string, error)
 }
 
+// ApprovalKind says what a backend is asking permission to do. It is a kind, not
+// a phrase: how the question is put to whoever answers it is the caller's, and
+// only the caller knows whether that is a terminal, a chat message, or a policy
+// with nobody watching.
+type ApprovalKind int
+
+const (
+	// ApprovalCommand — the backend wants to run a shell command.
+	ApprovalCommand ApprovalKind = iota
+	// ApprovalFileChange — the backend wants to write to files.
+	ApprovalFileChange
+)
+
+// ApprovalRequest is one such question.
+//
+// Commands carries the shell commands the request would run, with the backend's
+// shell wrapper already stripped — the app-server parses `/bin/zsh -lc 'gh
+// --version'` down to `gh --version`, so nothing downstream has to. It is empty
+// for a file change, and empty for a command request the backend did not parse.
+// An approver that matches on command text must treat that emptiness as "unknown",
+// never as "nothing to check": the two look identical and mean opposite things.
+type ApprovalRequest struct {
+	Summary  string
+	Commands []string
+	Kind     ApprovalKind
+}
+
+// Approver decides an approval request, returning true to let it proceed. It is
+// consulted only when the thread runs under an approval policy that asks —
+// otherwise the backend is left to its own devices.
+//
+// ctx is the turn's, so an approver that waits on a human can stop waiting when
+// the turn is abandoned rather than holding it open.
+//
+// A nil Approver accepts everything, which is what a headless caller wants: there
+// is nobody to ask, and the alternative is a turn that blocks forever.
+type Approver interface {
+	Approve(ctx context.Context, req ApprovalRequest) bool
+}
+
 // ToolCall is an action the backend has begun — a command it is running, a patch
 // it is applying, an MCP or dynamic tool it has called.
 //

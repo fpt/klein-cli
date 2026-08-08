@@ -42,6 +42,20 @@ func backendLogger(l *pkgLogger.Logger) Logger {
 	return l
 }
 
+// backendApprover passes an approver through to the client, or nothing when
+// there is nobody to ask.
+//
+// isNil rather than `== nil` for the reason #101 turned up: an approver arriving
+// as a typed-nil pointer is a non-nil interface, so the client's "nil accepts
+// everything" guard would miss it and panic on the first approval — mid-turn,
+// with a backend waiting on the answer.
+func backendApprover(a Approver) Approver {
+	if isNil(a) {
+		return nil
+	}
+	return a
+}
+
 // defaultAppServerArgs is the conventional subcommand that puts an agent into
 // app-server mode. appserver.args overrides it for a server that spells it
 // differently.
@@ -150,7 +164,7 @@ func NewRunnerFromSettings(
 		Cwd:            workingDir,
 		MCPServers:     MCPServersConfig(settings.MCP.Servers),
 		Tools:          newToolHost(nativeTools),
-		Approver:       opts.Approver,
+		Approver:       backendApprover(opts.Approver),
 		Logger:         backendLogger(opts.Logger),
 	})
 }

@@ -20,7 +20,7 @@ The name KLEIN is inspired by the Klein bottle, a topological surface with no di
 - **Secure File Access**: Files are accessible only in working directory. Also, applies Read-before-Write semantics for content updates.
 - **Smart Tool Approval**: Interactive approval system for potentially destructive operations (Write, Edit, MultiEdit)
 - **Persistent Permission Rules**: Allow/deny rules in JSON files at user (`~/.klein/permissions.json`) and project (`.klein/permissions.json`) level; survive restarts and support glob patterns
-- **MCP Server Support**: MCP Servers can be configured in settings.json
+- **MCP Server Support**: MCP Servers can be configured in settings.toml
 - **Conversation State Management**: Automatic handling of conversation history and context
 - **AGENTS.md support**: Includes content of AGENTS.md to system prompt automatically
 - **Messaging Gateway (`klein claw`)**: Discord integration for using the agent as a personal AI assistant via messaging
@@ -69,9 +69,13 @@ go install github.com/fpt/klein-cli/klein@latest
 >    ```
 >    Verify: `bwrap --ro-bind / / --unshare-user echo ok` prints `ok`.
 >
-> 2. **Skip codex's OS sandbox** (quick unblock — no isolation) via settings.json:
->    ```json
->    { "llm": { "backend": "codex" }, "codex": { "sandbox_mode": "danger-full-access" } }
+> 2. **Skip codex's OS sandbox** (quick unblock — no isolation) via settings.toml:
+>    ```toml
+>    [llm]
+>    backend = "codex"
+>
+>    [codex]
+>    sandbox_mode = "danger-full-access"
 >    ```
 >    Codex then runs commands with no process isolation, so prefer the interactive `klein claw repl` (which prompts for approval before each command/file edit) over the headless gateway when using this.
 
@@ -274,19 +278,19 @@ Rules are evaluated first-match-wins. A local rule overrides a project rule; a p
 
 ## Configuration
 
-### Unified Settings (settings.json)
+### Unified Settings (settings.toml)
 
-KLEIN CLI uses a unified configuration system with settings stored in `~/.klein/settings.json`.
+KLEIN CLI uses a unified configuration system with settings stored in `~/.klein/settings.toml`.
 
-**Automatic Setup**: When you first run KLEIN, it automatically creates a default `~/.klein/settings.json` file with example configurations that you can modify.
+**Automatic Setup**: On first run KLEIN writes a commented `~/.klein/settings.toml` you can edit. A `settings.json` from an older KLEIN is **not** read — KLEIN warns when it finds one, but porting it is manual.
 
-**💡 To enable MCP servers**: Change `"enabled": false` to `"enabled": true` and update the server configuration with your actual MCP server details.
+**💡 To add MCP servers**: add a `[mcp.<name>]` table by hand, or run `klein mcp add`. That command splices the file in place, so comments and formatting elsewhere survive it.
 
 ### Configuration Management
 
 **Automatic Configuration Search:**
-1. `.agents/settings.json` in current directory
-2. `$HOME/.klein/settings.json` in home directory  
+1. `.agents/settings.toml` in current directory
+2. `$HOME/.klein/settings.toml` in home directory
 3. Defaults if no configuration found
 
 **Override with Command Line:**
@@ -295,7 +299,7 @@ KLEIN CLI uses a unified configuration system with settings stored in `~/.klein/
 klein -b anthropic -m claude-sonnet-4-6 "Analyze this code"
 
 # Use custom settings file
-klein --settings ./my-settings.json "Create a simple web server in Golang."
+klein --settings ./my-settings.toml "Create a simple web server in Golang."
 ```
 
 ### MCP (Model Context Protocol) Integration
@@ -308,21 +312,18 @@ klein --settings ./my-settings.json "Create a simple web server in Golang."
 
 **Example MCP Server (godevmcp):**
 
-```json
-{
-  "mcp": {
-    "servers": [
-      {
-        "name": "godevmcp",
-        "enabled": true,
-        "type": "stdio",
-        "command": "godevmcp",
-        "args": ["serve"]
-      }
-    ]
-  }
-}
+```toml
+[mcp.godevmcp]
+command = "godevmcp"
+args    = ["serve"]
+
+# optional: limit the tools pulled into context
+allowed_tools = ["outline_go_package", "read_godoc"]
 ```
+
+One table per server, keyed by its name — the same shape Claude Code and Cursor
+use, so a server definition carries over. `enabled` defaults to true and `type`
+is inferred (`command` → stdio, `url` → sse), so neither is usually written.
 
 ## Gateway (`klein claw`)
 
@@ -337,20 +338,19 @@ Set `agent_addr` in the `claw` config (or pass `--agent-addr`) to dial a separat
 
 ### Quick Start
 
-**1. Add a `claw` section to `settings.json`:**
+**1. Add a `[claw]` section to `settings.toml`:**
 
-```json
-{
-  "llm": { "backend": "anthropic", "model": "claude-sonnet-4-6" },
-  "base_dir": "~/.klein",
-  "claw": {
-    "discord": {
-      "token": "YOUR_DISCORD_BOT_TOKEN",
-      "allowed_user_ids": ["YOUR_DISCORD_USER_ID"],
-      "mention_only": true
-    }
-  }
-}
+```toml
+base_dir = "~/.klein"
+
+[llm]
+backend = "anthropic"
+model   = "claude-sonnet-4-6"
+
+[claw.discord]
+token            = "YOUR_DISCORD_BOT_TOKEN"
+allowed_user_ids = ["YOUR_DISCORD_USER_ID"]
+mention_only     = true
 ```
 
 **2. Start the gateway:**
@@ -364,7 +364,7 @@ make build
 ./output/klein claw
 
 # A fully isolated second instance (its own base_dir + Discord token)
-./output/klein claw --settings ~/work/settings.json
+./output/klein claw --settings ~/work/settings.toml
 ```
 
 Sessions, memory, and the schedule store are **not** configured in the `claw` block — they derive from the top-level `base_dir` (default `~/.klein`), shared with the CLI.
@@ -384,7 +384,7 @@ Sessions, memory, and the schedule store are **not** configured in the `claw` bl
 3. Enable the **MESSAGE CONTENT** privileged intent under Bot settings
 4. Generate an invite URL with `bot` scope and `Send Messages` + `Read Message History` permissions
 5. Invite the bot to your server
-6. Copy the bot token into the `claw.discord.token` field of your `settings.json`
+6. Copy the bot token into the `claw.discord.token` field of your `settings.toml`
 
 ### Gateway Commands
 
@@ -410,20 +410,17 @@ Memory context is automatically injected into each conversation. The agent can r
 
 ### Schedules
 
-Recurring jobs are configured in the `claw.schedules` array. Each job fires on a standard 5-field **cron expression** in a required **timezone**, and `"silent": true` runs the prompt without posting the result back to a channel.
+Recurring jobs are configured as `[[claw.schedules]]` blocks — the double brackets make it an array, so repeat the block to add a job. Each fires on a standard 5-field **cron expression** in a required **timezone**, and `silent = true` runs the prompt without posting the result back to a channel.
 
-```json
-"schedules": [
-  {
-    "name": "nightly-memory",
-    "enabled": true,
-    "cron": "45 23 * * *",
-    "timezone": "Asia/Tokyo",
-    "skill": "claw",
-    "silent": true,
-    "prompt": "Review today's runs/ log and daily note, and summarise what's worth keeping into today's daily note."
-  }
-]
+```toml
+[[claw.schedules]]
+name     = "nightly-memory"
+enabled  = true
+cron     = "45 23 * * *"
+timezone = "Asia/Tokyo"
+skill    = "claw"
+silent   = true
+prompt   = "Review today's runs/ log and daily note, and summarise what's worth keeping into today's daily note."
 ```
 
 Schedules the agent creates itself (via the `Schedule*` tools) are stored in `<base_dir>/schedules.json` and live-reloaded, so no restart is needed.

@@ -7,7 +7,7 @@ All configuration mechanisms in one place — CLI flags, settings files, permiss
 ## Table of Contents
 
 1. [CLI Flags](#1-cli-flags)
-2. [Settings JSON](#2-settings-json)
+2. [Settings TOML](#2-settings-toml)
 3. [Permission Rules](#3-permission-rules)
 4. [Roles and Skills](#4-roles-and-skills)
 5. [Gateway Configuration](#5-gateway-configuration)
@@ -28,7 +28,7 @@ go run klein/main.go [flags] [prompt]
 | `-m`, `--model` | string | `""` | Model name (overrides settings file) |
 | `-r`, `--role` | string | `"code"` | Role (startup prompt) to open the session with: `code`, `cad`, `claw`, `review`. Naming a *skill* is rejected — see [§4](#4-roles-and-skills) |
 | `--workdir` | string | `"."` | Working directory for all file operations |
-| `--settings` | string | `""` | Path to settings JSON file (see [§2](#2-settings-json)) |
+| `--settings` | string | `""` | Path to settings TOML file (see [§2](#2-settings-toml)) |
 | `--allowed-tools` | string | `""` | Comma-separated tool names, overrides skill's `allowed-tools` |
 | `-f` | string | `""` | File of multi-turn prompts separated by `---` |
 | `-v`, `--verbose` | bool | `false` | Enable debug-level logging |
@@ -42,26 +42,39 @@ go run klein/main.go [flags] [prompt]
 
 ---
 
-## 2. Settings JSON
+## 2. Settings TOML
 
 Settings are loaded from the first file found in order:
 
 1. Path given by `--settings` flag
-2. `{workingDir}/.agents/settings.json`
-3. `$HOME/.klein/settings.json`
+2. `{workingDir}/.agents/settings.toml`
+3. `$HOME/.klein/settings.toml`
+
+A `settings.json` from an older klein is **not** read. klein warns once when it
+finds one instead of silently scaffolding a default over your configuration, but
+porting it is manual — the shapes below are what it should become.
+
+Only the `[mcp.*]` tables are ever written by klein (`klein mcp add/remove`), and
+that edit splices the file in place: comments, ordering and spacing everywhere
+else survive it.
 
 ### Full structure
 
-```json
-{
-  "llm": { ... },
-  "mcp": { ... },
-  "agent": { ... },
-  "bash": { ... },
-  "base_dir": "~/.klein",
-  "claw": { ... }
-}
+```toml
+base_dir = "~/.klein"        # top-level keys first — anything after a
+                             # [table] header belongs to that table
+
+[llm]      # …
+[mcp.NAME] # one table per MCP server
+[agent]    # …
+[bash]     # …
+[claw]     # gateway; see §5
 ```
+
+> **TOML ordering gotcha.** Bare keys like `base_dir` must appear *before* the
+> first `[table]` header. After `[llm]`, every key belongs to `llm` until the
+> next header — so a `base_dir` written at the bottom of the file silently
+> becomes `llm.base_dir` and is ignored.
 
 ### `base_dir` — shared state root
 
@@ -115,11 +128,14 @@ needs a codex build with `dynamicTools`/`experimentalApi` support.
 | `approval_policy` | string | *(mode-dependent)* | `never` / `on-request` / `untrusted` / `granular`. **Default depends on the surface**: the interactive repl (`klein claw repl`, `klein -b codex`) uses `on-request` and prompts you (y/N) before codex runs a command or edits files; headless surfaces (the `klein claw` gateway, `--serve`, one-shot) use `never` and auto-approve since no one is present. Set this explicitly to override the mode default. |
 | `sandbox_mode` | string | `workspace-write` | `read-only` / `workspace-write` / `danger-full-access` |
 
-```json
-{
-  "llm": { "backend": "codex", "model": "gpt-5.6-luna", "effort": "medium" },
-  "codex": { "sandbox_mode": "workspace-write" }
-}
+```toml
+[llm]
+backend = "codex"
+model   = "gpt-5.6-luna"
+effort  = "medium"
+
+[codex]
+sandbox_mode = "workspace-write"
 ```
 
 ### `appserver` — generic app-server backend
@@ -195,24 +211,25 @@ is ignored):
 Values from the config **override** the ambient shell; anything the file does not
 set (notably `OPENAI_API_KEY`) is inherited.
 
-```json
-{
-  "llm": { "backend": "appserver" },
-  "appserver": {
-    "command": "../rs-gallium/target/release/gallium",
-    "config": "../rs-gallium/configs/gemma4.toml",
-    "approval_policy": "on-request"
-  }
-}
+```toml
+[llm]
+backend = "appserver"
+
+[appserver]
+command         = "../rs-gallium/target/release/gallium"
+config          = "../rs-gallium/configs/gemma4.toml"
+approval_policy = "on-request"
 ```
 
 Without `config`, the server simply inherits klein's environment:
 
-```json
-{
-  "llm": { "backend": "appserver" },
-  "appserver": { "command": "gallium", "approval_policy": "on-request" }
-}
+```toml
+[llm]
+backend = "appserver"
+
+[appserver]
+command         = "gallium"
+approval_policy = "on-request"
 ```
 
 ### `agent` — Agent behaviour
@@ -250,14 +267,23 @@ npm install, npm run, npm test
 ### `mcp` — MCP server integration
 
 `mcp` is a **map of server name → config**, matching the Claude Code / Cursor
-format (paste a `mcpServers` block's contents under `mcp`):
+shape — one table per server, keyed by name:
 
-```json
-"mcp": {
-  "browser-sandbox": { "command": "docker", "args": ["run", "-i", "--rm", "chromedp-container-mcp:latest"] },
-  "docs":            { "url": "https://example.com/mcp" }
-}
+```toml
+[mcp.browser-sandbox]
+command = "docker"
+args    = ["run", "-i", "--rm", "chromedp-container-mcp:latest"]
+
+[mcp.docs]
+url = "https://example.com/mcp"
+
+# env is a sub-table of the server it belongs to
+[mcp.browser-sandbox.env]
+API_KEY = "…"
 ```
+
+A Claude Code `mcpServers` entry translates key-for-key: the JSON object
+`"docs": { "url": … }` becomes the table `[mcp.docs]`.
 
 **Per-server fields:**
 
@@ -280,10 +306,13 @@ klein mcp add docs --url https://example.com/mcp
 klein mcp add x -e API_KEY=secret -- my-mcp-server
 klein mcp list
 klein mcp remove browser-sandbox
+klein mcp --settings ./team-settings.toml add docs --url https://example.com/mcp
 ```
 
-`add` edits `~/.klein/settings.json`; everything after `--` is the stdio command
-and its args; `--url` makes an sse server; `-e KEY=VAL` adds env vars.
+`add` edits `~/.klein/settings.toml` — or the file named by `--settings` — by
+splicing just that server's table, so comments, key order and spacing everywhere
+else in the file survive it. Everything after `--` is the stdio command and its
+args; `--url` makes an sse server; `-e KEY=VAL` adds env vars.
 
 **CAD servers for the `cad` role.** The `cad` role does not hard-code any MCP
 tool names — it discovers whatever is connected via `ToolSearch`, so it works
@@ -291,10 +320,10 @@ before you configure anything and picks servers up once you do. Autodesk's
 [Fusion MCP server](https://blog.autodesk.io/fusion-mcp-server/) is streamable
 HTTP on port 27182:
 
-```json
-"mcp": {
-  "fusion": { "type": "http", "url": "http://127.0.0.1:27182/mcp" }
-}
+```toml
+[mcp.fusion]
+type = "http"
+url  = "http://127.0.0.1:27182/mcp"
 ```
 
 Two things to know about it: `"type": "http"` must be explicit (a bare `url`
@@ -304,27 +333,22 @@ or port-forward to that host.
 
 ### Example settings file
 
-```json
-{
-  "llm": {
-    "backend": "anthropic",
-    "model": "claude-sonnet-4-6",
-    "thinking": true,
-    "max_tokens": 4096
-  },
-  "agent": {
-    "max_iterations": 20
-  },
-  "bash": {
-    "whitelisted_commands": ["go build", "go test", "git status", "make"]
-  },
-  "mcp": {
-    "godevmcp": {
-      "command": "godevmcp",
-      "allowed_tools": ["outline_go_package", "read_godoc"]
-    }
-  }
-}
+```toml
+[llm]
+backend    = "anthropic"
+model      = "claude-sonnet-4-6"
+thinking   = true
+max_tokens = 4096
+
+[agent]
+max_iterations = 20
+
+[bash]
+whitelisted_commands = ["go build", "go test", "git status", "make"]
+
+[mcp.godevmcp]
+command       = "godevmcp"
+allowed_tools = ["outline_go_package", "read_godoc"]
 ```
 
 ---
@@ -503,7 +527,7 @@ disable-model-invocation: false
 ## 5. Gateway Configuration (`klein claw`)
 
 The gateway is the `klein claw` subcommand, not a binary of its own. Its
-configuration is the **`claw` section of `settings.json`**;
+configuration is the **`[claw]` section of `settings.toml`**;
 run it with `klein claw` (add `--settings <path>` to select a different file).
 
 By default `klein claw` starts an **embedded, in-process agent server** on an
@@ -530,7 +554,7 @@ ephemeral port avoids collisions):
 
 ```bash
 klein claw                                    # default instance (~/.klein)
-klein claw --settings ~/work/settings.json    # isolated instance (its own base_dir)
+klein claw --settings ~/work/settings.toml    # isolated instance (its own base_dir)
 ```
 
 ### Interactive CLI — `klein claw repl`
@@ -546,7 +570,7 @@ which a running `klein claw` gateway live-reloads.
 
 ```bash
 klein claw repl                                  # default instance
-klein claw repl --settings ~/work/settings.json  # a specific instance's tools/data
+klein claw repl --settings ~/work/settings.toml  # a specific instance's tools/data
 klein claw repl --role code                       # override the session role (default: claw)
 ```
 
@@ -559,7 +583,7 @@ klein claw repl --role code                       # override the session role (d
 | `session_timeout` | string | `"30m"` | Inactivity timeout (Go duration, e.g. `"1h"`) |
 
 > The LLM **model** and **max_iterations** are owned by the agent via the same
-> `settings.json` (`llm.model`, `agent.max_iterations`) — the `claw` block does
+> `settings.toml` (`llm.model`, `agent.max_iterations`) — the `claw` block does
 > not set them.
 
 ### `discord` block
@@ -612,55 +636,63 @@ the schedule name. Later jobs can read it via `MemoryGet path=runs/<date>.md`
 or `MemorySearch` — e.g. a nightly memory job that distills the day's cron
 outputs (market reports, etc.) into daily notes and MEMORY.md:
 
-```json
-{
-  "name": "nightly-memory",
-  "enabled": true,
-  "cron": "0 22 * * *",
-  "timezone": "Asia/Tokyo",
-  "skill": "claw",
-  "prompt": "今日の runs/ ログ（MemoryGet path=runs/今日の日付.md）とMEMORY.md・daily ノートをレビューし、残す価値のある発見（ウォッチ銘柄に関わる市場の動きなど）を今日の daily ノートに要約して保存して。レポートの丸写しはしないこと。",
-  "silent": true
-}
+```toml
+[[claw.schedules]]
+name     = "nightly-memory"
+enabled  = true
+cron     = "0 22 * * *"
+timezone = "Asia/Tokyo"
+skill    = "claw"
+silent   = true
+prompt   = "今日の runs/ ログ（MemoryGet path=runs/今日の日付.md）とMEMORY.md・daily ノートをレビューし、残す価値のある発見（ウォッチ銘柄に関わる市場の動きなど）を今日の daily ノートに要約して保存して。レポートの丸写しはしないこと。"
 ```
 
+> **The dynamic store is still JSON.** `<base_dir>/schedules.json` — what
+> `ScheduleCreate` writes and the scheduler live-reloads — keeps the same field
+> names in JSON. It is a queue the agent maintains, not a file anyone hand-edits,
+> so it gained nothing from the move to TOML.
+
 > The legacy single-job `heartbeat` block is **retired**. A leftover
-> `heartbeat` key in an old config.json is ignored (unknown JSON fields don't
-> error) — move the job into `schedules` with a cron expression instead
-> (`"interval": "24h"` anchored to gateway start becomes e.g.
-> `"cron": "45 23 * * *"` at a real wall-clock time).
+> `[claw.heartbeat]` table is ignored (unknown keys don't error) — move the job
+> into `schedules` with a cron expression instead (`interval = "24h"` anchored to
+> gateway start becomes e.g. `cron = "45 23 * * *"` at a real wall-clock time).
 
-### Example `settings.json` with a `claw` section
+### Example `settings.toml` with a `claw` section
 
-```json
-{
-  "llm": { "backend": "anthropic", "model": "claude-sonnet-4-6" },
-  "agent": { "max_iterations": 30 },
-  "base_dir": "~/.klein",
-  "claw": {
-    "session_timeout": "30m",
-    "discord": {
-      "token": "BOT_TOKEN_HERE",
-      "allowed_guild_ids": ["123456789"],
-      "allowed_channel_ids": ["987654321"],
-      "mention_only": true
-    },
-    "memory": { "max_notes": 30 },
-    "schedules": [
-      {
-        "name": "nightly-memory",
-        "enabled": true,
-        "cron": "45 23 * * *",
-        "timezone": "Asia/Tokyo",
-        "skill": "claw",
-        "silent": true,
-        "channel_type": "discord",
-        "channel_id": "987654321",
-        "prompt": "今日の runs/ ログと MEMORY.md・daily ノートをレビューし、残す価値のある発見を今日の daily ノートに要約して保存して。"
-      }
-    ]
-  }
-}
+```toml
+base_dir = "~/.klein"
+
+[llm]
+backend = "anthropic"
+model   = "claude-sonnet-4-6"
+
+[agent]
+max_iterations = 30
+
+[claw]
+session_timeout = "30m"
+
+[claw.discord]
+token               = "BOT_TOKEN_HERE"
+allowed_guild_ids   = ["123456789"]
+allowed_channel_ids = ["987654321"]
+mention_only        = true
+
+[claw.memory]
+max_notes = 30
+
+# One [[claw.schedules]] block per job — the double brackets make it an array,
+# so repeat the whole block to add a second schedule.
+[[claw.schedules]]
+name         = "nightly-memory"
+enabled      = true
+cron         = "45 23 * * *"
+timezone     = "Asia/Tokyo"
+skill        = "claw"
+silent       = true
+channel_type = "discord"
+channel_id   = "987654321"
+prompt       = "今日の runs/ ログと MEMORY.md・daily ノートをレビューし、残す価値のある発見を今日の daily ノートに要約して保存して。"
 ```
 
 Run it with `klein claw` (embedded agent) — no separate server process needed.
@@ -676,7 +708,7 @@ Run it with `klein claw` (embedded agent) — no separate server process needed.
 | `GEMINI_API_KEY` | If `backend=gemini` | Google Gemini API key |
 
 > The Discord bot token is **not** read from the environment — set
-> `claw.discord.token` in `settings.json` (see [§5](#5-gateway-configuration-klein-claw)).
+> `claw.discord.token` in `settings.toml` (see [§5](#5-gateway-configuration-klein-claw)).
 
 ---
 
@@ -686,7 +718,7 @@ All persistent data lives under `$HOME/.klein/` (interactive mode only; one-shot
 
 ```
 $HOME/.klein/
-├── settings.json                        # Default settings (see §2)
+├── settings.toml                        # Default settings (see §2)
 ├── permissions.json                     # User-wide permission rules (see §3)
 ├── projects/
 │   └── {project-basename}-{hash}/      # One directory per project
@@ -739,10 +771,10 @@ sessions is migrated into `sessions/` on first use, keeping it resumable.
 
 | Need | Where |
 |------|-------|
-| Change LLM model | `--model` flag or `llm.model` in settings JSON |
+| Change LLM model | `--model` flag or `llm.model` in settings TOML |
 | Pre-approve a file path | `.klein/permissions.json` → `allow` rule for `Write`/`Edit` |
 | Block a command | `.klein/permissions.json` → `deny` rule for `Bash` |
 | Limit tools for a skill | `allowed-tools` in `SKILL.md` frontmatter |
-| Add a safe bash command | `bash.whitelisted_commands` in settings JSON |
-| Increase iteration limit | `agent.max_iterations` in settings JSON |
-| Use an OpenAI-compatible endpoint | `llm.base_url` in settings JSON |
+| Add a safe bash command | `bash.whitelisted_commands` in settings TOML |
+| Increase iteration limit | `agent.max_iterations` in settings TOML |
+| Use an OpenAI-compatible endpoint | `llm.base_url` in settings TOML |

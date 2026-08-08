@@ -101,7 +101,7 @@ worth its cost where someone actually wants the package on its own.
 | `klein --serve` | `connectrpc.AgentServer` | in-process, **one agent per RPC session** | file per persistence key |
 | `klein claw` | **gateway** + embedded (or remote) `AgentServer` | agent(s) behind Connect RPC | file per Discord/schedule peer |
 | `klein claw repl` | one `app.Agent`, interactive REPL | in-process | project session |
-| `klein mcp …` | none (edits `settings.json`) | — | — |
+| `klein mcp …` | none (splices `settings.toml`) | — | — |
 
 Two shapes matter for this doc: the **gateway** (`klein claw`) routes many peers
 through a Connect server to per-peer agents, while the **REPL** (`klein claw
@@ -332,7 +332,7 @@ append is the dominant memory op.
   native tool calling when the model is tool-capable (`IsToolCapable()`), else to
   a text-based tool protocol. This is transparent to the agent.
 - **Model/effort ownership.** The model, `max_iterations`, and reasoning
-  `effort` come from the agent's `settings.json` — the gateway does **not** set
+  `effort` come from the agent's `settings.toml` — the gateway does **not** set
   them (it only passes a working directory when starting a session).
 
 ### Whole-agent backends: codex and appserver (not `domain.LLM`s)
@@ -435,8 +435,8 @@ command prefixes an app-server backend may run without asking. It is deliberatel
 or gallium does not change which commands you trust it to run unattended, so both
 read the same list.
 
-```json
-"auto_approve_commands": ["gh run list", "gh run view"]
+```toml
+auto_approve_commands = ["gh run list", "gh run view"]
 ```
 
 `WithAutoApprove` decorates the `Approver`, so the terminal prompt is untouched
@@ -493,12 +493,15 @@ disables network access, which is what stops a tool like `gh` from working, whil
 codex separately filters the environment it hands to commands — so the token the
 shell exported may not arrive either.
 
-```json
-"codex": {
-  "sandbox_mode": "workspace-write",
-  "sandbox_workspace_write": { "network_access": true },
-  "shell_environment_policy": { "inherit": "all" }
-}
+```toml
+[codex]
+sandbox_mode = "workspace-write"
+
+[codex.sandbox_workspace_write]
+network_access = true
+
+[codex.shell_environment_policy]
+inherit = "all"
 ```
 
 Two properties matter more than the field list:

@@ -7,15 +7,29 @@ import (
 	"github.com/fpt/klein-cli/internal/sanitize"
 )
 
+// Reply is a response someone posted on a review thread after the bot opened
+// it. Author is the GitHub login, so the model can tell the PR author from a
+// maintainer from the bot itself.
+type Reply struct {
+	Author string `json:"author"`
+	Body   string `json:"body"`
+}
+
 // PreviousComment is one unresolved inline comment from an earlier review
 // round, supplied by the harness. ID is opaque to klein (the harness uses
 // GraphQL review-thread node ids) — it only round-trips through
 // ResolveReviewComment into the result.
+//
+// Replies carry the rest of the thread. Without them a finding the reviewer got
+// wrong could not be contested: the author's side of the conversation never
+// reached the model, so each round re-derived the same conclusion from the same
+// diff and the thread stayed open forever. See fpt/klein-cli#108.
 type PreviousComment struct {
-	ID   string `json:"id"`
-	Path string `json:"path"`
-	Body string `json:"body"`
-	Line int    `json:"line"`
+	ID      string  `json:"id"`
+	Path    string  `json:"path"`
+	Body    string  `json:"body"`
+	Replies []Reply `json:"replies,omitempty"`
+	Line    int     `json:"line"`
 }
 
 // Request is the JSON contract between the harness (GHA) and `klein review`.
@@ -101,16 +115,32 @@ const controlTokenNote = "\nNote on notation: chat-template control tokens in th
 	"rejecting the request. Do NOT report it as a defect, and do not quote it as evidence " +
 	"of one — treat `<｜…｜>` as if it read `<|…|>`.\n"
 
-// writePreviousComments renders the unresolved comments from earlier rounds.
+// writePreviousComments renders the unresolved comments from earlier rounds,
+// each followed by whatever was said back on its thread.
+//
+// The replies are shown as what they are — who wrote them and what they said —
+// and the standing instruction above them is unchanged: verify against the
+// current code. A reply is a pointer to look somewhere, not a verdict.
 func writePreviousComments(b *strings.Builder, comments []PreviousComment) {
 	if len(comments) == 0 {
 		return
 	}
 	b.WriteString("\n# Previous Review Comments (unresolved, from earlier rounds)\n")
-	b.WriteString("Verify each against the CURRENT code. Resolve fixed ones with ResolveReviewComment(id).\n\n")
+	b.WriteString("Verify each against the CURRENT code. Resolve fixed ones with ResolveReviewComment(id).\n")
+	b.WriteString("A comment may have replies from the PR author or a maintainer. They often point at ")
+	b.WriteString("specific evidence — a file and line, a dependency's source, command output. Check what ")
+	b.WriteString("they point at.\n\n")
 	for _, c := range comments {
 		fmt.Fprintf(b, "- id=%s %s:%d\n  %s\n", c.ID, c.Path, c.Line, indentBody(c.Body))
+		for _, r := range c.Replies {
+			fmt.Fprintf(b, "  ↳ reply from @%s:\n    %s\n", r.Author, indentReply(r.Body))
+		}
 	}
+}
+
+// indentReply keeps a multi-line reply aligned under its arrow.
+func indentReply(body string) string {
+	return strings.ReplaceAll(strings.TrimSpace(body), "\n", "\n    ")
 }
 
 // indentBody keeps multi-line comment bodies aligned under their list item.

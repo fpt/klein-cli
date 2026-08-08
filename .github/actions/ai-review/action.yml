@@ -6,8 +6,9 @@ description: >
   reviewed commit and a hash of the full PR diff; later runs review only the
   changes since then, an unchanged diff hash (e.g. a web-UI "Rebase branch" /
   "Update branch" push) skips the run entirely, a real force-push falls back
-  to a full review, previous unresolved comments are fed back to the model,
-  and threads it verifies as fixed are resolved. All GitHub interaction
+  to a full review, previous unresolved comments are fed back to the model with
+  whatever was said back on their threads, and threads it verifies as fixed are
+  resolved. All GitHub interaction
   (gh/jq) happens here in the harness — klein itself never runs git or gh.
   The caller must check out the PR head with fetch-depth: 0; incremental
   reviews need full history, and a shallow checkout silently degrades every
@@ -214,7 +215,10 @@ runs:
         } >> "$GITHUB_OUTPUT"
 
     # Unresolved inline threads from earlier bot reviews, as
-    # [{id, path, line, body}] — id is the GraphQL thread id used to resolve.
+    # [{id, path, line, body, replies}] — id is the GraphQL thread id used to
+    # resolve. `replies` is everything said back on the thread after the bot
+    # opened it; without it an author cannot contest a finding the reviewer got
+    # wrong, and the thread stays open forever (fpt/klein-cli#108).
     - name: Collect previous review comments
       if: steps.scope.outputs.mode != 'skip'
       shell: bash
@@ -230,7 +234,7 @@ runs:
                 reviewThreads(first: 100) {
                   nodes {
                     id isResolved path line originalLine
-                    comments(first: 1) { nodes { author { login } body } }
+                    comments(first: 30) { nodes { author { login } body } }
                   }
                 }
               }
@@ -240,9 +244,13 @@ runs:
           --jq '[.data.repository.pullRequest.reviewThreads.nodes[]
                  | select(.isResolved | not)
                  | select(.comments.nodes[0].author.login == "github-actions")
-                 | {id, path, line: (.line // .originalLine // 0), body: .comments.nodes[0].body}]' \
+                 | {id, path, line: (.line // .originalLine // 0),
+                    body: .comments.nodes[0].body,
+                    replies: [.comments.nodes[1:][]
+                              | {author: .author.login, body: .body}]}]' \
           > /tmp/previous-comments.json
-        echo "Previous unresolved bot comments: $(jq length /tmp/previous-comments.json)"
+        echo "Previous unresolved bot comments: $(jq length /tmp/previous-comments.json)" \
+             "(with $(jq '[.[].replies | length] | add // 0' /tmp/previous-comments.json) replies)"
 
     - name: Build review request
       if: steps.scope.outputs.mode != 'skip'

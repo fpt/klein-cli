@@ -35,7 +35,6 @@ import (
 
 	"github.com/fpt/klein-cli/pkg/agent/domain"
 	"github.com/fpt/klein-cli/pkg/agent/events"
-	pkgLogger "github.com/fpt/klein-cli/pkg/logger"
 	"github.com/fpt/klein-cli/pkg/message"
 )
 
@@ -57,7 +56,7 @@ type Config struct {
 	Backend string
 	// Logger reports item types the backend sent that this renderer has no case
 	// for. Optional: nil keeps the old silence, which is what the tests use.
-	Logger         *pkgLogger.Logger
+	Logger         Logger
 	Model          string
 	Effort         string
 	ApprovalPolicy string
@@ -551,7 +550,7 @@ type turnProgress struct {
 	emit      func(events.EventType, any)
 	announced map[string]bool
 	// logger reports item types nothing renders. Optional; nil stays silent.
-	logger *pkgLogger.Logger
+	logger Logger
 	// reported dedupes those reports by type, so a backend that sends an
 	// unhandled variant on every item costs one line per turn, not one per item.
 	reported map[string]bool

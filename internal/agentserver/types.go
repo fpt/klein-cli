@@ -1,5 +1,7 @@
 package agentserver
 
+import "context"
+
 // This file holds the types the app-server client asks its caller to supply.
 //
 // They exist so the client depends on nothing of klein's. It drives an external
@@ -25,6 +27,44 @@ package agentserver
 // concrete type is still visible (see backendLogger).
 type Logger interface {
 	Warn(msg string, keysAndValues ...any)
+}
+
+// Parameter is one input a tool accepts. Type is a JSON Schema type name
+// ("string", "number", "integer", "boolean", "array", "object"); anything else
+// is treated as a string, since a tool the backend cannot describe is worse than
+// one described loosely.
+type Parameter struct {
+	Name        string
+	Description string
+	Type        string
+	Required    bool
+}
+
+// ToolSpec describes one tool to offer the backend. It is deliberately not a
+// JSON Schema: the caller says what its tool takes, and the client renders that
+// into whatever shape the protocol wants (see buildDynamicTools).
+type ToolSpec struct {
+	Name        string
+	Description string
+	Parameters  []Parameter
+}
+
+// DynamicTools is a set of tools the caller wants the backend to be able to
+// call. They are registered when a thread starts, and the backend then calls
+// back for them over the same connection — so the caller services them in its
+// own process, against its own live state, rather than handing the backend a
+// copy of anything.
+//
+// Call returns the tool's output. An error is the failure, whatever its origin:
+// no such tool, bad arguments, or a tool that ran and reported it could not do
+// the job. The protocol carries one failure bit and a message, so the client has
+// no use for a finer distinction, and callers with one should flatten it here.
+//
+// A nil DynamicTools registers nothing, which is a legitimate way to run: the
+// backend still has whatever tools it brought with it.
+type DynamicTools interface {
+	Specs() []ToolSpec
+	Call(ctx context.Context, name string, args map[string]any) (string, error)
 }
 
 // ToolCall is an action the backend has begun — a command it is running, a patch

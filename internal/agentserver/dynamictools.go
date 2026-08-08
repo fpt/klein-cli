@@ -5,9 +5,6 @@ import (
 
 	sdk "github.com/pmenglund/codex-sdk-go"
 	"github.com/pmenglund/codex-sdk-go/protocol"
-
-	"github.com/fpt/klein-cli/pkg/agent/domain"
-	"github.com/fpt/klein-cli/pkg/message"
 )
 
 // JSON Schema type names and content keys used in dynamic-tool specs/results.
@@ -53,8 +50,8 @@ type Approver func(ApprovalRequest) bool
 // when set (interactive/on-request) it is asked.
 type toolHandler struct {
 	sdk.AutoApproveHandler
-	tools    domain.ToolManager // klein tools exposed as dynamic tools (may be nil)
-	approver Approver           // nil = auto-accept
+	tools    DynamicTools // tools offered to the backend (may be nil)
+	approver Approver     // nil = auto-accept
 }
 
 // approve returns true when the request should proceed. Nil approver = accept.
@@ -113,14 +110,13 @@ func (h *toolHandler) ItemToolCall(
 		return toolCallResult(false, "no tools available"), nil
 	}
 	args, _ := p.Arguments.(map[string]any)
-	res, err := h.tools.CallTool(ctx, message.ToolName(p.Tool), message.ToolArgumentValues(args))
+	// A failed call is reported to the backend, not returned as an RPC error: the
+	// turn continues, and the backend decides what to do about it.
+	out, err := h.tools.Call(ctx, p.Tool, args)
 	if err != nil {
 		return toolCallResult(false, err.Error()), nil
 	}
-	if res.Error != "" {
-		return toolCallResult(false, res.Error), nil
-	}
-	return toolCallResult(true, res.Text), nil
+	return toolCallResult(true, out), nil
 }
 
 func toolCallResult(success bool, text string) *protocol.DynamicToolCallResponse {
@@ -131,36 +127,36 @@ func toolCallResult(success bool, text string) *protocol.DynamicToolCallResponse
 	}
 }
 
-// buildDynamicTools converts a tool manager's tools into codex FunctionDynamicTool
-// specs (type/name/description/inputSchema) for thread/start's dynamicTools field.
-func buildDynamicTools(tm domain.ToolManager) []map[string]any {
-	if tm == nil {
+// buildDynamicTools renders the offered tools as codex FunctionDynamicTool specs
+// (type/name/description/inputSchema) for thread/start's dynamicTools field.
+func buildDynamicTools(tools DynamicTools) []map[string]any {
+	if tools == nil {
 		return nil
 	}
 	var out []map[string]any
-	for name, t := range tm.GetTools() {
+	for _, spec := range tools.Specs() {
 		out = append(out, map[string]any{
 			keyType:       "function",
-			"name":        string(name),
-			"description": t.Description().String(),
-			"inputSchema": toInputSchema(t.Arguments()),
+			"name":        spec.Name,
+			"description": spec.Description,
+			"inputSchema": toInputSchema(spec.Parameters),
 		})
 	}
 	return out
 }
 
-// toInputSchema renders klein tool arguments as a JSON Schema object.
-func toInputSchema(args []message.ToolArgument) map[string]any {
+// toInputSchema renders a tool's parameters as a JSON Schema object.
+func toInputSchema(params []Parameter) map[string]any {
 	props := map[string]any{}
 	var required []string
-	for _, a := range args {
+	for _, a := range params {
 		p := map[string]any{keyType: jsonType(a.Type)}
 		if a.Description != "" {
-			p["description"] = string(a.Description)
+			p["description"] = a.Description
 		}
-		props[string(a.Name)] = p
+		props[a.Name] = p
 		if a.Required {
-			required = append(required, string(a.Name))
+			required = append(required, a.Name)
 		}
 	}
 	schema := map[string]any{keyType: jsonTypeObject, "properties": props}

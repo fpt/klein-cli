@@ -106,7 +106,7 @@ func newGalliumRunner(t *testing.T, bin, script, workDir string) (*Runner, *byte
 		Args:           []string{"app-server"},
 		Logger:         logger,
 		Env:            []string{"INFERENCE_ENGINE=scripted", "MODEL_PATH=" + script, "GALLIUM_AUTO_APPROVE=1"},
-		Backend:        BackendAppServer,
+		Dialect:        DialectGeneric,
 		Cwd:            workDir,
 		ApprovalPolicy: ApprovalNever,
 	})

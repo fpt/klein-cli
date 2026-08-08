@@ -47,9 +47,9 @@ type Config struct {
 	// purely by env; see appServerEnv). Empty means the child inherits klein's
 	// environment.
 	Env []string
-	// Backend names which app-server this is, for backend-specific behavior
-	// (e.g. the codex-only auth probe) and for log/error messages.
-	Backend string
+	// Dialect names which app-server this is, for the one piece of
+	// implementation-specific behavior the client has (the codex auth probe).
+	Dialect Dialect
 	// Logger reports item types the backend sent that this renderer has no case
 	// for. Optional: nil keeps the old silence, which is what the tests use.
 	Logger         Logger
@@ -111,7 +111,7 @@ func NewRunner(ctx context.Context, cfg Config) (*Runner, error) {
 	// Eagerly validate codex is logged in so an auth failure surfaces at klein
 	// startup, not on the user's first prompt. Skipped for the generic backend —
 	// see probeReady.
-	if err := probeReady(ctx, client, cfg.Backend); err != nil {
+	if err := probeReady(ctx, client, cfg.Dialect); err != nil {
 		_ = client.Close()
 		return nil, err
 	}
@@ -134,14 +134,14 @@ func NewRunner(ctx context.Context, cfg Config) (*Runner, error) {
 // have no account concept at all. Nothing is lost by skipping it: there is no
 // login to validate, and `initialize` is itself a round trip, so a dead or
 // non-conforming server has already failed by this point.
-func probeReady(ctx context.Context, client *rpc.Client, backend string) error {
-	if backend != BackendCodex {
+func probeReady(ctx context.Context, client *rpc.Client, dialect Dialect) error {
+	if dialect != DialectCodex {
 		return nil
 	}
 
 	var resp protocol.GetAccountResponse
 	if err := client.Call(ctx, "account/read", protocol.GetAccountParams{}, &resp); err != nil {
-		return fmt.Errorf("%s readiness check (account/read) failed: %w", backend, err)
+		return fmt.Errorf("codex readiness check (account/read) failed: %w", err)
 	}
 	if resp.RequiresOpenaiAuth && resp.Account == nil {
 		return errors.New("codex is not logged in — run `codex login` (or configure an API key for the codex CLI)")

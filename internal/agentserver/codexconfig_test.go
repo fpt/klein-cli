@@ -17,7 +17,7 @@ func ptr[T any](v T) *T { return &v }
 // codexWith returns a codex-backend Settings with c as its codex block.
 func codexWith(c config.CodexSettings) *config.Settings {
 	s := &config.Settings{}
-	s.LLM.Backend = BackendCodex
+	s.LLM.Backend = config.BackendCodex
 	s.Codex = c
 	return s
 }
@@ -189,7 +189,7 @@ func TestCommand_AppServerBackendIgnoresCodexConfig(t *testing.T) {
 	t.Parallel()
 
 	s := &config.Settings{}
-	s.LLM.Backend = BackendAppServer
+	s.LLM.Backend = config.BackendAppServer
 	s.AppServer.Command = "/opt/gallium"
 	s.Codex.SandboxWorkspaceWrite.NetworkAccess = ptr(true)
 

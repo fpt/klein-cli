@@ -67,6 +67,35 @@ type DynamicTools interface {
 	Call(ctx context.Context, name string, args map[string]any) (string, error)
 }
 
+// Dialect selects behavior specific to one app-server implementation, for the
+// few places where the protocol is not enough on its own.
+//
+// It exists for exactly one thing today: codex answers `initialize` even when it
+// is logged out, so a login failure would otherwise surface on the user's first
+// prompt rather than at startup, and only a codex server has an account to ask
+// about. Everything else the client does is the same for every backend, which is
+// the point — the protocol subset is a contract, and a conforming server must
+// not have to be recognized to be driven.
+//
+// The zero value is DialectGeneric, so a caller that says nothing gets the
+// behavior that assumes nothing.
+type Dialect int
+
+const (
+	// DialectGeneric — any server implementing the protocol subset.
+	DialectGeneric Dialect = iota
+	// DialectCodex — the codex app-server, which additionally has an account.
+	DialectCodex
+)
+
+// Approval policy values for Config.ApprovalPolicy. ApprovalNever leaves the
+// backend to act unattended; ApprovalOnRequest makes it ask, which is only
+// useful with an Approver that can answer.
+const (
+	ApprovalNever     = "never"
+	ApprovalOnRequest = "on-request"
+)
+
 // ApprovalKind says what a backend is asking permission to do. It is a kind, not
 // a phrase: how the question is put to whoever answers it is the caller's, and
 // only the caller knows whether that is a terminal, a chat message, or a policy

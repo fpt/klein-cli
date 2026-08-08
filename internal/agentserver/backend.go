@@ -8,14 +8,11 @@ import (
 	pkgLogger "github.com/fpt/klein-cli/pkg/logger"
 )
 
-// settings.LLM.Backend values that select a whole-agent app-server backend.
-//
-// Both speak the same JSON-RPC app-server protocol, so one Runner drives either;
-// they differ only in the binary spawned and how it is configured.
-// BackendAppServer is the generic case — any local agent implementing the subset
-// of the protocol used here (initialize/thread/turn plus `dynamicTools`); codex
-// is kept separate only because it carries codex-specific behavior (sandbox
-// modes, the login probe).
+// The backend ids live in internal/config, which owns settings vocabulary; the
+// client is told a Dialect instead and never sees a settings value. Both ids
+// speak the same JSON-RPC app-server protocol, so one Runner drives either — they
+// differ in the binary spawned, how it is configured, and whether there is an
+// account to probe.
 //
 // "app-server" here means the codex-app-server compatible protocol, and nothing
 // else. This backend was briefly called `acp`, which was wrong in a way worth
@@ -24,24 +21,16 @@ import (
 // which rs-gallium — the reference implementation of this backend — has ruled
 // out (fpt/rs-gallium#15, reaffirmed in #13). Naming the backend after the
 // protocol it actually speaks keeps the two senses distinct.
-const (
-	BackendCodex     = "codex"
-	BackendAppServer = "appserver"
-)
 
-// IsAgentBackend reports whether a backend name selects a whole-agent backend —
-// one that runs its own reasoning + tool loop, bypassing klein's ReAct loop —
-// as opposed to a chat model plugged in as a domain.LLM.
-func IsAgentBackend(backend string) bool {
-	return backend == BackendCodex || backend == BackendAppServer
+// dialectFor maps a settings backend id onto the client's dialect. Anything that
+// is not codex is driven as a plain conforming server, which is what an
+// unrecognized id should mean: the protocol subset is the contract.
+func dialectFor(backend string) Dialect {
+	if backend == config.BackendCodex {
+		return DialectCodex
+	}
+	return DialectGeneric
 }
-
-// Approval policy values for RunnerOptions.ApprovalPolicy: ApprovalNever
-// auto-accepts (headless surfaces), ApprovalOnRequest prompts (interactive repl).
-const (
-	ApprovalNever     = "never"
-	ApprovalOnRequest = "on-request"
-)
 
 // noop is the cleanup returned when a backend owns no closable resource.
 func noop() {}
@@ -54,7 +43,7 @@ func noop() {}
 func Start(
 	ctx context.Context, settings *config.Settings, workingDir string, logger *pkgLogger.Logger, opts RunnerOptions,
 ) (*Runner, error) {
-	if !IsAgentBackend(settings.LLM.Backend) {
+	if !config.IsAgentServerBackend(settings.LLM.Backend) {
 		return nil, nil
 	}
 	logger.Info("Starting app-server backend", "backend", settings.LLM.Backend, "model", settings.LLM.Model)
@@ -117,7 +106,7 @@ func (b *sharedBackend) EnsureBackendProcess(_ context.Context, _ string) (domai
 // backend needs no external process (every backend other than codex/appserver).
 // opts supplies the approval behavior for the lazy (agent-owned) case.
 func Select(settings *config.Settings, logger *pkgLogger.Logger, opts RunnerOptions) domain.AgentBackend {
-	if !IsAgentBackend(settings.LLM.Backend) {
+	if !config.IsAgentServerBackend(settings.LLM.Backend) {
 		return nil
 	}
 	return NewBackend(settings, logger, opts)

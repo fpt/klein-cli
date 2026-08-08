@@ -28,6 +28,20 @@ type RunnerOptions struct {
 	Logger *pkgLogger.Logger
 }
 
+// backendLogger converts klein's logger into the client's Logger interface.
+//
+// The nil check is the point. opts.Logger is a concrete *pkgLogger.Logger, and
+// assigning a nil one straight into an interface field yields a non-nil
+// interface holding a nil pointer — so the client's `logger != nil` guards would
+// all pass and the first drift report would panic on a nil receiver. The
+// conversion has to happen here, the last place the concrete type is visible.
+func backendLogger(l *pkgLogger.Logger) Logger {
+	if l == nil {
+		return nil
+	}
+	return l
+}
+
 // defaultAppServerArgs is the conventional subcommand that puts an agent into
 // app-server mode. appserver.args overrides it for a server that spells it
 // differently.
@@ -137,6 +151,6 @@ func NewRunnerFromSettings(
 		MCPServers:     MCPServersConfig(settings.MCP.Servers),
 		Tools:          nativeTools,
 		Approver:       opts.Approver,
-		Logger:         opts.Logger,
+		Logger:         backendLogger(opts.Logger),
 	})
 }

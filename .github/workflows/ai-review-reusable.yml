@@ -20,12 +20,17 @@
 # (Pin @main or a tag — GitHub Actions has no @latest ref. The klein binary
 # itself is installed from the released version via the Go module proxy.)
 #
-# Permissions are inherited from the caller (a reusable workflow can only narrow
-# them), so the caller must grant both. `contents: write` looks heavier than it
-# is: nothing here writes to the repository. It is simply what GitHub requires
-# for the `resolveReviewThread` GraphQL mutation — under `contents: read` that
-# call fails with "Resource not accessible by integration" and threads the
-# reviewer verified as fixed are never resolved (fpt/klein-cli#111).
+# Permissions are inherited from the caller — a reusable workflow can only
+# narrow them — so the caller has to grant the ceiling. `contents: write` looks
+# heavier than it is: nothing here writes to your repository. It is simply what
+# GitHub gates the `resolveReviewThread` mutation on, and under `contents: read`
+# that call fails with "Resource not accessible by integration", leaving threads
+# the reviewer verified as fixed open forever (fpt/klein-cli#111).
+#
+# The scope is then kept away from your code. This workflow narrows the `review`
+# job — the one that checks out your PR head and runs a model over it — back to
+# `contents: read`, and does the mutation in a second job that checks nothing
+# out. No job ever holds both a repo-write token and PR-authored code.
 name: AI Review (reusable)
 
 on:
@@ -85,6 +90,12 @@ jobs:
     # Skip draft PRs; the review runs once the PR is marked ready for review.
     # Add `ready_for_review` to the caller's trigger types so this fires then.
     if: github.event.pull_request.draft == false
+    # Runs your PR's code — narrowed away from the caller's contents: write.
+    permissions:
+      contents: read
+      pull-requests: write
+    outputs:
+      mode: ${{ steps.review.outputs.mode }}
     concurrency:
       group: ai-review-${{ github.event.pull_request.number }}
       cancel-in-progress: true
@@ -103,6 +114,7 @@ jobs:
           go-version: stable
 
       - name: AI review
+        id: review
         uses: fpt/klein-cli/.github/actions/ai-review@main
         with:
           backend: ${{ inputs.backend }}
@@ -116,3 +128,47 @@ jobs:
           openai-api-key: ${{ secrets.openai-api-key }}
           anthropic-api-key: ${{ secrets.anthropic-api-key }}
           gemini-api-key: ${{ secrets.gemini-api-key }}
+
+  # Mutation-only, and deliberately trivial: no checkout, no build, no model.
+  # This is the only job holding contents: write, and nothing from your PR ever
+  # runs on its runner. Inline rather than a composite action — a local action
+  # would need a checkout, which is the thing being avoided.
+  resolve:
+    needs: review
+    if: needs.review.result == 'success' && needs.review.outputs.mode != 'skip'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write        # what resolveReviewThread actually requires
+      pull-requests: write
+    steps:
+      - name: Download review result
+        uses: actions/download-artifact@v4
+        with:
+          name: klein-review-result
+
+      - name: Resolve verified-fixed threads
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          OK=0 FAILED=0
+          while read -r THREAD_ID; do
+            [ -n "$THREAD_ID" ] || continue
+            if gh api graphql \
+                -f query='mutation($id: ID!) {
+                  resolveReviewThread(input: {threadId: $id}) { thread { id isResolved } }
+                }' \
+                -f id="$THREAD_ID" > /dev/null; then
+              echo "Resolved thread $THREAD_ID"
+              OK=$((OK + 1))
+            else
+              echo "::error::Failed to resolve thread $THREAD_ID"
+              FAILED=$((FAILED + 1))
+            fi
+          done < <(jq -r '.resolved[]?.id' review-result.json)
+
+          echo "Resolved $OK thread(s), $FAILED failure(s)"
+          # Fail loudly. A silent warning here is exactly what let #111 go
+          # unnoticed: the summary comment claimed threads were resolved while
+          # every mutation was being rejected.
+          [ "$FAILED" -eq 0 ]

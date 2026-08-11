@@ -382,15 +382,35 @@ fall back to a full review with reset counters. Markers written by the older
 review-body scheme (only `head_sha`) are still parsed as a fallback.
 
 The reference workflow `.github/workflows/ai-review.yml` reviews this repo's
-own PRs: checkout PR head → build klein from source → run the action.
-Requirements: the `OPENAI_API_KEY` repository secret and
-`permissions: {contents: write, pull-requests: write}`. The `contents` scope is
-not used to write anything — GitHub requires it for the `resolveReviewThread`
-GraphQL mutation, and under `contents: read` that call fails with "Resource not
-accessible by integration", leaving verified-fixed threads open forever
-(fpt/klein-cli#111). Fork PRs are skipped (secrets are not
-exposed to them). Concurrency is keyed per PR with `cancel-in-progress` so a
-rapid push supersedes the in-flight review.
+own PRs in two jobs: `review` (checkout PR head → build klein from source → run
+the action) and `resolve`. Requirements: the `OPENAI_API_KEY` repository secret
+and `permissions: {contents: write, pull-requests: write}` as the workflow
+ceiling. Fork PRs are skipped (secrets are not exposed to them). Concurrency is
+keyed per PR with `cancel-in-progress` so a rapid push supersedes the in-flight
+review.
+
+**Why two jobs.** GitHub gates `resolveReviewThread` on `contents: write`, not
+on the `pull-requests: write` one would expect — under `contents: read` it fails
+with "Resource not accessible by integration" and verified-fixed threads stay
+open forever (#111, undetected for months because the summary reported the
+model's *claimed* resolutions rather than the mutations that landed). But
+`review` checks out and executes PR-authored code, and a repo-write token there
+would let a contributor's code push to the repository (#112). So `review`
+narrows itself back to `contents: read` and the action publishes the
+verified-fixed thread ids as the `klein-review-result` artifact; `resolve`
+downloads it, holds the write scope, and checks nothing out. No job ever holds
+both a repo-write token and PR-authored code.
+
+`resolve` fails the workflow when a mutation is rejected, rather than warning.
+The action itself never mutates threads — it only emits the artifact — so a
+caller that skips the `resolve` job gets reviews with no resolution at all.
+
+Two consequences worth knowing. The sticky comment's `active` count is written
+by `review`, before `resolve` runs, so it still reflects the model's claim and
+not the outcome; reconciling it means having `resolve` amend the comment
+(defect 2 of #111, open). And because a reusable workflow can only *narrow*
+inherited permissions, downstream callers must grant `contents: write` at the
+caller level even though only the inner `resolve` job uses it.
 
 ## 9. Failure modes
 

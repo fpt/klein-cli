@@ -167,7 +167,7 @@ on:
   pull_request:
     types: [opened, synchronize, reopened]
 permissions:
-  contents: read
+  contents: write   # required by resolveReviewThread — see the note below
   pull-requests: write
 jobs:
   review:
@@ -188,6 +188,11 @@ jobs:
       # anthropic-api-key: ${{ secrets.ANTHROPIC_API_KEY }}
       # gemini-api-key: ${{ secrets.GEMINI_API_KEY }}
 ```
+
+`contents: write` is not used to push anything — nothing in the review writes to
+your repository. It is what GitHub requires for the `resolveReviewThread` GraphQL
+mutation; with `contents: read` that call fails and threads the reviewer verified
+as fixed are never resolved.
 
 The review works with any of the three direct LLM backends — `openai`
 (default), `anthropic`, or `gemini` — via native tool calling; set `backend`

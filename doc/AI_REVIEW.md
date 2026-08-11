@@ -384,7 +384,11 @@ review-body scheme (only `head_sha`) are still parsed as a fallback.
 The reference workflow `.github/workflows/ai-review.yml` reviews this repo's
 own PRs: checkout PR head → build klein from source → run the action.
 Requirements: the `OPENAI_API_KEY` repository secret and
-`permissions: pull-requests: write`. Fork PRs are skipped (secrets are not
+`permissions: {contents: write, pull-requests: write}`. The `contents` scope is
+not used to write anything — GitHub requires it for the `resolveReviewThread`
+GraphQL mutation, and under `contents: read` that call fails with "Resource not
+accessible by integration", leaving verified-fixed threads open forever
+(fpt/klein-cli#111). Fork PRs are skipped (secrets are not
 exposed to them). Concurrency is keyed per PR with `cancel-in-progress` so a
 rapid push supersedes the in-flight review.
 

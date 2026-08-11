@@ -11,8 +11,13 @@ on:
   pull_request:
     types: [opened, synchronize, reopened, ready_for_review]
 
+# `contents: write` is not about pushing — nothing here writes to the repo. It is
+# what GitHub requires for the `resolveReviewThread` GraphQL mutation; with
+# `contents: read` that mutation fails with "Resource not accessible by
+# integration" and threads the reviewer verified as fixed stay open forever
+# (fpt/klein-cli#111).
 permissions:
-  contents: read
+  contents: write
   pull-requests: write
 
 concurrency:

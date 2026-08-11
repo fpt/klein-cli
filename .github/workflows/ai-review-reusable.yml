@@ -5,7 +5,7 @@
 #     pull_request:
 #       types: [opened, synchronize, reopened, ready_for_review]
 #   permissions:
-#     contents: read
+#     contents: write        # required by resolveReviewThread; see below
 #     pull-requests: write
 #   jobs:
 #     review:
@@ -19,6 +19,13 @@
 #
 # (Pin @main or a tag — GitHub Actions has no @latest ref. The klein binary
 # itself is installed from the released version via the Go module proxy.)
+#
+# Permissions are inherited from the caller (a reusable workflow can only narrow
+# them), so the caller must grant both. `contents: write` looks heavier than it
+# is: nothing here writes to the repository. It is simply what GitHub requires
+# for the `resolveReviewThread` GraphQL mutation — under `contents: read` that
+# call fails with "Resource not accessible by integration" and threads the
+# reviewer verified as fixed are never resolved (fpt/klein-cli#111).
 name: AI Review (reusable)
 
 on:

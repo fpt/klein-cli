@@ -185,3 +185,19 @@ func TestCommentableRangesAndValidate(t *testing.T) {
 		}
 	}
 }
+
+func TestRangesDescribe(t *testing.T) {
+	t.Parallel()
+	rs := CommentableRanges(mustParse(t, sampleGitDiff))
+
+	if got := rs.Describe(fooPath); got != "10-17, 31-34" {
+		t.Errorf("Describe(%s) = %q", fooPath, got)
+	}
+	// Nothing to name: a deleted file and a file outside the diff both yield "".
+	if got := rs.Describe("gone.txt"); got != "" {
+		t.Errorf("Describe(gone.txt) = %q, want empty", got)
+	}
+	if got := rs.Describe("unknown.go"); got != "" {
+		t.Errorf("Describe(unknown.go) = %q, want empty", got)
+	}
+}

@@ -182,34 +182,18 @@ Two differences from codex worth knowing:
 |-------|------|---------|-------------|
 | `command` | string | *(none — **required**)* | The app-server binary, e.g. `gallium` or an absolute path |
 | `args` | string[] | `["app-server"]` | Subcommand that puts the binary into app-server mode |
-| `config` | string | *(none)* | Path to the server's own config TOML (e.g. `../rs-gallium/configs/gemma4.toml`). See below. |
+| `env` | object | — | Environment variables `{ "KEY": "VAL" }` passed to the server. See below. |
 | `approval_policy` | string | *(mode-dependent)* | `never` / `on-request`. Same mode defaults as codex: the interactive repl prompts you (y/N) before the server writes a file or runs a command; headless surfaces auto-approve. Set explicitly to override. |
 
-#### Running the server from one of its config TOMLs
+> `config` is **deprecated** and undocumented here — it still parses and still
+> works, and setting it logs a warning naming its replacement. Use `env`, or hand
+> the file to the server itself via `args`.
+
+#### Configuring the server
 
 An app-server is configured **entirely by environment variables**, which keeps
-klein in control of what reaches the child. A server's own `configs/*.toml` files
-are primarily frontend configs (their `[[mcpServers]]` and `[agent]`
-prompt/skill-path keys drive the server's REPL, not a klein-driven turn).
-
-Point `appserver.config` at one and klein reads just its `[llm]` and `[agent]`
-tables, translating them into the environment the server expects (everything else
-is ignored):
-
-| TOML key | Env var passed to the server |
-|----------|------------------------------|
-| `llm.modelPath` | `MODEL_PATH` (an `hf:` spec is passed through and resolved by the server; a **relative path is anchored to the config file's directory**, matching how the server resolves it) |
-| `llm.baseURL` | `LLM_BASE_URL` (an explicit `""` means "local model") |
-| `llm.model` | `LLM_MODEL` |
-| `llm.apiKey` | `OPENAI_API_KEY` — **only if non-empty**; blank (the usual case) means the server inherits it from your shell |
-| `llm.temperature` | `LLM_TEMPERATURE` |
-| `llm.maxTokens` | `MAX_TOKENS` |
-| `llm.reasoningEffort` | `REASONING_EFFORT` |
-| `llm.inferenceEngine` | `INFERENCE_ENGINE` |
-| `agent.maxTurns` | `MAX_REACT_ITERATIONS` |
-
-Values from the config **override** the ambient shell; anything the file does not
-set (notably `OPENAI_API_KEY`) is inherited.
+klein in control of what reaches the child. `appserver.env` is a sub-table of
+whatever the server reads:
 
 ```toml
 [llm]
@@ -217,11 +201,36 @@ backend = "appserver"
 
 [appserver]
 command         = "../rs-gallium/target/release/gallium"
-config          = "../rs-gallium/configs/gemma4.toml"
 approval_policy = "on-request"
+
+# Passed to the child verbatim
+[appserver.env]
+MODEL_PATH         = "/models/qwen3.6.gguf"
+GALLIUM_CPU_MOE    = "1"
+GALLIUM_GPU_LAYERS = "20"
 ```
 
-Without `config`, the server simply inherits klein's environment:
+klein does **not** validate these keys, and that is deliberate: `appserver` names
+a protocol, not a program, so klein is not the authority on any one server's
+option set — which is what lets a server option klein has never heard of work the
+day the server ships it. The cost is that a typo is silently ignored rather than
+rejected. Values here override the ambient shell; anything not named is inherited.
+
+Nor are values resolved: a relative path in `env` is left exactly as written, and
+the server will read it relative to **its own working directory**, not to your
+settings file.
+
+If the server reads a config file of its own, `args` hands it over directly —
+usually the better option, since the server then resolves its own keys and its
+own relative paths, and klein is not in the middle:
+
+```toml
+[appserver]
+command = "gallium"
+args    = ["app-server", "--config", "../rs-gallium/configs/qwen3.6-cuda-12gb.toml"]
+```
+
+Without any of this, the server simply inherits klein's environment:
 
 ```toml
 [llm]

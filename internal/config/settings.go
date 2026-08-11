@@ -427,16 +427,35 @@ type AppServerSettings struct {
 	Command string `toml:"command,omitempty"`
 	// ApprovalPolicy is never|on-request ("" → the mode default).
 	ApprovalPolicy string `toml:"approval_policy,omitempty"`
-	// Config is an optional path to the server's own TOML config (e.g.
-	// ../rs-gallium/configs/gemma4.toml). Servers of this kind are configured by
-	// environment variables, so klein reads the file's [llm]/[agent] tables and
-	// passes them to the child as env; frontend-only tables are ignored. Values
-	// here win over the ambient environment.
+	// Config is a path to the server's own TOML config (e.g.
+	// ../rs-gallium/configs/gemma4.toml), whose [llm]/[agent] tables klein
+	// translates into the child's environment.
+	//
+	// Deprecated: use Env, or pass the file to the server itself via Args (e.g.
+	// ["app-server", "--config", "…"]) if it accepts one. The translation behind
+	// this field is a hand-written map of one server's config keys onto env vars,
+	// so it falls behind that server every time the server grows an option —
+	// which is exactly what happened. Still honored, and still layered under Env.
 	Config string `toml:"config,omitempty"`
+	// Env is passed to the spawned server verbatim, as a [appserver.env]
+	// sub-table. This is the general way to reach a server option klein has never
+	// heard of: klein is not the authority on any given server's option set, so
+	// keys are neither validated nor resolved — a typo is silently ignored, and a
+	// path value is whatever the server makes of it (notably NOT rebased onto a
+	// config file's directory the way Config's modelPath is).
+	Env map[string]string `toml:"env,omitempty"`
 	// Args overrides the subcommand used to enter app-server mode.
 	// Empty → ["app-server"], the protocol's conventional entry point.
 	// Last field by fieldalignment: the only one carrying a slice header.
 	Args []string `toml:"args,omitempty"`
+}
+
+// EnvSlice renders the env table as sorted "KEY=VAL" entries, the shape the
+// app-server client takes. Sorted so a spawn is reproducible: Go map order is
+// randomized, and an env slice that shuffles between runs makes a failure that
+// depends on override order impossible to reproduce.
+func (s AppServerSettings) EnvSlice() []string {
+	return envMapToSlice(s.Env)
 }
 
 // BashSettings contains bash tool configuration

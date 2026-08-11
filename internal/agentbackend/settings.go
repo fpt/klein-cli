@@ -143,14 +143,9 @@ func NewRunnerFromSettings(
 		return nil, err
 	}
 
-	// An app-server is configured from its environment, not a config flag — klein
-	// stays in control of what reaches the child. When a server config TOML is
-	// set, translate its [llm]/[agent] tables into the child's env.
-	var env []string
-	if settings.LLM.Backend == config.BackendAppServer && settings.AppServer.Config != "" {
-		if env, err = appServerEnv(settings.AppServer.Config); err != nil {
-			return nil, err
-		}
+	env, err := appServerEnvironment(settings, opts.Logger)
+	if err != nil {
+		return nil, err
 	}
 
 	runner, err := agentserver.NewRunner(ctx, agentserver.Config{

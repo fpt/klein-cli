@@ -167,7 +167,7 @@ on:
   pull_request:
     types: [opened, synchronize, reopened]
 permissions:
-  contents: read
+  contents: write   # required by resolveReviewThread — see the note below
   pull-requests: write
 jobs:
   review:
@@ -188,6 +188,17 @@ jobs:
       # anthropic-api-key: ${{ secrets.ANTHROPIC_API_KEY }}
       # gemini-api-key: ${{ secrets.GEMINI_API_KEY }}
 ```
+
+`contents: write` is not used to push anything — nothing in the review writes to
+your repository. It is what GitHub gates the `resolveReviewThread` mutation on;
+with `contents: read` that call fails and threads the reviewer verified as fixed
+are never resolved.
+
+The scope is kept away from your code. The workflow runs two jobs: `review`
+checks out your PR head and runs a model over it with `contents: read`, then
+hands the verified-fixed thread ids to `resolve` through an artifact. `resolve`
+holds the write scope but checks nothing out and runs nothing from the PR, so no
+job ever has both a repo-write token and PR-authored code on its runner.
 
 The review works with any of the three direct LLM backends — `openai`
 (default), `anthropic`, or `gemini` — via native tool calling; set `backend`

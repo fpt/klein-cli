@@ -7,12 +7,18 @@ description: >
   changes since then, an unchanged diff hash (e.g. a web-UI "Rebase branch" /
   "Update branch" push) skips the run entirely, a real force-push falls back
   to a full review, previous unresolved comments are fed back to the model along
-  with any replies posted since the last round, and threads it verifies as fixed
-  are resolved. All GitHub interaction
+  with any replies posted since the last round. All GitHub interaction
   (gh/jq) happens here in the harness — klein itself never runs git or gh.
   The caller must check out the PR head with fetch-depth: 0; incremental
   reviews need full history, and a shallow checkout silently degrades every
   run to a full review.
+
+  This action does NOT resolve review threads. `resolveReviewThread` requires
+  `contents: write`, and this job checks out and executes PR-authored code —
+  handing it a repo-write token would let a contributor's code push to the
+  repository (fpt/klein-cli#112). The threads the model verified as fixed are
+  instead published in the `klein-review-result` artifact, for a second job
+  that checks nothing out to mutate. See the reference workflow's `resolve` job.
 
 inputs:
   openai-api-key:
@@ -76,6 +82,14 @@ inputs:
       if the asset is missing.
     required: false
     default: ""
+
+outputs:
+  mode:
+    description: >
+      full | incremental | skip. `skip` means no review ran and no
+      klein-review-result artifact was uploaded, so a dependent resolve job
+      must gate on this.
+    value: ${{ steps.scope.outputs.mode }}
 
 runs:
   using: composite
@@ -386,25 +400,22 @@ runs:
       run: |
         set -euo pipefail
 
-        # Resolve threads the model verified as fixed. Best-effort: a failed
-        # mutation must not block posting the review itself.
-        jq -r '.resolved[]?.id' /tmp/review-result.json | while read -r THREAD_ID; do
-          if gh api graphql \
-              -f query='mutation($id: ID!) {
-                resolveReviewThread(input: {threadId: $id}) { thread { id isResolved } }
-              }' \
-              -f id="$THREAD_ID" > /dev/null; then
-            echo "Resolved thread $THREAD_ID"
-          else
-            echo "::warning::Failed to resolve thread $THREAD_ID"
-          fi
-        done
+        # Threads the model verified as fixed are NOT resolved here — the
+        # mutation needs contents: write, which this job must not hold (see the
+        # note at the top of this file). They travel out in the artifact
+        # uploaded by the last step, and the caller's resolve job mutates them.
 
         # --- Sticky summary comment: update in place, or create on round 1.
         # The klein-review-state marker records the reviewed head commit, the
         # full-diff hash, the turn number, and the cumulative comment count.
         # Stats: total = all comments ever posted; active = still-unresolved
         # previous comments (minus this round's resolutions) plus new ones.
+        #
+        # N_RESOLVED is what the model CLAIMED, not what the resolve job managed
+        # to mutate — which runs after this step and cannot feed back into it.
+        # An `active` count that overstates reality is how #111 hid for so long;
+        # correcting it means having the resolve job amend this comment, which is
+        # defect 2 of that issue and deliberately not in scope here.
         N_NEW=$(jq '.comments | length' /tmp/review-result.json)
         N_RESOLVED=$(jq '(.resolved // []) | length' /tmp/review-result.json)
         N_TRIMMED=$(jq '.trimmed_comments // 0' /tmp/review-result.json)
@@ -519,3 +530,17 @@ runs:
           jq '.event = "COMMENT"' /tmp/review-payload.json > /tmp/review-retry.json
           post /tmp/review-retry.json || echo "::warning::Review post failed; summary comment already posted"
         fi
+
+    # Hand the result to the caller's resolve job. That job holds the
+    # contents: write this one must not, and checks nothing out, so the token
+    # capable of writing to the repository never shares a runner with
+    # PR-authored code. Runs even when posting failed: the resolutions are
+    # still valid, and dropping them would leave fixed threads open.
+    - name: Upload review result
+      if: always() && steps.scope.outputs.mode != 'skip'
+      uses: actions/upload-artifact@v4
+      with:
+        name: klein-review-result
+        path: /tmp/review-result.json
+        if-no-files-found: warn
+        retention-days: 1

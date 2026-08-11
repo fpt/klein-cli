@@ -5,14 +5,24 @@
 # only ever exposed to code from contributors who already have push access to
 # this repo's workflows. Fork PRs get no secrets and are skipped. Do not
 # switch this to pull_request_target while still checking out the PR head.
+#
+# Two jobs, and the split is the whole point. `resolveReviewThread` is gated by
+# GitHub on `contents: write` rather than the `pull-requests: write` one would
+# expect (fpt/klein-cli#111), but `review` checks out the PR head and builds and
+# runs it — give that job a repo-write token and a contributor's code can push
+# to this repository. So `review` narrows itself to `contents: read` and hands
+# the verified-fixed thread ids to `resolve` through an artifact; `resolve`
+# holds the write scope, checks nothing out, and runs no code from the PR.
 name: AI Review
 
 on:
   pull_request:
     types: [opened, synchronize, reopened, ready_for_review]
 
+# Ceiling for the workflow. Each job narrows from here; nothing runs with both
+# contents: write and PR-authored code.
 permissions:
-  contents: read
+  contents: write
   pull-requests: write
 
 concurrency:
@@ -26,6 +36,12 @@ jobs:
     if: >-
       github.event.pull_request.draft == false &&
       github.event.pull_request.head.repo.full_name == github.repository
+    # Executes PR-authored code — must never hold contents: write.
+    permissions:
+      contents: read
+      pull-requests: write
+    outputs:
+      mode: ${{ steps.review.outputs.mode }}
     steps:
       - name: Checkout PR head
         uses: actions/checkout@v4
@@ -44,6 +60,51 @@ jobs:
         run: go build -o /usr/local/bin/klein ./klein
 
       - name: AI review
+        id: review
         uses: ./.github/actions/ai-review
         with:
           openai-api-key: ${{ secrets.OPENAI_API_KEY }}
+
+  # Mutation-only. No checkout, no build, no model: the one job holding
+  # contents: write never has PR-authored code on its runner. Kept inline
+  # rather than factored into a composite action for exactly that reason —
+  # a local action would have to be checked out from somewhere.
+  resolve:
+    needs: review
+    if: needs.review.result == 'success' && needs.review.outputs.mode != 'skip'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write        # what resolveReviewThread actually requires
+      pull-requests: write
+    steps:
+      - name: Download review result
+        uses: actions/download-artifact@v4
+        with:
+          name: klein-review-result
+
+      - name: Resolve verified-fixed threads
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          OK=0 FAILED=0
+          while read -r THREAD_ID; do
+            [ -n "$THREAD_ID" ] || continue
+            if gh api graphql \
+                -f query='mutation($id: ID!) {
+                  resolveReviewThread(input: {threadId: $id}) { thread { id isResolved } }
+                }' \
+                -f id="$THREAD_ID" > /dev/null; then
+              echo "Resolved thread $THREAD_ID"
+              OK=$((OK + 1))
+            else
+              echo "::error::Failed to resolve thread $THREAD_ID"
+              FAILED=$((FAILED + 1))
+            fi
+          done < <(jq -r '.resolved[]?.id' review-result.json)
+
+          echo "Resolved $OK thread(s), $FAILED failure(s)"
+          # Fail loudly. A silent warning here is precisely what let #111 go
+          # unnoticed for months: the summary comment claimed threads were
+          # resolved while every mutation was being rejected.
+          [ "$FAILED" -eq 0 ]

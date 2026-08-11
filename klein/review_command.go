@@ -329,7 +329,8 @@ func executeReview(
 	if prepared.numFiles == 0 {
 		return noReviewableFilesResult(prepared.skipped), nil
 	}
-	reviewMgr := tool.NewReviewToolManager(prepared.ranges.Validate, prepared.previousIDs)
+	reviewMgr := tool.NewReviewToolManager(prepared.ranges.Validate, prepared.previousIDs).
+		WithRangeLister(prepared.ranges.Describe)
 
 	a, cleanup, err := newReviewAgent(ctx, opts, settings, reviewMgr, fsRepo, logger, out)
 	if err != nil {

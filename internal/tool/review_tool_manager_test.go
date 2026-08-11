@@ -122,6 +122,79 @@ func verifyFlowResult(t *testing.T, got ReviewResult) {
 	}
 }
 
+// A line argument carrying the line's *text* instead of its number is the
+// failure that produced a blocking review with no comments in the wild: the
+// rejection has to name the bad value and the valid targets, or the model has
+// nothing to correct against.
+func TestReviewToolManager_LineArgRejectionIsActionable(t *testing.T) {
+	t.Parallel()
+	m := NewReviewToolManager(rangeValidator, nil).
+		WithRangeLister(func(path string) string {
+			if path == allowedFile {
+				return "10-20"
+			}
+			return ""
+		})
+
+	res := callReview(t, m, "AddInlineReview", inline(allowedFile, 0, message.ToolArgumentValues{
+		"line": "# gpuLayers: full offload (999, the default) held on a 12GB RTX 4070 across",
+	}))
+	wants := []string{
+		"not the line's text",
+		"# gpuLayers: full offload", // the offending value, elided
+		"…",
+		"Commentable lines in allowed.go: 10-20", // the valid targets
+	}
+	for _, want := range wants {
+		if !strings.Contains(res.Error, want) {
+			t.Errorf("rejection %q missing %q", res.Error, want)
+		}
+	}
+
+	// A missing line argument says so rather than quoting an empty value.
+	res = callReview(t, m, "AddInlineReview", message.ToolArgumentValues{
+		"path": allowedFile, "comment": "x", "severity": "minor", "rationale": "r",
+	})
+	expectErr(t, res, "got nothing", "missing line")
+}
+
+// FinalizeReview must not quietly complete a review whose every finding was
+// rejected — that posts a verdict with nothing attached.
+func TestReviewToolManager_FinalizeBouncesWhenAllFindingsRejected(t *testing.T) {
+	t.Parallel()
+	m := NewReviewToolManager(rangeValidator, nil)
+
+	expectErr(t, callReview(t, m, "AddInlineReview",
+		inline(allowedFile, 0, message.ToolArgumentValues{"line": "some source text"})),
+		"line must be a positive", "text passed as line")
+	expectOK(t, callReview(t, m, "AddSummaryReview",
+		message.ToolArgumentValues{"summary": "s", "verdict": "request_changes"}), "summary")
+
+	expectErr(t, callReview(t, m, "FinalizeReview", nil),
+		"1 inline comment(s) were rejected", "finalize with only rejected findings")
+	if m.Result().Finalized {
+		t.Error("bounced FinalizeReview must not finalize")
+	}
+
+	// The bounce fires once: a model that insists still gets a postable review.
+	expectOK(t, callReview(t, m, "FinalizeReview", nil), "second FinalizeReview")
+	if !m.Result().Finalized {
+		t.Error("second FinalizeReview should finalize")
+	}
+}
+
+// A rejection that was re-landed as a real comment must not bounce.
+func TestReviewToolManager_FinalizeAfterRecoveredRejection(t *testing.T) {
+	t.Parallel()
+	m := NewReviewToolManager(rangeValidator, nil)
+
+	expectErr(t, callReview(t, m, "AddInlineReview", inline(allowedFile, 5, nil)),
+		"outside the diff", "out-of-range line")
+	expectOK(t, callReview(t, m, "AddInlineReview", inline(allowedFile, 12, nil)), "corrected comment")
+	expectOK(t, callReview(t, m, "AddSummaryReview", message.ToolArgumentValues{"summary": "s"}), "summary")
+	expectOK(t, callReview(t, m, "FinalizeReview", nil), "FinalizeReview")
+}
+
 func TestReviewToolManager_Resolve(t *testing.T) {
 	t.Parallel()
 	m := NewReviewToolManager(rangeValidator, []string{"T1", "T2"})

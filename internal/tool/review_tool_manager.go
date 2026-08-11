@@ -3,6 +3,7 @@ package tool
 import (
 	"context"
 	"fmt"
+	"strconv"
 	"strings"
 	"sync"
 
@@ -75,6 +76,11 @@ type ReviewResult struct {
 // Injected by the subcommand so this package needs no diff knowledge.
 type LineValidator func(path string, line, endLine int) error
 
+// RangeLister describes the commentable line ranges of path ("14-21, 30"), or
+// "" when there are none to name. Optional: it turns a rejection raised before
+// the validator runs into one the model can act on without re-reading the diff.
+type RangeLister func(path string) string
+
 // reviewSeverities is the classification every inline comment must carry:
 // must (fix before merge), major (real bug/regression), minor (edge case,
 // robustness), nits (small but worth fixing).
@@ -88,13 +94,20 @@ var reviewVerdicts = map[string]bool{"approve": true, reviewVerdictDefault: true
 type ReviewToolManager struct {
 	tools       map[message.ToolName]message.Tool
 	validate    LineValidator
+	listRanges  RangeLister
 	previousIDs map[string]bool
 	summary     string
 	verdict     string
 	comments    []ReviewComment
 	resolved    []ResolvedComment
 
-	mu        sync.Mutex
+	mu sync.Mutex
+	// rejected counts inline comments that were attempted but not recorded
+	// because the target was unusable (unparseable/out-of-range line, bad
+	// severity, missing field) — i.e. findings the model has lost track of.
+	// Duplicates don't count: that finding is already recorded.
+	rejected  int
+	bounced   bool
 	finalized bool
 }
 
@@ -113,6 +126,26 @@ func NewReviewToolManager(validate LineValidator, previousIDs []string) *ReviewT
 	}
 	m.register()
 	return m
+}
+
+// WithRangeLister installs the describer used to name a file's commentable
+// lines in a rejection message. Optional; returns the receiver for chaining.
+func (m *ReviewToolManager) WithRangeLister(l RangeLister) *ReviewToolManager {
+	m.listRanges = l
+	return m
+}
+
+// withRangeHint appends the commentable lines of path to a rejection message,
+// so the model can re-target without re-reading the whole annotated diff.
+func (m *ReviewToolManager) withRangeHint(path, msg string) string {
+	if path == "" || m.listRanges == nil {
+		return msg
+	}
+	ranges := m.listRanges(path)
+	if ranges == "" {
+		return msg
+	}
+	return fmt.Sprintf("%s. Commentable lines in %s: %s", msg, path, ranges)
 }
 
 func (m *ReviewToolManager) register() {
@@ -193,6 +226,27 @@ func (m *ReviewToolManager) handleResolve(_ context.Context, args message.ToolAr
 	return message.NewToolResultText(fmt.Sprintf("Marked previous comment %s as resolved.", id)), nil
 }
 
+// describeArg renders an argument value for an error message: quoted and
+// elided when it's a string, so a whole line of source pasted into a numeric
+// field is recognizable without flooding the tool result.
+func describeArg(v any) string {
+	if v == nil {
+		return "nothing"
+	}
+	s, ok := v.(string)
+	if !ok {
+		return fmt.Sprintf("%v", v)
+	}
+	if s == "" {
+		return "an empty string"
+	}
+	const maxLen = 60
+	if r := []rune(s); len(r) > maxLen {
+		s = string(r[:maxLen]) + "…"
+	}
+	return strconv.Quote(s)
+}
+
 // parseInlineArgs validates AddInlineReview arguments and returns the comment
 // to record, or a non-empty error message for the model.
 func parseInlineArgs(args message.ToolArgumentValues) (ReviewComment, string) {
@@ -210,7 +264,13 @@ func parseInlineArgs(args message.ToolArgumentValues) (ReviewComment, string) {
 		return c, "rationale is required: state why it's a problem and what you verified in the code"
 	}
 	if c.Line <= 0 {
-		return c, "line must be a positive new-side line number from the annotated diff"
+		// Echo what arrived: the usual failure is passing the line's *text*
+		// (or its diff-row prefix) instead of the bracketed number, and a
+		// message that doesn't name the offending value reads as unfixable.
+		return c, fmt.Sprintf(
+			"line must be a positive new-side line number from the annotated diff "+
+				"(the integer inside the brackets, not the line's text); got %s",
+			describeArg(args[reviewArgLine]))
 	}
 	if c.EndLine == 0 {
 		c.EndLine = c.Line
@@ -229,13 +289,24 @@ func parseInlineArgs(args message.ToolArgumentValues) (ReviewComment, string) {
 	return c, ""
 }
 
+// rejectInline records that a finding was attempted but not kept, and returns
+// the error result for the model. A non-empty path adds the file's commentable
+// lines to the message; pass "" when the message already names them (the
+// validator's own errors do).
+func (m *ReviewToolManager) rejectInline(path, msg string) message.ToolResult {
+	m.mu.Lock()
+	m.rejected++
+	m.mu.Unlock()
+	return message.NewToolResultError(m.withRangeHint(path, msg))
+}
+
 func (m *ReviewToolManager) handleAddInline(_ context.Context, args message.ToolArgumentValues) (message.ToolResult, error) {
 	c, errMsg := parseInlineArgs(args)
 	if errMsg != "" {
-		return message.NewToolResultError(errMsg), nil
+		return m.rejectInline(c.Path, errMsg), nil
 	}
 	if err := m.validate(c.Path, c.Line, c.EndLine); err != nil {
-		return message.NewToolResultError(err.Error()), nil
+		return m.rejectInline("", err.Error()), nil
 	}
 
 	m.mu.Lock()
@@ -289,6 +360,19 @@ func (m *ReviewToolManager) handleFinalize(_ context.Context, _ message.ToolArgu
 	}
 	if m.finalized {
 		return message.NewToolResultError("review already finalized"), nil
+	}
+	// Every attempted finding was rejected and none was re-landed: finishing
+	// here posts a verdict with nothing to read (a blocking review with no
+	// threads, when the verdict is request_changes). Bounce exactly once — the
+	// second call always completes, so a stubborn rejection can't hang the run.
+	if len(m.comments) == 0 && m.rejected > 0 && !m.bounced {
+		m.bounced = true
+		return message.NewToolResultError(fmt.Sprintf(
+			"%d inline comment(s) were rejected and none were recorded, so this review would post a "+
+				"verdict with no findings attached. Re-target each one with AddInlineReview (path plus a "+
+				"bracketed new-side line number from the annotated diff), or — if a finding has no "+
+				"commentable line — fold it into AddSummaryReview and call FinalizeReview again.",
+			m.rejected)), nil
 	}
 	m.finalized = true
 	return message.NewToolResultText(fmt.Sprintf(

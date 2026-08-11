@@ -282,18 +282,35 @@ see DESIGN.md §10 for why this is a deliberate design property.
 review state in memory; the subcommand reads `Result()` after the run. It
 takes a `LineValidator func(path string, line, endLine int) error` at
 construction — the subcommand passes `ranges.Validate`, keeping
-`internal/tool` free of any dependency on `internal/review`.
+`internal/tool` free of any dependency on `internal/review`. An optional
+`RangeLister func(path string) string` (`WithRangeLister`, fed by
+`ranges.Describe`) names a file's commentable lines in rejections raised
+*before* the validator runs, so those read as correctable too.
 
 | Tool | Behavior |
 |---|---|
 | `AddInlineReview` | Validates path+line via the injected validator; rejects duplicates (same path+range), missing/bad severities (required: `must/major/minor/nits`), a missing `rationale`, and calls after finalize. Swapped `line`/`end_line` bounds are silently normalized rather than bounced. **`rationale` is required and distinct from `body`**: `body` = the problem + concrete fix, `rationale` = why it's a problem and what was verified in the code — a forcing function at the tool-call site that gives the skill's verify step somewhere structured to land, and lets reviewers audit reasoning quality from the result JSON. The harness renders it as a collapsed `<details>` block so inline comments stay scannable. |
 | `AddSummaryReview` | Sets summary + verdict (`approve/comment/request_changes`, default `comment`); calling again *replaces* (never accumulates). Locked after finalize. |
-| `FinalizeReview` | Requires a summary first; idempotence errors on a second call; locks all further mutation. |
+| `FinalizeReview` | Requires a summary first; idempotence errors on a second call; locks all further mutation. Bounces **once** when every attempted inline comment was rejected and none was recorded (see below); the retry always completes. |
 | `ResolveReviewComment` | Marks a previous-round comment as verified-fixed (id must match the `previous_comments` input; duplicates rejected). Only registered when previous comments exist. The harness resolves the thread. |
 
 Every rejection returns a tool *error result* (not a Go error), phrased as an
 instruction the model can act on — this is the self-correction loop that
-keeps invalid comments out of the output without aborting the run.
+keeps invalid comments out of the output without aborting the run. For that
+loop to work the message has to name both the offending value and the valid
+targets: a model that passed a line's *text* where a number belongs (seen in
+rs-gallium#104) read a bare "line must be a positive new-side line number" as
+unfixable, abandoned the finding, and finalized a `request_changes` verdict
+with zero comments — a blocking review with nothing to read.
+
+`FinalizeReview` is the backstop for that class of failure. The manager
+counts inline comments that were *attempted and not kept* (unparseable or
+out-of-range line, bad severity, missing field — duplicates don't count,
+since that finding is already recorded); if the count is non-zero and no
+comment was ever recorded, the first `FinalizeReview` is bounced with an
+instruction to re-target the findings or fold them into the summary. It
+bounces only once, so a rejection the model can't satisfy still yields a
+postable review rather than hanging the run.
 
 **Fallback:** if the model never calls `AddSummaryReview`, the subcommand
 uses the agent's final text response as the summary and marks

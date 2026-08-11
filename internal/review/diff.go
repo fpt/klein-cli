@@ -97,6 +97,18 @@ func (rs Ranges) Validate(path string, line, endLine int) error {
 		line, endLine, path, formatRanges(ranges))
 }
 
+// Describe returns the commentable ranges of path in the same form Validate
+// reports them ("14-21, 30"), or "" when the path is not in the diff or has no
+// commentable lines. Used to enrich a rejection the tool layer raises before
+// Validate is ever reached (e.g. an unparseable line argument).
+func (rs Ranges) Describe(path string) string {
+	ranges, ok := rs[path]
+	if !ok || len(ranges) == 0 {
+		return ""
+	}
+	return formatRanges(ranges)
+}
+
 func formatRanges(ranges []LineRange) string {
 	parts := make([]string, len(ranges))
 	for i, r := range ranges {

@@ -8,6 +8,9 @@ import (
 	"strings"
 
 	"github.com/BurntSushi/toml"
+
+	"github.com/fpt/klein-cli/internal/config"
+	pkgLogger "github.com/fpt/klein-cli/pkg/logger"
 )
 
 // appServerConfig is the subset of an app-server's config TOML (e.g.
@@ -22,6 +25,14 @@ import (
 //
 // Pointers distinguish "absent" from "present but empty/zero" — an explicit
 // `baseURL = ""` means "no base URL" (local model), which differs from omitting it.
+//
+// This struct is **frozen**. It is a hand-written map of one server's config keys
+// onto env vars, so it falls behind that server every time the server grows an
+// option — by the time [appserver.env] was added, five of rs-gallium's env vars
+// (GALLIUM_CPU_MOE, GALLIUM_GPU_LAYERS, MMPROJ_PATH, CONTEXT_WINDOW,
+// GALLIUM_TOKENIZER_REPO) were unreachable through it. Chasing that is the
+// treadmill the env table exists to get off, so a new option goes there, not
+// here. Existing keys stay: configs in the wild still set them.
 //
 //nolint:tagliatelle // key names are the server's config schema (baseURL, …), not ours
 type appServerConfig struct {
@@ -38,6 +49,46 @@ type appServerConfig struct {
 	Agent struct {
 		MaxTurns *int `toml:"maxTurns"`
 	} `toml:"agent"`
+}
+
+// deprecatedConfigWarning is emitted once per spawn when appserver.config is
+// set. The setting still works — this is a nudge, not a removal.
+const deprecatedConfigWarning = "appserver.config is deprecated: klein hand-maps a fixed set of the " +
+	"server's config keys onto env vars, so options the server adds later are unreachable through it. " +
+	"Prefer an [appserver.env] table, or hand the file to the server itself via " +
+	`appserver.args (e.g. ["app-server", "--config", "…"]) if it accepts one.`
+
+// appServerEnvironment assembles the environment overrides for the spawned
+// app-server, layered least- to most-specific:
+//
+//  1. the deprecated appserver.config translation, then
+//  2. the explicit [appserver.env] table.
+//
+// The table wins because it names the variable outright, where the translation
+// only infers one — and because it is the escape hatch for exactly the case the
+// translation cannot express, which would be worthless if the translation could
+// shadow it. childEnv (pkg/agentserver) resolves duplicates last-wins, so
+// appending in this order is the whole implementation of that precedence.
+//
+// Both are appserver-only: codex is configured by `-c` launch flags, not env.
+// logger may be nil, which is silent.
+//
+//nolint:staticcheck // SA1019: this function *is* the deprecated field's honored path.
+func appServerEnvironment(settings *config.Settings, logger *pkgLogger.Logger) ([]string, error) {
+	if settings.LLM.Backend != config.BackendAppServer {
+		return nil, nil
+	}
+	var env []string
+	if settings.AppServer.Config != "" {
+		if logger != nil {
+			logger.Warn(deprecatedConfigWarning, "config", settings.AppServer.Config)
+		}
+		var err error
+		if env, err = appServerEnv(settings.AppServer.Config); err != nil {
+			return nil, err
+		}
+	}
+	return append(env, settings.AppServer.EnvSlice()...), nil
 }
 
 // appServerEnv reads the app-server config at path and returns the environment

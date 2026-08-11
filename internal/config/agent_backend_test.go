@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -101,9 +102,11 @@ func TestAgentBackendDefault(t *testing.T) {
 	}
 }
 
-// TestAppServerSettingsRoundTrip confirms the appserver block parses from JSON — a
+// TestAppServerSettingsRoundTrip confirms the appserver block parses from TOML — a
 // wrong tag would silently leave appserver.command empty, which the backend
 // rejects at startup.
+//
+//nolint:staticcheck // SA1019: appserver.config is deprecated but still honored, so still parsed.
 func TestAppServerSettingsRoundTrip(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
@@ -115,6 +118,10 @@ command = "/opt/gallium"
 args = ["serve"]
 config = "/etc/agent.toml"
 approval_policy = "on-request"
+
+[appserver.env]
+GALLIUM_CPU_MOE = "1"
+GALLIUM_GPU_LAYERS = "20"
 `
 	if err := os.WriteFile(p, []byte(body), 0o644); err != nil {
 		t.Fatal(err)
@@ -134,6 +141,12 @@ approval_policy = "on-request"
 	}
 	if s.AppServer.ApprovalPolicy != "on-request" {
 		t.Errorf("approval_policy: got %q", s.AppServer.ApprovalPolicy)
+	}
+	// The env sub-table must survive as a map and render sorted — this is the
+	// on-disk contract for reaching a server option klein has no field for.
+	wantEnv := []string{"GALLIUM_CPU_MOE=1", "GALLIUM_GPU_LAYERS=20"}
+	if got := s.AppServer.EnvSlice(); !slices.Equal(got, wantEnv) {
+		t.Errorf("env: got %v, want %v", got, wantEnv)
 	}
 }
 

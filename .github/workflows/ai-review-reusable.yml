@@ -89,7 +89,17 @@ jobs:
     runs-on: ubuntu-latest
     # Skip draft PRs; the review runs once the PR is marked ready for review.
     # Add `ready_for_review` to the caller's trigger types so this fires then.
-    if: github.event.pull_request.draft == false
+    #
+    # The same-repo gate is enforced here, not just recommended to callers. The
+    # docs above promise fork PRs are skipped, and a caller that omits the
+    # suggested `if:` would otherwise run fork-authored code in this job. GitHub
+    # already forces a read-only token on fork `pull_request` runs, so `resolve`
+    # could not have written anyway — but a promise the workflow does not keep
+    # is worth closing regardless. `resolve` needs this job, so it inherits the
+    # gate.
+    if: >-
+      github.event.pull_request.draft == false &&
+      github.event.pull_request.head.repo.full_name == github.repository
     # Runs your PR's code — narrowed away from the caller's contents: write.
     permissions:
       contents: read

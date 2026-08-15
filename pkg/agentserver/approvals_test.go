@@ -33,8 +33,8 @@ func TestApprovalNilApproverAccepts(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if resp.Decision != decisionAccept {
-		t.Errorf("nil approver should accept, got %q", resp.Decision)
+	if resp.Decision.Kind() != protocol.CommandExecutionApprovalDecisionKindAccept {
+		t.Errorf("nil approver should accept, got %q", resp.Decision.Kind())
 	}
 }
 
@@ -46,8 +46,8 @@ func TestApprovalApproverDecides(t *testing.T) {
 	deny := &toolHandler{approver: stubApprover{seen: &got}}
 	resp, _ := deny.ItemCommandExecutionRequestApproval(context.Background(),
 		protocol.CommandExecutionRequestApprovalParams{Command: strptr("rm -rf build"), Cwd: strptr("/tmp/x")})
-	if resp.Decision != decisionDecline {
-		t.Errorf("declined approver should decline, got %q", resp.Decision)
+	if resp.Decision.Kind() != protocol.CommandExecutionApprovalDecisionKindDecline {
+		t.Errorf("declined approver should decline, got %q", resp.Decision.Kind())
 	}
 	if !strings.Contains(got.Summary, "rm -rf build") || !strings.Contains(got.Summary, "/tmp/x") {
 		t.Errorf("summary missing command/cwd: %q", got.Summary)
@@ -56,7 +56,7 @@ func TestApprovalApproverDecides(t *testing.T) {
 	allow := &toolHandler{approver: stubApprover{allow: true}}
 	resp2, _ := allow.ItemCommandExecutionRequestApproval(context.Background(),
 		protocol.CommandExecutionRequestApprovalParams{Command: strptr("ls")})
-	if resp2.Decision != decisionAccept {
-		t.Errorf("approved approver should accept, got %q", resp2.Decision)
+	if resp2.Decision.Kind() != protocol.CommandExecutionApprovalDecisionKindAccept {
+		t.Errorf("approved approver should accept, got %q", resp2.Decision.Kind())
 	}
 }

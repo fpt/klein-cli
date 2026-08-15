@@ -21,8 +21,18 @@ const (
 	keyThreadID     = "threadId"
 	keyTurnID       = "turnId"
 
-	decisionAccept  = "accept"  // approve a command/file-change request
+	decisionAccept  = "accept"  // approve a file-change request
 	decisionDecline = "decline" // deny it; codex continues the turn
+)
+
+// A command-execution decision is a union in the protocol (some variants carry an
+// amendment payload), so the two simple variants klein uses are wrapped once here.
+// The kinds are protocol constants, so the checked constructor cannot reject them.
+var (
+	cmdDecisionAccept = protocol.MustCommandExecutionApprovalDecision(
+		protocol.CommandExecutionApprovalDecisionKindAccept)
+	cmdDecisionDecline = protocol.MustCommandExecutionApprovalDecision(
+		protocol.CommandExecutionApprovalDecisionKindDecline)
 )
 
 // toolHandler services codex's server→client callbacks. It embeds
@@ -66,9 +76,9 @@ func (h *toolHandler) ItemCommandExecutionRequestApproval(
 		Commands: commandActionCommands(p.CommandActions),
 	}
 	if h.approve(ctx, req) {
-		return &protocol.CommandExecutionRequestApprovalResponse{Decision: decisionAccept}, nil
+		return &protocol.CommandExecutionRequestApprovalResponse{Decision: cmdDecisionAccept}, nil
 	}
-	return &protocol.CommandExecutionRequestApprovalResponse{Decision: decisionDecline}, nil
+	return &protocol.CommandExecutionRequestApprovalResponse{Decision: cmdDecisionDecline}, nil
 }
 
 // ItemFileChangeRequestApproval is called when codex wants to apply file edits.
@@ -102,10 +112,14 @@ func (h *toolHandler) ItemToolCall(
 }
 
 func toolCallResult(success bool, text string) *protocol.DynamicToolCallResponse {
-	item := map[string]any{keyType: "inputText", keyText: text}
+	// A content item is a union keyed on `type`; this is the fixed inputText
+	// variant with its one required field, so the constructor cannot reject it.
+	item, _ := protocol.NewDynamicToolCallOutputContentItem(
+		map[string]any{keyType: "inputText", keyText: text},
+	)
 	return &protocol.DynamicToolCallResponse{
 		Success:      success,
-		ContentItems: []protocol.SanitizedDynamicToolCallResponseJSONContentItemsElem{item},
+		ContentItems: []protocol.DynamicToolCallOutputContentItem{item},
 	}
 }
 

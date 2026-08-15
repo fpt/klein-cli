@@ -114,7 +114,7 @@ func NewRunner(ctx context.Context, cfg Config) (*Runner, error) {
 
 	if _, err := client.Initialize(ctx, protocol.InitializeParams{
 		ClientInfo:   protocol.ClientInfo{Name: clientName, Version: "1.0"},
-		Capabilities: protocol.InitializeCapabilities{ExperimentalApi: true},
+		Capabilities: &protocol.InitializeCapabilities{ExperimentalApi: true},
 	}); err != nil {
 		_ = client.Close()
 		return nil, fmt.Errorf("initialize %s app-server: %w", cfg.Command, err)
@@ -159,7 +159,9 @@ func probeReady(ctx context.Context, client *rpc.Client, dialect Dialect) error 
 	if err := client.Call(ctx, "account/read", protocol.GetAccountParams{}, &resp); err != nil {
 		return fmt.Errorf("codex readiness check (account/read) failed: %w", err)
 	}
-	if resp.RequiresOpenaiAuth && resp.Account == nil {
+	// Account is a union value rather than a pointer, so "no account" is an
+	// omitted field: its raw payload is empty.
+	if resp.RequiresOpenaiAuth && len(resp.Account.RawJSON()) == 0 {
 		return errors.New("codex is not logged in — run `codex login` (or configure an API key for the codex CLI)")
 	}
 	return nil

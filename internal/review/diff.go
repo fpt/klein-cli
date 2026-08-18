@@ -168,15 +168,38 @@ func ParseUnifiedDiff(diff string) ([]FileDiff, error) {
 }
 
 // diffParser accumulates state while scanning a unified diff line by line.
+//
+// oldLeft/newLeft are how many old- and new-side lines the open hunk has still
+// to consume, taken from its @@ header. They are what keeps file content from
+// being read as diff syntax: a *deleted* line is the file's own text with a
+// "-" glued to the front, so a Lua, Haskell or SQL comment — "-- like this" —
+// arrives as "--- like this" and is indistinguishable, by prefix alone, from
+// the "--- a/path" header of the next file. Inside an open hunk the body wins;
+// see feed for why only that one pair of prefixes needs to ask.
 type diffParser struct {
 	cur     *FileDiff
 	curHunk *Hunk
 	files   []FileDiff
 	oldNo   int
 	newNo   int
+	oldLeft int
+	newLeft int
+}
+
+// inHunkBody reports whether the open hunk is still owed lines by its header.
+func (p *diffParser) inHunkBody() bool {
+	return p.curHunk != nil && (p.oldLeft > 0 || p.newLeft > 0)
 }
 
 // feed dispatches one input line. lineNo is 1-based, for error messages.
+//
+// The "--- "/"+++ " cases are the only ones that have to ask whether a hunk is
+// open, because they are the only prefixes a *content* line can forge: every
+// body line is the file's own text with one marker glued to the front, so a
+// deleted "-- comment" arrives as "--- comment" and an added "++ x" as
+// "+++ x". "diff --git" and "@@" cannot be forged that way — a body line
+// carrying them still leads with its own marker — so they stay unconditional
+// and a hunk whose header miscounts its body cannot swallow the next file.
 func (p *diffParser) feed(line string, lineNo int, isLast bool) error {
 	switch {
 	case strings.HasPrefix(line, "diff --git "):
@@ -189,9 +212,9 @@ func (p *diffParser) feed(line string, lineNo int, isLast bool) error {
 		if p.cur != nil {
 			p.cur.IsDeleted = true
 		}
-	case strings.HasPrefix(line, "--- "):
+	case strings.HasPrefix(line, "--- ") && !p.inHunkBody():
 		p.handleOldHeader(line)
-	case strings.HasPrefix(line, "+++ "):
+	case strings.HasPrefix(line, "+++ ") && !p.inHunkBody():
 		p.handleNewHeader(line)
 	case strings.HasPrefix(line, "@@ "):
 		return p.handleHunkHeader(line, lineNo)
@@ -262,6 +285,7 @@ func (p *diffParser) handleHunkHeader(line string, lineNo int) error {
 	}
 	p.curHunk = &h
 	p.oldNo, p.newNo = h.OldStart, h.NewStart
+	p.oldLeft, p.newLeft = h.OldLines, h.NewLines
 	return nil
 }
 
@@ -276,11 +300,14 @@ func (p *diffParser) handleBodyLine(line string, isLast bool) {
 	case strings.HasPrefix(line, "+"):
 		p.curHunk.Lines = append(p.curHunk.Lines, Line{Kind: LineAdded, Content: line[1:], NewNumber: p.newNo})
 		p.newNo++
+		p.newLeft--
 	case strings.HasPrefix(line, "-"):
 		p.curHunk.Lines = append(p.curHunk.Lines, Line{Kind: LineRemoved, Content: line[1:], OldNumber: p.oldNo})
 		p.oldNo++
+		p.oldLeft--
 	case strings.HasPrefix(line, `\`):
-		// "\ No newline at end of file" — not a content line.
+		// "\ No newline at end of file" — not a content line, and not one the
+		// hunk header counted.
 	default:
 		// A context line: normally prefixed with a space, but some diffs
 		// render empty context lines as "" instead of " ".
@@ -289,6 +316,8 @@ func (p *diffParser) handleBodyLine(line string, isLast bool) {
 			Line{Kind: LineContext, Content: content, OldNumber: p.oldNo, NewNumber: p.newNo})
 		p.oldNo++
 		p.newNo++
+		p.oldLeft--
+		p.newLeft--
 	}
 }
 

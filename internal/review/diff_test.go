@@ -133,6 +133,64 @@ func TestParseUnifiedDiff_PlainFormat(t *testing.T) {
 	}
 }
 
+// A body line is the file's own text with one marker glued to the front, so a
+// language whose comments start with "--" (Lua, Haskell, SQL) produces deleted
+// lines that read exactly like the "--- a/path" header of the next file — and
+// "++ x" produces added lines that read like "+++ b/path". Splitting the file
+// there truncates it to its first hunk, and every inline comment past that
+// hunk is then rejected as "outside the diff" (fpt/rs-kessel#90).
+func TestParseUnifiedDiff_BodyLinesThatLookLikeHeaders(t *testing.T) {
+	t.Parallel()
+	diff := `diff --git a/game.lua b/game.lua
+index 1111111..2222222 100644
+--- a/game.lua
++++ b/game.lua
+@@ -1,3 +1,3 @@
+--- the old comment
++-- the new comment
+ local x = 1
+ local y = 2
+@@ -40,2 +40,3 @@ function set_mode(m)
+   if m ~= mode then
++    release_all()
+     mode = m
+diff --git a/inc.c b/inc.c
+index 3333333..4444444 100644
+--- a/inc.c
++++ b/inc.c
+@@ -7,1 +7,2 @@ void f(void) {
+ 	int i = 0;
++++ i;
+`
+	files := mustParse(t, diff)
+	if len(files) != 2 {
+		t.Fatalf("expected 2 files, got %d: %+v", len(files), files)
+	}
+	if files[0].Path != "game.lua" || len(files[0].Hunks) != 2 {
+		t.Fatalf("game.lua: got path %q with %d hunks", files[0].Path, len(files[0].Hunks))
+	}
+	if files[1].Path != "inc.c" || len(files[1].Hunks) != 1 {
+		t.Fatalf("inc.c: got path %q with %d hunks", files[1].Path, len(files[1].Hunks))
+	}
+
+	// The deleted comment is a removed line, not a file header.
+	removed := linesOfKind(files[0].Hunks[0], LineRemoved)
+	if len(removed) != 1 || removed[0].Content != "-- the old comment" {
+		t.Errorf("removed lines: %+v", removed)
+	}
+	// The added "++ i;" is an added line, not a "+++ b/path" header.
+	added := linesOfKind(files[1].Hunks[0], LineAdded)
+	if len(added) != 1 || added[0].Content != "++ i;" {
+		t.Errorf("added lines: %+v", added)
+	}
+
+	// And the second hunk is commentable, which is what the rejection cost.
+	rs := CommentableRanges(files)
+	if err := rs.Validate("game.lua", 41, 0); err != nil {
+		t.Errorf("Validate(game.lua:41): %v", err)
+	}
+}
+
 func TestParseUnifiedDiff_Errors(t *testing.T) {
 	t.Parallel()
 	if _, err := ParseUnifiedDiff("not a diff at all"); err == nil {

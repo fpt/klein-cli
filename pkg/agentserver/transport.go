@@ -6,11 +6,14 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"os"
 	"os/exec"
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/pmenglund/codex-sdk-go/rpc"
 )
 
 // stdioCloseTimeout bounds how long Close waits for the app-server to exit
@@ -153,4 +156,139 @@ func childEnv(overrides []string) []string {
 		out = append(out, k+"="+merged[k])
 	}
 	return out
+}
+
+// ErrServerHungUp reports that a dialed app-server closed the connection.
+//
+// It earns a sentinel because over TCP a clean EOF is not the same news as a
+// crashed backend. An app-server that serves one client at a time hands the
+// session to whoever connects last and shuts the older socket down — rs-gallium
+// does exactly this, deliberately, so that a laptop which slept and left a
+// zombie connection behind cannot lock its owner out of their own box. Telling
+// that user "the backend died" would be a lie about which machine has the
+// problem.
+var ErrServerHungUp = errors.New(
+	"the app-server closed the connection: another client may have taken over the session, or the server stopped")
+
+// tcpDialTimeout bounds the dial only. It is short because reaching a listening
+// socket is fast or hopeless; it says nothing about how long a turn may take.
+const tcpDialTimeout = 10 * time.Second
+
+// tcpKeepAlivePeriod is how often the kernel probes an idle connection. This,
+// not a read deadline, is how a vanished peer is noticed: see tcpTransport.
+const tcpKeepAlivePeriod = 30 * time.Second
+
+// tcpTransport speaks the same line-delimited JSON-RPC as stdioTransport, over a
+// socket to an app-server that is already running elsewhere
+// (`GALLIUM_LISTEN=host:port gallium app-server`). Same methods, same
+// reverse-direction `item/tool/call` — the tools still run in *this* process,
+// which is the entire point: the model can sit on a GPU box while klein's
+// dynamic tools stay on the user's laptop.
+//
+// There is deliberately no read deadline. A turn can run for minutes with
+// nothing on the wire while the remote model works, so a deadline would kill
+// live turns rather than detect dead ones; liveness is TCP keepalive's job, set
+// once at dial.
+//
+// It satisfies rpc.Transport (ReadLine/WriteLine/Close).
+type tcpTransport struct {
+	conn    net.Conn
+	reader  *bufio.Reader
+	address string
+
+	writeMu sync.Mutex
+
+	lostMu sync.Mutex
+	lost   bool
+}
+
+// dialTCP connects to an app-server listening at address ("host:port").
+//
+// Unlike spawnStdio there is no environment to pass: the process on the other
+// end was started by someone else and read its own configuration there.
+func dialTCP(ctx context.Context, address string) (*tcpTransport, error) {
+	if address == "" {
+		return nil, errors.New("app-server address is empty")
+	}
+
+	dialer := net.Dialer{Timeout: tcpDialTimeout}
+	conn, err := dialer.DialContext(ctx, "tcp", address)
+	if err != nil {
+		return nil, fmt.Errorf("dial app-server at %s: %w", address, err)
+	}
+	// Keepalive notices a peer that vanished without noticing a turn that is
+	// merely thinking. (TCP_NODELAY is already Go's default.)
+	if tcpConn, ok := conn.(*net.TCPConn); ok {
+		_ = tcpConn.SetKeepAlive(true)
+		_ = tcpConn.SetKeepAlivePeriod(tcpKeepAlivePeriod)
+	}
+
+	return &tcpTransport{conn: conn, reader: bufio.NewReader(conn), address: address}, nil
+}
+
+// ReadLine reads a single JSONL line from the socket.
+func (t *tcpTransport) ReadLine() (string, error) {
+	// Limited, unlike the stdio path: bytes from a socket are bytes from another
+	// machine, and an unbounded read would let it choose klein's memory usage.
+	line, err := rpc.ReadLineLimited(t.reader, rpc.DefaultMaxMessageBytes)
+	if err != nil {
+		t.markLost()
+		if errors.Is(err, io.EOF) {
+			return "", fmt.Errorf("%w (%s): %w", ErrServerHungUp, t.address, err)
+		}
+		return "", fmt.Errorf("read from app-server at %s: %w", t.address, err)
+	}
+	return line, nil
+}
+
+// WriteLine writes a single JSONL line to the socket.
+func (t *tcpTransport) WriteLine(line string) error {
+	t.writeMu.Lock()
+	defer t.writeMu.Unlock()
+
+	if !strings.HasSuffix(line, "\n") {
+		line += "\n"
+	}
+	if _, err := io.WriteString(t.conn, line); err != nil {
+		t.markLost()
+		return fmt.Errorf("write to app-server at %s: %w", t.address, err)
+	}
+	return nil
+}
+
+// Close closes the socket. There is no child process here, so none of the
+// stdio path's shutdown dance (close stdin, wait, kill) applies — and the
+// server on the other end goes on running for the next client.
+func (t *tcpTransport) Close() error {
+	if err := t.conn.Close(); err != nil {
+		return fmt.Errorf("close connection to app-server at %s: %w", t.address, err)
+	}
+	return nil
+}
+
+// markLost records that this connection is finished, so a later turn can decide
+// to redial rather than talk into a socket nobody is reading. Set from the read
+// loop and read from RunTurn — different goroutines, hence the mutex.
+func (t *tcpTransport) markLost() {
+	t.lostMu.Lock()
+	defer t.lostMu.Unlock()
+	t.lost = true
+}
+
+// hungUp reports whether this connection has failed.
+func (t *tcpTransport) hungUp() bool {
+	t.lostMu.Lock()
+	defer t.lostMu.Unlock()
+	return t.lost
+}
+
+// envKeys names the variables in a "KEY=VAL" slice, for an error message that
+// says which settings are the problem.
+func envKeys(env []string) []string {
+	keys := make([]string, 0, len(env))
+	for _, kv := range env {
+		key, _, _ := strings.Cut(kv, "=")
+		keys = append(keys, key)
+	}
+	return keys
 }

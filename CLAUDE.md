@@ -207,7 +207,9 @@ This is a Go-based skill-driven coding agent that uses SKILL.md-configured skill
 - `pkg/agentserver/` - Standalone app-server (codex-protocol) client; **imports nothing of klein's**, so other Go programs can use it:
   - `runner.go` - `Runner` driving thread/turn lifecycle over JSON-RPC
   - `types.go` - the interfaces a caller supplies: `DynamicTools`, `Observer`, `Approver`, `Logger`, `Dialect` (all optional, all nil-tolerant)
-  - `transport.go` / `dynamictools.go` - stdio spawn with env control; dynamic-tool registration + callbacks
+  - `transport.go` / `dynamictools.go` - stdio spawn with env control **or** a TCP dial
+    (`Config.Address`, for an app-server running on another machine); dynamic-tool
+    registration + callbacks, which run locally whichever transport carried them
   - Boundary is enforced by `TestPackageImportsNothingOfKleins` — klein types belong behind an interface, adapted in `internal/agentbackend`
 - `internal/agentbackend/` - klein's side of that client (the `codex`/`appserver` backends):
   - `adapters.go` - klein types → the client's interfaces (`toolHost`, `eventObserver`, `turnRunner`, `backendLogger`)

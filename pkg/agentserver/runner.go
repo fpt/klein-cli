@@ -1,6 +1,6 @@
-// Package agentserver is a client for the codex app-server protocol: it spawns
-// an agent process, starts threads on it, runs turns, and reports what happened
-// along the way.
+// Package agentserver is a client for the codex app-server protocol: it opens an
+// agent — spawning a process, or dialing one already listening on a TCP address
+// — starts threads on it, runs turns, and reports what happened along the way.
 //
 // Such a server is a whole agent, not a model — it runs its own reasoning and
 // tool loop, and a turn is one request in and one answer out, with progress
@@ -29,7 +29,8 @@
 // It speaks the low-level JSON-RPC protocol rather than the SDK's Thread helpers
 // for one reason: dynamic tools require the `experimentalApi` capability
 // negotiated at initialize, which the SDK's New() does not send. The server then
-// calls back for those tools over the same stdio connection (see dynamictools.go).
+// calls back for those tools over the same connection, whichever kind it is (see
+// dynamictools.go).
 //
 // klein's own use of this package — the adapters from klein's tool managers,
 // event stream, and settings — lives in internal/agentbackend. See doc/DESIGN.md.
@@ -58,6 +59,17 @@ type Config struct {
 	Approver   Approver // decides on-request approvals (nil = auto-accept, for headless)
 	// Command and Args spawn the app-server ("codex app-server", "gallium app-server").
 	Command string
+	// Address dials an app-server already listening on "host:port" instead of
+	// spawning one, so the agent can run on another machine while the dynamic
+	// tools it calls back for still run here. Mutually exclusive with Command:
+	// a server reached this way is a process this client neither starts, nor
+	// configures, nor stops.
+	//
+	// The connection is unauthenticated and unencrypted — whatever reaches that
+	// port drives an agent with that user's privileges — so the address belongs
+	// on loopback, an SSH tunnel, or an overlay network that does the
+	// authenticating. There is deliberately no default.
+	Address string
 	Args    []string
 	// Env holds environment overrides for the child (an app-server is configured
 	// purely by env; see appServerEnv). Empty means the child inherits klein's
@@ -76,12 +88,17 @@ type Config struct {
 	Cwd            string
 }
 
-// Runner wraps a single codex app-server process, shared across all klein
-// sessions. Each session maps to one codex thread (RunTurn's threadID). Turns
-// are serialized (one process; and klein's tool stores assume a single writer).
+// Runner wraps a single app-server — a process it spawned, or a connection to
+// one already running — shared across all klein sessions. Each session maps to
+// one thread on it (RunTurn's threadID). Turns are serialized (one server; and
+// klein's tool stores assume a single writer).
 type Runner struct {
-	cfg      Config
-	client   *rpc.Client
+	cfg    Config
+	client *rpc.Client
+	// link is the dialed connection when there is one, kept for the single
+	// question stdio never has to ask: has this connection died? nil when the
+	// app-server was spawned.
+	link     *tcpTransport
 	started  map[string]bool
 	dynTools []map[string]any
 	mu       sync.Mutex
@@ -91,25 +108,69 @@ type Runner struct {
 
 const clientName = "klein"
 
-// NewRunner spawns the app-server, negotiates the experimentalApi capability,
-// and precomputes the dynamic-tool specs. Close it to stop the process. Requires
-// the backend binary on PATH (or an explicit path in settings); auth/model are
-// the backend's own.
+// NewRunner opens the app-server, negotiates the experimentalApi capability,
+// and precomputes the dynamic-tool specs. Close it to let the server go. Either
+// spawns cfg.Command (requiring the backend binary on PATH, or an explicit path
+// in settings) or dials cfg.Address; auth/model are the backend's own.
 func NewRunner(ctx context.Context, cfg Config) (*Runner, error) {
-	if cfg.Command == "" {
-		return nil, errors.New("agent backend: no command configured")
-	}
-	// The spawn context governs process startup only; lifetime is tied to Close.
-	// klein's own transport (not rpc.SpawnStdio) so the child's env can carry the
-	// backend's config-derived settings.
-	transport, err := spawnStdio(
-		context.WithoutCancel(ctx), cfg.Command, cfg.Args, childEnv(cfg.Env), os.Stderr,
-	)
-	if err != nil {
-		return nil, fmt.Errorf("spawn %s app-server: %w", cfg.Command, err)
+	if err := cfg.validate(); err != nil {
+		return nil, err
 	}
 
-	handler := &toolHandler{tools: cfg.Tools, approver: cfg.Approver}
+	runner := &Runner{
+		cfg:      cfg,
+		dynTools: buildDynamicTools(cfg.Tools),
+		started:  make(map[string]bool),
+	}
+	if err := runner.connect(ctx); err != nil {
+		return nil, err
+	}
+	return runner, nil
+}
+
+// validate rejects a configuration that cannot mean anything, before a dial or a
+// spawn turns it into an error that looks like the server's fault.
+func (c Config) validate() error {
+	switch {
+	case c.Command == "" && c.Address == "":
+		return errors.New("agent backend: no command configured")
+	case c.Command != "" && c.Address != "":
+		return fmt.Errorf(
+			"agent backend: both a command (%s) and an address (%s) are configured; "+
+				"an app-server is either spawned or dialed, not both", c.Command, c.Address)
+	}
+	// Env configures a child process, and a dialed server is not one: it read its
+	// own configuration wherever it runs. Dropping these silently would leave a
+	// user believing they had selected a model they had not.
+	if c.Address != "" && len(c.Env) > 0 {
+		return fmt.Errorf(
+			"agent backend: environment overrides (%s) cannot reach the app-server at %s, "+
+				"which is a separate process that reads its own configuration on its own machine; "+
+				"set them where that server runs, or remove them",
+			strings.Join(envKeys(c.Env), ", "), c.Address)
+	}
+	return nil
+}
+
+// target names the app-server for error messages: an address when dialed, the
+// binary when spawned.
+func (c Config) target() string {
+	if c.Address != "" {
+		return c.Address
+	}
+	return c.Command
+}
+
+// connect opens a transport to the app-server and negotiates a session on it.
+// Called once by NewRunner, and again by ensureConnected when a dialed
+// connection has died.
+func (r *Runner) connect(ctx context.Context) error {
+	transport, link, err := r.openTransport(ctx)
+	if err != nil {
+		return err
+	}
+
+	handler := &toolHandler{tools: r.cfg.Tools, approver: r.cfg.Approver}
 	client := rpc.NewClient(transport, rpc.ClientOptions{RequestHandler: handler})
 
 	if _, err := client.Initialize(ctx, protocol.InitializeParams{
@@ -117,27 +178,105 @@ func NewRunner(ctx context.Context, cfg Config) (*Runner, error) {
 		Capabilities: &protocol.InitializeCapabilities{ExperimentalApi: true},
 	}); err != nil {
 		_ = client.Close()
-		return nil, fmt.Errorf("initialize %s app-server: %w", cfg.Command, err)
+		return fmt.Errorf("initialize %s app-server: %w", r.cfg.target(), err)
 	}
 	if err := client.Notify(ctx, "initialized", nil); err != nil {
 		_ = client.Close()
-		return nil, fmt.Errorf("%s initialized notify: %w", cfg.Command, err)
+		return fmt.Errorf("%s initialized notify: %w", r.cfg.target(), err)
 	}
 
 	// Eagerly validate codex is logged in so an auth failure surfaces at klein
 	// startup, not on the user's first prompt. Skipped for the generic backend —
 	// see probeReady.
-	if err := probeReady(ctx, client, cfg.Dialect); err != nil {
+	if err := probeReady(ctx, client, r.cfg.Dialect); err != nil {
 		_ = client.Close()
-		return nil, err
+		return err
 	}
 
-	return &Runner{
-		client:   client,
-		cfg:      cfg,
-		dynTools: buildDynamicTools(cfg.Tools),
-		started:  make(map[string]bool),
-	}, nil
+	r.client = client
+	r.link = link
+	// Thread ids belong to the connection that issued them. A server hands out
+	// per-connection, sequential ids, so after a redial "thread_1" names a
+	// thread this client never started — and turn/start on it is refused.
+	// Forgetting them here is what makes the next turn open a fresh thread.
+	clear(r.started)
+	return nil
+}
+
+// openTransport spawns or dials, per the config. The second result is the same
+// transport when it is a dialed one, which is the only kind that can be
+// reconnected; nil for stdio, where a dead child is simply dead.
+func (r *Runner) openTransport(ctx context.Context) (rpc.Transport, *tcpTransport, error) {
+	if r.cfg.Address != "" {
+		// ctx bounds the dial only — net.Dialer stops consulting it once
+		// connected, so the connection is not tied to the caller's context.
+		link, err := dialTCP(ctx, r.cfg.Address)
+		if err != nil {
+			return nil, nil, err
+		}
+		return link, link, nil
+	}
+
+	// The spawn context governs process startup only; lifetime is tied to Close.
+	// klein's own transport (not rpc.SpawnStdio) so the child's env can carry the
+	// backend's config-derived settings.
+	transport, err := spawnStdio(
+		context.WithoutCancel(ctx), r.cfg.Command, r.cfg.Args, childEnv(r.cfg.Env), os.Stderr,
+	)
+	if err != nil {
+		return nil, nil, fmt.Errorf("spawn %s app-server: %w", r.cfg.Command, err)
+	}
+	return transport, nil, nil
+}
+
+// ensureConnected redials an app-server whose connection has died, so a turn the
+// user just asked for is not refused by a link that broke while klein sat idle —
+// a laptop that slept, a server that restarted, another client that took the
+// session.
+//
+// Only ever from a turn, never on a timer. A server that serves one client at a
+// time gives the session to whoever connected last, so a background reconnect
+// would let two idle klein instances take it from each other forever; tied to a
+// turn, reclaiming a session takes someone actually typing.
+//
+// What the old connection held is gone: connect() forgets its thread ids and
+// this turn starts a fresh thread. The conversation itself is klein's, so what
+// is lost is the server-side context of a thread whose connection no longer
+// exists.
+func (r *Runner) ensureConnected(ctx context.Context) error {
+	if !r.needsRedial() {
+		return nil
+	}
+	if r.cfg.Logger != nil {
+		r.cfg.Logger.Warn(
+			"the app-server connection was lost; reconnecting, and this turn starts a new thread",
+			"address", r.cfg.Address,
+		)
+	}
+
+	if r.client != nil {
+		_ = r.client.Close()
+	}
+	r.client, r.link = nil, nil
+
+	if err := r.connect(ctx); err != nil {
+		// The runner keeps no client, so the next turn tries again rather than
+		// calling through a nil one: a server that is down now (rebooting, a
+		// tunnel not yet up) is usually back before the user has stopped typing.
+		return fmt.Errorf("reconnecting to the app-server at %s: %w", r.cfg.Address, err)
+	}
+	return nil
+}
+
+// needsRedial reports whether the next turn has to open a connection first: one
+// that hung up, or one a previous reconnect failed to replace. Never true for a
+// spawned server — there is no redialing a dead child process, and pretending
+// otherwise would turn a clear failure into a nil client dereference.
+func (r *Runner) needsRedial() bool {
+	if r.cfg.Address == "" {
+		return false
+	}
+	return r.client == nil || (r.link != nil && r.link.hungUp())
 }
 
 // probeReady checks that a codex app-server is authenticated. initialize
@@ -181,6 +320,10 @@ func (r *Runner) RunTurn(
 
 	if obs == nil {
 		obs = discardObserver{}
+	}
+
+	if err := r.ensureConnected(ctx); err != nil {
+		return threadID, "", err
 	}
 
 	if threadID == "" || !r.started[threadID] {
@@ -908,7 +1051,9 @@ func (r *Runner) sandboxMode() string {
 	return "workspace-write"
 }
 
-// Close stops the codex app-server process. Safe on a nil Runner.
+// Close lets the app-server go: the spawned process is stopped, a dialed one
+// merely loses this connection and goes on serving whoever connects next. Safe
+// on a nil Runner.
 func (r *Runner) Close() error {
 	if r == nil || r.client == nil {
 		return nil

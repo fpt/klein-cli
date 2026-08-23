@@ -421,6 +421,43 @@ tool-enabled thread is always one this process started — a session's persisted
 `thread_id` from a prior run is replaced by a fresh (tool-enabled) thread on its
 next turn (memory-context injection still carries facts across restarts).
 
+**Spawned or dialed.** The transport is the one place these two deployments
+differ. `appserver.command` spawns a child and speaks JSONL over its stdio;
+`appserver.address` dials a server already listening on `host:port` (rs-gallium's
+`GALLIUM_LISTEN`) and speaks the same JSONL over a socket. Same methods, same
+`item/tool/call` in the reverse direction — which is the point of dialing: the
+model can run on a GPU box while klein's dynamic tools keep running on the user's
+machine, in klein's process, against klein's files.
+
+The two are mutually exclusive, and so is everything that configures a child:
+`args`, `env` and the deprecated `config` describe a process klein starts, and a
+dialed server was started and configured wherever it runs. Naming them alongside
+an address is an error rather than a silent no-op — a user who sets
+`appserver.env` believes they chose a model.
+
+Three consequences follow from the socket, all in `pkg/agentserver`:
+
+- **Thread ids belong to the connection.** A server hands them out per
+  connection, sequentially, so after a redial `thread_1` names a thread klein
+  never started. `connect()` clears the started-thread map, which is what makes
+  the next turn open a fresh thread instead of naming a dead one.
+- **EOF is not a crash.** A server serving one client at a time hands the session
+  to whoever connects last and closes the older socket — deliberately, so a
+  laptop that slept and left a zombie connection cannot lock its owner out. That
+  arrives as a clean EOF, reported as `ErrServerHungUp` so the message names the
+  right cause.
+- **Reconnects happen at a turn, never on a timer.** `ensureConnected` redials
+  only when the user has asked for a turn. A background reconnect would let two
+  idle klein instances take the session from each other forever; tied to a turn,
+  reclaiming it takes someone actually typing.
+
+There is no read deadline on the socket — a turn can run for minutes with nothing
+on the wire while the remote model works — so liveness is TCP keepalive's job,
+set once at dial. And the connection carries no authentication and no TLS:
+anything that reaches the port drives an agent with that user's privileges, so
+the address belongs on loopback, an SSH tunnel, or an overlay network that does
+the authenticating. klein gives it no default.
+
 **Approvals.** `approval_policy` decides who authorizes a mutation. Under
 `never` the backend proceeds unasked (headless surfaces). Otherwise it raises
 `item/commandExecution/requestApproval` / `item/fileChange/requestApproval`, and

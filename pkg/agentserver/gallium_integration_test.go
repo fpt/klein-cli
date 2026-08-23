@@ -23,7 +23,9 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"net"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -137,7 +139,7 @@ type callbackTools struct {
 
 func (c callbackTools) Specs() []ToolSpec {
 	return []ToolSpec{{
-		Name:        "KleinPing",
+		Name:        pingTool,
 		Description: "Records a note on the caller's side. Call it with any text.",
 		Parameters: []Parameter{
 			{Name: "note", Type: jsonTypeString, Required: true, Description: "text to record"},
@@ -146,7 +148,7 @@ func (c callbackTools) Specs() []ToolSpec {
 }
 
 func (c callbackTools) Call(_ context.Context, name string, args map[string]any) (string, error) {
-	if name != "KleinPing" {
+	if name != pingTool {
 		return "", fmt.Errorf("unexpected tool %q", name)
 	}
 	select {
@@ -392,4 +394,198 @@ func TestGallium_RealAppServer_FailedTurnIsAnError(t *testing.T) {
 	}
 
 	assertNoDrift(t, drift)
+}
+
+// reserveAddress picks a loopback port by binding one and letting it go.
+//
+// Racy in principle — the port is free the instant it is released, and anything
+// could take it — but gallium does not report which port it bound, so the choice
+// is this or parsing its output. Loopback ephemeral ports are not reused that
+// quickly in practice, and a lost race fails loudly (gallium exits saying it
+// cannot bind) rather than quietly.
+func reserveAddress(t *testing.T) string {
+	t.Helper()
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("reserving a port: %v", err)
+	}
+	address := listener.Addr().String()
+	if err := listener.Close(); err != nil {
+		t.Fatalf("releasing the reserved port: %v", err)
+	}
+	return address
+}
+
+// listenAt starts `gallium app-server` serving on a TCP address instead of
+// stdio, and returns the address once it is accepting connections.
+//
+// This is the deployment the TCP transport exists for, in miniature: a server
+// somebody else started, which klein neither spawns nor configures — so the
+// script and engine are set *here*, on the server's side, exactly as they would
+// be on a GPU box.
+func listenAt(t *testing.T, bin, script, workDir string) string {
+	t.Helper()
+	address := reserveAddress(t)
+
+	cmd := exec.Command(bin, "app-server")
+	cmd.Dir = workDir
+	cmd.Env = append(os.Environ(),
+		"GALLIUM_LISTEN="+address,
+		"INFERENCE_ENGINE=scripted",
+		"MODEL_PATH="+script,
+		"GALLIUM_AUTO_APPROVE=1",
+	)
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	if err := cmd.Start(); err != nil {
+		t.Fatalf("starting a listening gallium: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = cmd.Process.Kill()
+		_ = cmd.Wait()
+	})
+
+	// It binds within milliseconds or it has already failed; poll rather than
+	// sleep so the usual case costs nothing.
+	deadline := time.Now().Add(20 * time.Second)
+	for {
+		conn, err := net.DialTimeout("tcp", address, time.Second)
+		if err == nil {
+			_ = conn.Close()
+			return address
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("gallium never listened on %s: %s", address, stderr.String())
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+}
+
+// The whole point of dialing rather than spawning: the agent runs in a process
+// klein did not start (on a GPU box, in the real deployment) while the tools it
+// calls back for still run *here*. Both halves have to survive the socket, and
+// only a real gallium on a real port can show that they do.
+func TestGallium_OverTCP_RunsATurnAndCallsBackForATool(t *testing.T) {
+	t.Parallel()
+	bin := galliumBin(t)
+
+	script := writeScript(t, `{
+	  "steps": [
+	    { "toolCalls": [{ "id": "c1", "name": "KleinPing", "arguments": { "note": "over the wire" } }] },
+	    { "text": "I called your tool." }
+	  ]
+	}`)
+	workDir := t.TempDir()
+	address := listenAt(t, bin, script, workDir)
+
+	logger, drift := driftLog()
+	tools := callbackTools{called: make(chan map[string]any, 1)}
+	runner, err := NewRunner(context.Background(), Config{
+		Address:        address,
+		Logger:         logger,
+		Dialect:        DialectGeneric,
+		Cwd:            workDir,
+		ApprovalPolicy: ApprovalNever,
+		Tools:          tools,
+	})
+	if err != nil {
+		t.Fatalf("dialing gallium at %s: %v", address, err)
+	}
+	t.Cleanup(func() { _ = runner.Close() })
+
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+
+	var got []capturedEvent
+	threadID, text, err := runner.RunTurn(ctx, "", "ping yourself", "", recorder{got: &got})
+	if err != nil {
+		t.Fatalf("running a turn over TCP: %v", err)
+	}
+	if threadID == "" {
+		t.Error("the turn produced no thread id")
+	}
+	if !strings.Contains(text, "I called your tool") {
+		t.Errorf("turn text: got %q", text)
+	}
+
+	// The tool ran in this process, with the arguments the remote agent chose.
+	select {
+	case args := <-tools.called:
+		if args["note"] != "over the wire" {
+			t.Errorf("arguments did not survive the round trip: %+v", args)
+		}
+	default:
+		t.Fatal("the remote agent never called back for the registered tool")
+	}
+
+	assertNoDrift(t, drift)
+}
+
+// gallium serves one client at a time and lets the newest win, so klein can find
+// its connection closed under it — deliberately, so a laptop that slept cannot
+// lock its owner out of their own box. What must not follow is a session that
+// stays broken: the next turn the user asks for redials and starts a fresh
+// thread, because thread ids die with the connection that issued them.
+func TestGallium_OverTCP_ReconnectsAfterBeingDisplaced(t *testing.T) {
+	t.Parallel()
+	bin := galliumBin(t)
+
+	// One step per turn: the scripted engine advances per turn, not per thread,
+	// so the turn after the redial consumes the second step.
+	script := writeScript(t, `{
+	  "steps": [
+	    { "text": "first answer" },
+	    { "text": "second answer" }
+	  ]
+	}`)
+	workDir := t.TempDir()
+	address := listenAt(t, bin, script, workDir)
+
+	runner, err := NewRunner(context.Background(), Config{
+		Address:        address,
+		Dialect:        DialectGeneric,
+		Cwd:            workDir,
+		ApprovalPolicy: ApprovalNever,
+	})
+	if err != nil {
+		t.Fatalf("dialing gallium at %s: %v", address, err)
+	}
+	t.Cleanup(func() { _ = runner.Close() })
+
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+
+	first, _, err := runner.RunTurn(ctx, "", "hello", "", discardObserver{})
+	if err != nil {
+		t.Fatalf("first turn: %v", err)
+	}
+
+	// Somebody else connects. gallium hands them the session and closes klein's.
+	intruder, err := net.Dial("tcp", address)
+	if err != nil {
+		t.Fatalf("connecting as a second client: %v", err)
+	}
+	defer func() { _ = intruder.Close() }()
+
+	link := runner.link
+	waitHungUp(t, link)
+
+	// The intruder goes away again, so the next dial is klein's to win.
+	_ = intruder.Close()
+
+	// The user asks for another turn on the thread they had. klein redials and
+	// starts a new one rather than naming a thread that no longer exists.
+	second, text, err := runner.RunTurn(ctx, first, "hello again", "", discardObserver{})
+	if err != nil {
+		t.Fatalf("turn after being displaced: %v", err)
+	}
+	if text == "" {
+		t.Error("the turn after the reconnect produced no text")
+	}
+	if !runner.started[second] {
+		t.Errorf("thread %q was not recorded as started after the reconnect", second)
+	}
+	if runner.link == link {
+		t.Error("the runner is still holding the connection gallium closed")
+	}
 }

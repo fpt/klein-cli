@@ -78,8 +78,12 @@ jobs:
         run: cargo build --release --locked -p gallium-agent --no-default-features
 
       # -run Gallium only: the rest of the suite already ran in Unit Tests.
+      #
+      # Two packages, because the pairing is tested at two levels: the protocol
+      # client (pkg/agentserver) and klein's own tools serving a gallium that has
+      # switched its built-ins off (internal/agentbackend).
       - name: Run the integration tests
         working-directory: klein
         env:
           GALLIUM_BIN: ${{ github.workspace }}/rs-gallium/target/release/gallium
-        run: go test ./pkg/agentserver/ -run Gallium -v
+        run: go test ./pkg/agentserver/ ./internal/agentbackend/ -run Gallium -v

@@ -211,11 +211,17 @@ func TestValidateDialedAppServerRejectsSpawnSettings(t *testing.T) {
 		want     string
 		settings config.AppServerSettings
 	}{
-		{argCommand, argCommand, config.AppServerSettings{Command: appServerBin}},
-		{fieldArgs, fieldArgs, config.AppServerSettings{Args: []string{appServerSubcommand}}},
-		{fieldEnv, fieldEnv, config.AppServerSettings{Env: map[string]string{"MODEL_PATH": "/m.gguf"}}},
-		{fieldConfig, fieldConfig, config.AppServerSettings{Config: "/etc/agent.toml"}},
-		{"address alone", "", config.AppServerSettings{}},
+		{name: argCommand, want: argCommand, settings: config.AppServerSettings{Command: appServerBin}},
+		{name: fieldArgs, want: fieldArgs, settings: config.AppServerSettings{
+			Args: []string{appServerSubcommand},
+		}},
+		{name: fieldEnv, want: fieldEnv, settings: config.AppServerSettings{
+			Env: map[string]string{"MODEL_PATH": "/m.gguf"},
+		}},
+		{name: fieldConfig, want: fieldConfig, settings: config.AppServerSettings{
+			Config: "/etc/agent.toml",
+		}},
+		{name: "address alone", want: "", settings: config.AppServerSettings{}},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {

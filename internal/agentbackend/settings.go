@@ -152,18 +152,15 @@ func approvalPolicy(settings *config.Settings, opts RunnerOptions) string {
 	return opts.ApprovalPolicy
 }
 
-// NewRunnerFromSettings builds a Runner from klein settings + a working dir.
-// Model/effort come from the llm block; the binary path and sandbox come from
-// the optional "codex" or "appserver" block. opts supplies the mode's approval
-// behavior. Two sets of tools are made reachable to a backend turn:
-//   - klein's configured external MCP servers (translated to backend config), and
-//   - klein's native tools (memory, schedule) registered as dynamic tools,
-//     serviced in-process over the app-server JSON-RPC connection — so the
-//     backend hits the same live tool-manager instances (same files, same locks).
-func NewRunnerFromSettings(
-	ctx context.Context, settings *config.Settings, workingDir string, opts RunnerOptions,
-) (*agentserver.Runner, error) {
-	nativeManagers := []domain.ToolManager{
+// offeredManagers assembles the tool managers klein exposes to a backend turn.
+//
+// The workspace set is opt-in because it is a substitution rather than an
+// addition: a server resolving a call to the first exact name match will run
+// klein's Read/Write/Bash in place of the ones it shipped with. Where the server
+// has good tools of its own and runs on the same machine, that only moves the
+// work; it earns its keep when the server is somewhere else.
+func offeredManagers(settings *config.Settings, workingDir string) []domain.ToolManager {
+	managers := []domain.ToolManager{
 		tool.NewMemoryToolManager(settings.MemoryDir()),
 		tool.NewScheduleToolManager(settings.SchedulesFile()),
 	}
@@ -174,9 +171,72 @@ func NewRunnerFromSettings(
 		// No logger here; skip silently rather than fail backend startup.
 		_ = err
 	} else {
-		nativeManagers = append(nativeManagers, kb)
+		managers = append(managers, kb)
 	}
-	nativeTools := tool.NewCompositeToolManager(nativeManagers...)
+	if wantsWorkspaceTools(settings) {
+		managers = append(managers, newWorkspaceTools(settings, workingDir))
+	}
+	return managers
+}
+
+// wantsWorkspaceTools reports whether klein should supply the workspace tools.
+//
+// The default follows the transport, because the server's own behavior does. A
+// dialed server lends no filesystem or shell tools of its own — over a socket
+// that carries no identity, its built-ins would act with the privileges of
+// whoever started it, for whoever happened to connect — so klein's are the only
+// hands the model has, and they are on unless the user says otherwise. A spawned
+// server is klein's own child with klein's privileges and working tools already,
+// so there klein's are a substitution and stay off until asked for.
+//
+// Appserver-only, like dialAddress: the setting lives in that block, and codex
+// brings its own shell and apply_patch that klein has no business shadowing.
+func wantsWorkspaceTools(settings *config.Settings) bool {
+	if settings.LLM.Backend != config.BackendAppServer {
+		return false
+	}
+	if explicit := settings.AppServer.WorkspaceTools; explicit != nil {
+		return *explicit
+	}
+	return settings.AppServer.Address != ""
+}
+
+// validateWorkspaceTools rejects the one combination that cannot work: a dialed
+// server, told explicitly not to expect klein's tools.
+//
+// Nothing on the other end will cover for it. The server lends none of its own,
+// so the model gets a turn with no way to read, write or run anything — a
+// session that starts cleanly and then fails at the first useful thing it tries.
+// Better to say so at startup, where the setting that caused it is still in
+// view.
+func validateWorkspaceTools(s config.AppServerSettings) error {
+	if s.Address == "" || s.WorkspaceTools == nil || *s.WorkspaceTools {
+		return nil
+	}
+	return fmt.Errorf(
+		"appserver.workspace_tools = false leaves the app-server at %s with no tools: a server reached "+
+			"over the network lends none of its own (its built-ins would run as the user it was started "+
+			"as, for whoever connects), so klein has to supply them. Remove the setting, or spawn the "+
+			"server locally with appserver.command instead",
+		s.Address)
+}
+
+// NewRunnerFromSettings builds a Runner from klein settings + a working dir.
+// Model/effort come from the llm block; the binary path and sandbox come from
+// the optional "codex" or "appserver" block. opts supplies the mode's approval
+// behavior. Three sets of tools are made reachable to a backend turn:
+//   - klein's configured external MCP servers (translated to backend config),
+//   - klein's native tools (memory, schedule) registered as dynamic tools,
+//     serviced in-process over the app-server JSON-RPC connection — so the
+//     backend hits the same live tool-manager instances (same files, same
+//     locks), and
+//   - klein's workspace tools (Read/Write/Edit/…/Bash), when
+//     appserver.workspace_tools says so — the client half of a server serving
+//     none of its own. See newWorkspaceTools.
+func NewRunnerFromSettings(
+	ctx context.Context, settings *config.Settings, workingDir string, opts RunnerOptions,
+) (*agentserver.Runner, error) {
+	nativeTools := tool.NewCompositeToolManager(offeredManagers(settings, workingDir)...)
 
 	// Dialed or spawned: an address names a server running somewhere else, which
 	// klein neither launches nor configures, so none of the launch settings apply.
@@ -188,6 +248,9 @@ func NewRunnerFromSettings(
 		if err := validateDialedAppServer(settings.AppServer); err != nil {
 			return nil, err
 		}
+		if err := validateWorkspaceTools(settings.AppServer); err != nil {
+			return nil, err
+		}
 	} else {
 		var err error
 		if path, args, err = command(settings); err != nil {
@@ -197,6 +260,11 @@ func NewRunnerFromSettings(
 			return nil, err
 		}
 	}
+
+	// Wrapped, not raw: klein now runs tools the backend used to run itself, and
+	// the approval that came with them has to come from somewhere.
+	offeredTools := withApproval(newToolHost(nativeTools), backendApprover(opts.Approver))
+	logOfferedTools(opts.Logger, offeredTools)
 
 	runner, err := agentserver.NewRunner(ctx, agentserver.Config{
 		Command:        path,
@@ -210,7 +278,7 @@ func NewRunnerFromSettings(
 		SandboxMode:    settings.Codex.SandboxMode,
 		Cwd:            workingDir,
 		MCPServers:     MCPServersConfig(settings.MCP.Servers),
-		Tools:          newToolHost(nativeTools),
+		Tools:          offeredTools,
 		Approver:       backendApprover(opts.Approver),
 		Logger:         backendLogger(opts.Logger),
 	})

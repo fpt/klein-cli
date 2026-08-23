@@ -215,6 +215,10 @@ This is a Go-based skill-driven coding agent that uses SKILL.md-configured skill
   - `adapters.go` - klein types → the client's interfaces (`toolHost`, `eventObserver`, `turnRunner`, `backendLogger`)
   - `settings.go` / `backend.go` - settings→`Config` plumbing and the `domain.AgentBackend` implementations
   - `autoapprove.go` - the command allowlist (klein policy, not protocol)
+  - `workspace.go` - klein's own Read/Write/Edit/…/Bash offered to the backend as
+    dynamic tools (`appserver.workspace_tools`; on by default when dialing, since a
+    listening server lends none of its own), plus the approval gate that has to come
+    with them
 - `pkg/agent/` - Agent domain layer:
   - `domain/` - Domain interfaces and types
   - `react/` - ReAct pattern implementation with thinking channel support

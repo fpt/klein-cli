@@ -422,6 +422,30 @@ var ShellEnvironmentInheritModes = []string{"core", "all", "none"}
 // Nothing here names a particular implementation: Command is required precisely
 // because there is no single "the" app-server binary.
 type AppServerSettings struct {
+	// WorkspaceTools offers klein's own workspace tools — Read, Write, Edit,
+	// MultiEdit, LS, Glob, Grep, Bash — to the server as dynamic tools, so they
+	// run here, in klein's process, against klein's working directory.
+	//
+	// The default depends on how the server is reached, because the server's own
+	// behavior does:
+	//
+	//   - Dialed (see Address): on, and not really optional. A listening
+	//     rs-gallium lends no filesystem or shell tools at all — its built-ins
+	//     would run as the user *it* was started as, and a socket carrying no
+	//     authentication cannot say who is asking. So a dialed server has no
+	//     hands unless klein supplies them, and an explicit false is refused
+	//     rather than obeyed into a session that cannot do anything.
+	//   - Spawned: off. That server is klein's own child, running with klein's
+	//     privileges and its own tools already work. Turning it on there is a
+	//     substitution — klein's tools replace the built-ins sharing a name — and
+	//     it earns its keep when klein's allowlist, blacklist and approval
+	//     prompts are the ones that should apply.
+	//
+	// A pointer so those three states stay distinct: unset takes the default for
+	// the transport, where an explicit value is honored or refused on its own
+	// terms. First by fieldalignment for the same reason — it is the only
+	// pointer here — not because it is the field to read first; that is Command.
+	WorkspaceTools *bool `toml:"workspace_tools,omitempty"`
 	// Command is the app-server binary (e.g. "gallium", or an absolute path).
 	// Required — this backend has no default binary — unless Address is set, in
 	// which case klein starts nothing and Command must be empty.
@@ -461,7 +485,7 @@ type AppServerSettings struct {
 	Env map[string]string `toml:"env,omitempty"`
 	// Args overrides the subcommand used to enter app-server mode.
 	// Empty → ["app-server"], the protocol's conventional entry point.
-	// Last field by fieldalignment: the only one carrying a slice header.
+	// Late by fieldalignment: the only one carrying a slice header.
 	Args []string `toml:"args,omitempty"`
 }
 

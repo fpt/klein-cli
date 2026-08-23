@@ -139,6 +139,12 @@ GALLIUM_GPU_LAYERS = "20"
 	if s.AppServer.Config != "/etc/agent.toml" {
 		t.Errorf("config: got %q", s.AppServer.Config)
 	}
+	// Omitted stays nil rather than false: the default depends on how the server
+	// is reached, and a false here would be indistinguishable from a user asking
+	// for no tools at all.
+	if s.AppServer.WorkspaceTools != nil {
+		t.Errorf("workspace_tools was not set but parsed as %v", *s.AppServer.WorkspaceTools)
+	}
 	if s.AppServer.ApprovalPolicy != "on-request" {
 		t.Errorf("approval_policy: got %q", s.AppServer.ApprovalPolicy)
 	}
@@ -161,6 +167,7 @@ func TestAppServerAddressRoundTrip(t *testing.T) {
 [appserver]
 address = "gpubox:4711"
 approval_policy = "on-request"
+workspace_tools = true
 `
 	if err := os.WriteFile(p, []byte(body), 0o600); err != nil {
 		t.Fatal(err)
@@ -171,6 +178,9 @@ approval_policy = "on-request"
 	}
 	if s.AppServer.Address != "gpubox:4711" {
 		t.Errorf("address: got %q", s.AppServer.Address)
+	}
+	if s.AppServer.WorkspaceTools == nil || !*s.AppServer.WorkspaceTools {
+		t.Errorf("workspace_tools: got %v, want true", s.AppServer.WorkspaceTools)
 	}
 	// Nothing is spawned in this shape, so command stays empty rather than
 	// acquiring a default.

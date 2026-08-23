@@ -102,3 +102,58 @@ func keys(m map[string]map[string]any) []string {
 	}
 	return out
 }
+
+// A compound parameter's shape has to survive into the rendered schema. Without
+// it an array reaches the backend as a bare {"type":"array"} and the model is
+// left guessing what an element contains — which shows up as a model that
+// "cannot use the tool" rather than as a schema problem.
+func TestToInputSchema_CarriesCompoundShapes(t *testing.T) {
+	t.Parallel()
+
+	element := map[string]any{
+		keyType:      jsonTypeObject,
+		"properties": map[string]any{"file_path": map[string]any{keyType: jsonTypeString}},
+	}
+	schema := toInputSchema([]Parameter{{
+		Name:        "edits",
+		Type:        jsonTypeArray,
+		Description: "edits to apply",
+		Required:    true,
+		Schema:      map[string]any{"items": element},
+	}})
+
+	props := schema["properties"].(map[string]any)
+	edits := props["edits"].(map[string]any)
+	if edits[keyType] != jsonTypeArray {
+		t.Errorf("type = %v", edits["type"])
+	}
+	// The fields keep their meaning alongside the passthrough.
+	if edits["description"] != "edits to apply" {
+		t.Errorf("description = %v", edits["description"])
+	}
+	items, ok := edits["items"].(map[string]any)
+	if !ok {
+		t.Fatalf("the element schema did not survive: %+v", edits)
+	}
+	if _, ok := items["properties"].(map[string]any)["file_path"]; !ok {
+		t.Errorf("element properties lost: %+v", items)
+	}
+}
+
+// Schema is an escape hatch, so a key it sets wins over the one rendered from
+// the struct's fields — otherwise a caller could describe a shape the struct
+// cannot express and then be overruled by the struct's guess at it.
+func TestToInputSchema_ExplicitKeysWin(t *testing.T) {
+	t.Parallel()
+
+	schema := toInputSchema([]Parameter{{
+		Name: "mode",
+		Type: jsonTypeString,
+		// A string with a fixed set of values: expressible only here.
+		Schema: map[string]any{"enum": []string{"files", "count"}, keyType: jsonTypeString},
+	}})
+	mode := schema["properties"].(map[string]any)["mode"].(map[string]any)
+	if mode["enum"] == nil {
+		t.Errorf("enum lost: %+v", mode)
+	}
+}

@@ -34,6 +34,13 @@ type Logger interface {
 // is treated as a string, since a tool the backend cannot describe is worse than
 // one described loosely.
 type Parameter struct {
+	// Schema carries JSON Schema keys this struct has no field for, merged into
+	// the rendered parameter — `items` for an array, `enum`, `properties` for an
+	// object. Without it a compound parameter reaches the backend as a bare
+	// {"type":"array"}, and a model asked to fill it has nothing to go on but the
+	// description. Keys here win over the ones rendered from the fields below,
+	// which is what makes it an escape hatch rather than a second opinion.
+	Schema      map[string]any
 	Name        string
 	Description string
 	Type        string

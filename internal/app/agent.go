@@ -598,23 +598,11 @@ type agentTools struct {
 	deferred    *tool.DeferredToolManager
 }
 
-// buildAgentTools constructs every tool manager (universal + specialized + MCP)
-// and combines them into the composite/deferred views. memoryDir and
-// toolResultsDir (when non-empty) and ~/.klein/skills are added to the
-// filesystem allowlist.
-func buildAgentTools(opts AgentOptions, skills skill.DefinitionMap, memoryDir, toolResultsDir string) agentTools {
-	workingDir := opts.WorkingDir
-
-	var todoToolManager *tool.TodoToolManager
-	var taskToolManager *tool.TaskToolManager
-	if opts.IsInteractiveMode {
-		todoToolManager = tool.NewTodoToolManager(workingDir)
-		taskToolManager = tool.NewTaskToolManager(workingDir)
-	} else {
-		todoToolManager = tool.NewInMemoryTodoToolManager()
-		taskToolManager = tool.NewInMemoryTaskToolManager()
-	}
-
+// agentFileSystemConfig assembles the paths the agent may touch: its working
+// directory, plus the klein-owned directories it has to reach to do its job.
+// The list bounds reading and searching as well as writing, so anything left out
+// is invisible to the agent entirely.
+func agentFileSystemConfig(workingDir, memoryDir, toolResultsDir string) repository.FileSystemConfig {
 	fsConfig := infra.DefaultFileSystemConfig(workingDir)
 	if memoryDir != "" {
 		fsConfig.AllowedDirectories = append(fsConfig.AllowedDirectories, memoryDir)
@@ -634,6 +622,27 @@ func buildAgentTools(opts AgentOptions, skills skill.DefinitionMap, memoryDir, t
 			filepath.Join(home, ".klein", "skills"),
 			filepath.Join(home, ".klein", "roles"))
 	}
+	return fsConfig
+}
+
+// buildAgentTools constructs every tool manager (universal + specialized + MCP)
+// and combines them into the composite/deferred views. memoryDir and
+// toolResultsDir (when non-empty) and ~/.klein/skills are added to the
+// filesystem allowlist.
+func buildAgentTools(opts AgentOptions, skills skill.DefinitionMap, memoryDir, toolResultsDir string) agentTools {
+	workingDir := opts.WorkingDir
+
+	var todoToolManager *tool.TodoToolManager
+	var taskToolManager *tool.TaskToolManager
+	if opts.IsInteractiveMode {
+		todoToolManager = tool.NewTodoToolManager(workingDir)
+		taskToolManager = tool.NewTaskToolManager(workingDir)
+	} else {
+		todoToolManager = tool.NewInMemoryTodoToolManager()
+		taskToolManager = tool.NewInMemoryTaskToolManager()
+	}
+
+	fsConfig := agentFileSystemConfig(workingDir, memoryDir, toolResultsDir)
 	filesystemManager := tool.NewFileSystemToolManager(opts.FsRepo, fsConfig, workingDir)
 
 	bashToolManager := tool.NewBashToolManager(tool.BashConfig{
@@ -651,7 +660,13 @@ func buildAgentTools(opts AgentOptions, skills skill.DefinitionMap, memoryDir, t
 	// Combine ALL tool managers into one composite.
 	managers := []domain.ToolManager{
 		todoToolManager, taskToolManager, filesystemManager, bashToolManager,
-		tool.NewSearchToolManager(tool.SearchConfig{WorkingDir: workingDir}),
+		tool.NewSearchToolManager(tool.SearchConfig{
+			// Searching is reading, so it is bounded by the same list — including
+			// the memory/tool-results/skills directories added above, which a
+			// search would otherwise be unable to reach now that it is bounded.
+			WorkingDir:         workingDir,
+			AllowedDirectories: fsConfig.AllowedDirectories,
+		}),
 		tool.NewWebToolManager(), tool.NewPDFToolManager(workingDir), tool.NewMarketToolManager(),
 		tool.NewSkillToolManager(skills, workingDir), askQuestionManager, planToolManager,
 		taskAgentManager, agentRunManager, tool.NewResearcherToolManager(),

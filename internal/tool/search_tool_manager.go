@@ -12,20 +12,40 @@ import (
 	"github.com/fpt/klein-cli/pkg/message"
 )
 
+// argPattern is the argument both search tools take: a glob for Glob, a regex
+// for Grep.
+const argPattern = "pattern"
+
 // SearchToolManager provides Glob and Grep tools
 type SearchToolManager struct {
-	tools      map[message.ToolName]message.Tool
-	workingDir string
+	tools              map[message.ToolName]message.Tool
+	workingDir         string
+	allowedDirectories []string
 }
 
 type SearchConfig struct {
 	WorkingDir string
+	// AllowedDirectories bounds where a search may look, exactly as the
+	// filesystem tools' allowlist bounds where a file may be read. Empty means
+	// the working directory alone — searching is a read, and a read tool that
+	// answers about any path on the machine is a hole whether or not the caller
+	// remembered to configure one.
+	AllowedDirectories []string
 }
 
 func NewSearchToolManager(cfg SearchConfig) domain.ToolManager {
+	absWorkingDir, err := filepath.Abs(cfg.WorkingDir)
+	if err != nil {
+		absWorkingDir = cfg.WorkingDir
+	}
+	// Resolved once, here, so every path this manager hands to `rg`/`grep`/`find`
+	// names where the workspace actually is — including the bare working
+	// directory, which is what an omitted `path` argument searches.
+	absWorkingDir = resolveSymlinks(absWorkingDir)
 	m := &SearchToolManager{
-		tools:      make(map[message.ToolName]message.Tool),
-		workingDir: cfg.WorkingDir,
+		tools:              make(map[message.ToolName]message.Tool),
+		workingDir:         absWorkingDir,
+		allowedDirectories: ensureWorkingDirectoryInAllowedList(cfg.AllowedDirectories, absWorkingDir),
 	}
 	m.register()
 	return m
@@ -50,14 +70,14 @@ func (m *SearchToolManager) register() {
 	// Glob tool: fast file listing by pattern
 	m.RegisterTool("Glob", "Find files by glob pattern (e.g., **/*.go)",
 		[]message.ToolArgument{
-			{Name: "pattern", Description: "Glob pattern to match", Required: true, Type: "string"},
+			{Name: argPattern, Description: "Glob pattern to match", Required: true, Type: "string"},
 			{Name: "path", Description: "Base directory (optional)", Required: false, Type: "string"},
 		}, m.handleGlob)
 
 	// Grep tool: ripgrep-style content search
 	m.RegisterTool("Grep", "Search file contents using ripgrep-compatible flags",
 		[]message.ToolArgument{
-			{Name: "pattern", Description: "Regex pattern to search", Required: true, Type: "string"},
+			{Name: argPattern, Description: "Regex pattern to search", Required: true, Type: "string"},
 			{Name: "path", Description: "File/dir to search (optional)", Required: false, Type: "string"},
 			{Name: "glob", Description: "Glob filter (maps to --glob)", Required: false, Type: "string"},
 			{Name: "output_mode", Description: "content|files_with_matches|count", Required: false, Type: "string"},
@@ -73,19 +93,44 @@ func (m *SearchToolManager) register() {
 }
 
 // resolve path relative to working dir
+// resolvePath turns a caller's path into an absolute one inside the allowlist,
+// or refuses it.
+//
+// The refusal is the point. Glob and Grep hand this path to `rg`/`find`, which
+// will happily answer about anywhere on the machine — so without the check they
+// read outside the boundary the filesystem tools enforce, and report what they
+// found. That gap is only cosmetic while klein's own loop is the caller; once
+// these tools are offered to an app-server (see internal/agentbackend/workspace.go)
+// it is a remote caller reading arbitrary paths.
+//
+// Cleaning before checking is what makes `..` a non-escape: filepath.Abs cleans,
+// so "../../etc" is resolved and then measured against the allowlist rather than
+// being matched as a prefix that happens to start inside it.
 func (m *SearchToolManager) resolvePath(p string) (string, error) {
 	if p == "" {
 		return m.workingDir, nil
 	}
-	if filepath.IsAbs(p) {
-		return p, nil
+	resolved := p
+	if !filepath.IsAbs(resolved) {
+		resolved = filepath.Join(m.workingDir, resolved)
 	}
-	return filepath.Abs(filepath.Join(m.workingDir, p))
+	resolved, err := filepath.Abs(resolved)
+	if err != nil {
+		return "", fmt.Errorf("resolving %s: %w", p, err)
+	}
+	if !pathWithinAllowedDirectories(resolved, m.allowedDirectories) {
+		return "", fmt.Errorf("path %s is outside the allowed directories", p)
+	}
+	// Hand back the resolved location, not the name it was reached by, so the
+	// search runs on exactly what was checked. Passing the symlink instead would
+	// leave `rg`/`grep` to resolve it again, and a check that validates one path
+	// while the command opens another is not a check.
+	return resolveSymlinks(resolved), nil
 }
 
 // handleGlob tries rg --files with --glob when available; falls back to find
 func (m *SearchToolManager) handleGlob(ctx context.Context, args message.ToolArgumentValues) (message.ToolResult, error) {
-	pattern, ok := args["pattern"].(string)
+	pattern, ok := args[argPattern].(string)
 	if !ok {
 		return message.NewToolResultError("pattern parameter is required"), nil
 	}
@@ -141,7 +186,7 @@ func (m *SearchToolManager) handleGlob(ctx context.Context, args message.ToolArg
 
 // handleGrep executes ripgrep when available; falls back to grep
 func (m *SearchToolManager) handleGrep(ctx context.Context, args message.ToolArgumentValues) (message.ToolResult, error) {
-	pattern, ok := args["pattern"].(string)
+	pattern, ok := args[argPattern].(string)
 	if !ok {
 		return message.NewToolResultError("pattern parameter is required"), nil
 	}
@@ -226,7 +271,11 @@ func (m *SearchToolManager) handleGrep(ctx context.Context, args message.ToolArg
 	}
 
 	// Fallback to grep
-	grepArgs := []string{"-R"}
+	// -r, never -R: GNU grep's -R is --dereference-recursive, so it walks out of
+	// the workspace through any directory symlink inside it — past a boundary
+	// that was checked on the way in. -r matches what rg and find already do by
+	// default, which is not to follow.
+	grepArgs := []string{"-r"}
 	if v, ok := args["-i"].(bool); ok && v {
 		grepArgs = append(grepArgs, "-i")
 	}

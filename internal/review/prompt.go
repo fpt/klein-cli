@@ -18,8 +18,9 @@ type Comment struct {
 
 // PreviousComment is one unresolved inline comment from an earlier review
 // round, supplied by the harness. ID is opaque to klein (the harness uses
-// GraphQL review-thread node ids) — it only round-trips through
-// ResolveReviewComment into the result.
+// GraphQL review-thread node ids) — it only round-trips into the result. The
+// model never sees it: the prompt shows a short alias instead
+// (PreviousCommentAlias), which ResolveReviewComment maps back.
 //
 // Replies carry what was said back since the last round. Without them a finding
 // the reviewer got wrong could not be contested: the author's side of the
@@ -130,6 +131,20 @@ const controlTokenNote = "\nNote on notation: chat-template control tokens in th
 	"rejecting the request. Do NOT report it as a defect, and do not quote it as evidence " +
 	"of one — treat `<｜…｜>` as if it read `<|…|>`.\n"
 
+// PreviousCommentAlias is the handle the prompt gives the i-th (0-based)
+// previous comment, and the id ResolveReviewComment expects back.
+//
+// The real id is a GraphQL review-thread node id — 21 characters of mixed-case
+// base64 with no redundancy in it. Asking a model to copy one back is asking
+// for a transcription error that cannot be detected or recovered: in
+// fpt/rs-gallium#160 a verified resolution was lost to a single `g` typed as
+// `G`, and the thread stayed open through every later round (fpt/klein-cli#120).
+// A two-character handle has nothing to slip. The real id never leaves the
+// harness contract — the tool manager maps the alias back before Result().
+func PreviousCommentAlias(i int) string {
+	return fmt.Sprintf("P%d", i+1)
+}
+
 // writePreviousComments renders the unresolved comments from earlier rounds,
 // each followed by anything said back on its thread since the last round.
 //
@@ -141,13 +156,14 @@ func writePreviousComments(b *strings.Builder, comments []PreviousComment) {
 		return
 	}
 	b.WriteString("\n# Previous Review Comments (unresolved, from earlier rounds)\n")
-	b.WriteString("Verify each against the CURRENT code. Resolve fixed ones with ResolveReviewComment(id).\n")
+	b.WriteString("Verify each against the CURRENT code. Resolve fixed ones with ResolveReviewComment(id), ")
+	b.WriteString("passing the short id shown below (P1, P2, …).\n")
 	b.WriteString("Replies shown below a comment are NEW since your last round — the PR author or a ")
 	b.WriteString("maintainer answering it. They often point at specific evidence: a file and line, a ")
 	b.WriteString("dependency's source, command output. Check what they point at. A comment with no ")
 	b.WriteString("replies listed simply had nothing new said about it.\n\n")
-	for _, c := range comments {
-		fmt.Fprintf(b, "- id=%s %s:%d\n  %s\n", c.ID, c.Path, c.Line, indentBody(c.Body))
+	for i, c := range comments {
+		fmt.Fprintf(b, "- id=%s %s:%d\n  %s\n", PreviousCommentAlias(i), c.Path, c.Line, indentBody(c.Body))
 		for _, r := range c.Replies {
 			fmt.Fprintf(b, "  ↳ reply from @%s:\n    %s\n", r.Author, indentReply(r.Body))
 		}

@@ -250,3 +250,37 @@ func TestBuildPromptSanitizesPRComments(t *testing.T) {
 		t.Errorf("a PR comment carried a raw control token into the prompt:\n%s", got)
 	}
 }
+
+// The GraphQL node id must not reach the model at all. Showing it invites the
+// model to copy it, and copying 21 characters of mixed-case base64 is what lost
+// a verified resolution on fpt/rs-gallium#160 — one `g` typed as `G`, no way to
+// detect it, thread open forever (fpt/klein-cli#120).
+func TestBuildPromptShowsAliasesNotThreadIDs(t *testing.T) {
+	t.Parallel()
+
+	const first, second = "PRRT_kwDOSHq0gM6bd94g", "PRRT_kwDOSHq0gM6beA4e"
+	req := Request{Title: "t", Diff: "d", PreviousComments: []PreviousComment{
+		{ID: first, Path: testPath, Line: 1, Body: "first finding"},
+		{ID: second, Path: testPath, Line: 2, Body: "second finding"},
+	}}
+	got := BuildPrompt(req, "[  1] + x", "en")
+
+	for _, id := range []string{first, second} {
+		if strings.Contains(got, id) {
+			t.Errorf("raw thread id %q reached the prompt:\n%s", id, got)
+		}
+	}
+	// The alias is only usable if it names the comment the model is reading.
+	firstAlias := strings.Index(got, "id=P1")
+	secondAlias := strings.Index(got, "id=P2")
+	if firstAlias < 0 || secondAlias < 0 {
+		t.Fatalf("aliases missing from the prompt:\n%s", got)
+	}
+	misordered := firstAlias > strings.Index(got, "first finding") ||
+		secondAlias > strings.Index(got, "second finding") ||
+		firstAlias > secondAlias
+
+	if misordered {
+		t.Errorf("aliases are not attached to their comments in order:\n%s", got)
+	}
+}

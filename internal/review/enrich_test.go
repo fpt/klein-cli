@@ -250,7 +250,7 @@ func TestBuildPrompt_IncrementalWithPreviousComments(t *testing.T) {
 		"# Review Mode: incremental",
 		"ONLY the changes since the last review round",
 		"# Previous Review Comments",
-		"id=PRRT_1 a.go:9",
+		"id=P1 a.go:9",
 		"bad divisor\n  second line", // multi-line body indented under its item
 		"ResolveReviewComment",
 		"do NOT re-post a duplicate",

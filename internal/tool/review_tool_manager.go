@@ -7,6 +7,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/fpt/klein-cli/internal/review"
 	"github.com/fpt/klein-cli/pkg/agent/domain"
 	"github.com/fpt/klein-cli/pkg/message"
 )
@@ -92,23 +93,39 @@ var reviewVerdicts = map[string]bool{"approve": true, reviewVerdictDefault: true
 // tools that accumulate a code review in memory. It performs no I/O — the
 // `klein review` subcommand reads Result() after the agent run.
 type ReviewToolManager struct {
-	tools       map[message.ToolName]message.Tool
-	validate    LineValidator
-	listRanges  RangeLister
-	previousIDs map[string]bool
-	summary     string
-	verdict     string
-	comments    []ReviewComment
-	resolved    []ResolvedComment
+	tools      map[message.ToolName]message.Tool
+	validate   LineValidator
+	listRanges RangeLister
+	// previousIDs maps every name a previous comment answers to — its short
+	// alias ("p1") and its real id, both lowercased — to the real id the
+	// harness needs back. Lowercased because the alternative is losing a
+	// verified resolution to a capital letter (fpt/klein-cli#120).
+	previousIDs map[string]string
+	// previousAliases lists the aliases in prompt order, for the rejection
+	// message. A model that got the id wrong needs to be told the right ones,
+	// not told again that it was wrong.
+	previousAliases []string
+	// aliasByID names a resolved comment back in the vocabulary the model was
+	// given, so the finalize bounce can say which threads are still open
+	// rather than which opaque ids are.
+	aliasByID map[string]string
+	summary   string
+	verdict   string
+	comments  []ReviewComment
+	resolved  []ResolvedComment
 
 	mu sync.Mutex
 	// rejected counts inline comments that were attempted but not recorded
 	// because the target was unusable (unparseable/out-of-range line, bad
 	// severity, missing field) — i.e. findings the model has lost track of.
 	// Duplicates don't count: that finding is already recorded.
-	rejected  int
-	bounced   bool
-	finalized bool
+	rejected int
+	// rejectedResolves counts ResolveReviewComment calls that named nothing:
+	// a resolution the model meant to make and may have walked away from.
+	rejectedResolves int
+	bounced          bool
+	bouncedResolve   bool
+	finalized        bool
 }
 
 // NewReviewToolManager creates a review tool manager. validate must not be
@@ -118,11 +135,24 @@ func NewReviewToolManager(validate LineValidator, previousIDs []string) *ReviewT
 	m := &ReviewToolManager{
 		tools:       make(map[message.ToolName]message.Tool),
 		validate:    validate,
-		previousIDs: make(map[string]bool, len(previousIDs)),
+		previousIDs: make(map[string]string, 2*len(previousIDs)),
+		aliasByID:   make(map[string]string, len(previousIDs)),
 		verdict:     reviewVerdictDefault,
 	}
+	// previousIDs arrives in prompt order, which is what makes the i-th alias
+	// name the i-th comment. Both spellings are accepted: the alias the model
+	// is shown, and the real id — a review round that predates aliases, or a
+	// model quoting the harness input, still resolves. Real ids go in first so
+	// that an id spelled like an alias cannot shadow the alias the prompt
+	// actually shows.
 	for _, id := range previousIDs {
-		m.previousIDs[id] = true
+		m.previousIDs[strings.ToLower(id)] = id
+	}
+	for i, id := range previousIDs {
+		alias := review.PreviousCommentAlias(i)
+		m.previousAliases = append(m.previousAliases, alias)
+		m.previousIDs[strings.ToLower(alias)] = id
+		m.aliasByID[id] = alias
 	}
 	m.register()
 	return m
@@ -191,10 +221,11 @@ func (m *ReviewToolManager) register() {
 	if len(m.previousIDs) > 0 {
 		m.RegisterTool("ResolveReviewComment",
 			"Mark a previous-round review comment as fixed, after verifying the fix in the current code. "+
-				"Use the id shown in the 'Previous Review Comments' section. The harness resolves the thread.",
+				"Use the short id shown in the 'Previous Review Comments' section (P1, P2, …). "+
+				"The harness resolves the thread.",
 			[]message.ToolArgument{
 				{Name: reviewArgID, Required: true, Type: "string",
-					Description: "The id of the previous comment (exactly as listed in the prompt)"},
+					Description: "The short id of the previous comment as listed in the prompt: P1, P2, …"},
 				{Name: reviewArgNote, Required: false, Type: "string",
 					Description: "Short note on how it was fixed (e.g. 'guarded in commit …', 'divisor restored')"},
 			},
@@ -203,13 +234,13 @@ func (m *ReviewToolManager) register() {
 }
 
 func (m *ReviewToolManager) handleResolve(_ context.Context, args message.ToolArgumentValues) (message.ToolResult, error) {
-	id := stringArg(args, reviewArgID)
-	if id == "" {
-		return message.NewToolResultError("id is required"), nil
+	named := strings.TrimSpace(stringArg(args, reviewArgID))
+	if named == "" {
+		return m.rejectResolve("id is required"), nil
 	}
-	if !m.previousIDs[id] {
-		return message.NewToolResultError(fmt.Sprintf(
-			"unknown comment id %q — use an id exactly as listed in the 'Previous Review Comments' section", id)), nil
+	id, ok := m.previousIDs[strings.ToLower(named)]
+	if !ok {
+		return m.rejectResolve(fmt.Sprintf("unknown comment id %q", named)), nil
 	}
 
 	m.mu.Lock()
@@ -219,11 +250,27 @@ func (m *ReviewToolManager) handleResolve(_ context.Context, args message.ToolAr
 	}
 	for _, r := range m.resolved {
 		if r.ID == id {
-			return message.NewToolResultError(fmt.Sprintf("comment %s is already marked resolved", id)), nil
+			return message.NewToolResultError(fmt.Sprintf("comment %s is already marked resolved", named)), nil
 		}
 	}
 	m.resolved = append(m.resolved, ResolvedComment{ID: id, Note: strings.TrimSpace(stringArg(args, reviewArgNote))})
-	return message.NewToolResultText(fmt.Sprintf("Marked previous comment %s as resolved.", id)), nil
+	return message.NewToolResultText(fmt.Sprintf("Marked previous comment %s as resolved.", named)), nil
+}
+
+// rejectResolve records a resolve that named nothing and answers with the ids
+// that would have worked. Naming them is the whole point: the model reaching
+// this message has already verified a fix and only needs the right handle, and
+// the previous wording ("use an id exactly as listed") sent it back to a prompt
+// section it had evidently already misread.
+func (m *ReviewToolManager) rejectResolve(msg string) message.ToolResult {
+	m.mu.Lock()
+	m.rejectedResolves++
+	aliases := strings.Join(m.previousAliases, ", ")
+	m.mu.Unlock()
+
+	return message.NewToolResultError(fmt.Sprintf(
+		"%s. Previous comments are named %s, in the order the 'Previous Review Comments' "+
+			"section lists them — retry with one of those.", msg, aliases))
 }
 
 // describeArg renders an argument value for an error message: quoted and
@@ -352,6 +399,72 @@ func (m *ReviewToolManager) handleAddSummary(_ context.Context, args message.Too
 	return message.NewToolResultText("Summary recorded. Call FinalizeReview to complete the review."), nil
 }
 
+// unresolvedAliases names the previous comments no resolve has landed on, in
+// prompt order. Callers hold m.mu.
+//
+// This is what makes the rejected-resolve bounce precise without guessing. A
+// rejected call named nothing, so which comment it *meant* is unknowable — but
+// whatever it meant was one of the comments still open, so an empty result
+// proves the intent was carried out and anything else leaves it in doubt. A
+// single "did any resolve land afterwards" flag got this wrong across
+// comments: mistyping P1 and then resolving P2 cleared it, and P1 stayed
+// dropped — the very failure this bounce exists to catch.
+func (m *ReviewToolManager) unresolvedAliases() []string {
+	done := make(map[string]bool, len(m.resolved))
+	for _, r := range m.resolved {
+		done[m.aliasByID[r.ID]] = true
+	}
+	var open []string
+	for _, alias := range m.previousAliases {
+		if !done[alias] {
+			open = append(open, alias)
+		}
+	}
+	return open
+}
+
+// plural picks the verb form for n, so a bounce message about one open thread
+// does not read as though it were written for a list.
+func plural(n int, one, many string) string {
+	if n == 1 {
+		return one
+	}
+	return many
+}
+
+// bounceMessage returns why FinalizeReview should be refused once, or "" to
+// let it through. Callers hold m.mu; it sets the bounce flags it reports on, so
+// asking twice is what makes the second FinalizeReview succeed.
+//
+// Two independent losses, each with its own flag: a finding whose target was
+// rejected and never re-landed, and a resolution whose id named nothing and was
+// never retried. The second is fpt/klein-cli#120 — a verified fix silently not
+// resolved, which no error and no counter had previously reported.
+func (m *ReviewToolManager) bounceMessage() string {
+	var msgs []string
+	if len(m.comments) == 0 && m.rejected > 0 && !m.bounced {
+		m.bounced = true
+		msgs = append(msgs, fmt.Sprintf(
+			"%d inline comment(s) were rejected and none were recorded, so this review would post a "+
+				"verdict with no findings attached. Re-target each one with AddInlineReview (path plus a "+
+				"bracketed new-side line number from the annotated diff), or — if a finding has no "+
+				"commentable line — fold it into AddSummaryReview.",
+			m.rejected))
+	}
+	if open := m.unresolvedAliases(); m.rejectedResolves > 0 && len(open) > 0 && !m.bouncedResolve {
+		m.bouncedResolve = true
+		msgs = append(msgs, fmt.Sprintf(
+			"%d ResolveReviewComment call(s) named an unknown id, and %s %s still open — so a fix you "+
+				"verified may be about to stay flagged as an open finding. Retry any of those you confirmed "+
+				"fixed; if they are genuinely still unfixed, leave them open and call FinalizeReview again.",
+			m.rejectedResolves, strings.Join(open, ", "), plural(len(open), "is", "are")))
+	}
+	if len(msgs) == 0 {
+		return ""
+	}
+	return strings.Join(msgs, " ") + " Then call FinalizeReview again."
+}
+
 func (m *ReviewToolManager) handleFinalize(_ context.Context, _ message.ToolArgumentValues) (message.ToolResult, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -361,18 +474,11 @@ func (m *ReviewToolManager) handleFinalize(_ context.Context, _ message.ToolArgu
 	if m.finalized {
 		return message.NewToolResultError("review already finalized"), nil
 	}
-	// Every attempted finding was rejected and none was re-landed: finishing
-	// here posts a verdict with nothing to read (a blocking review with no
-	// threads, when the verdict is request_changes). Bounce exactly once — the
-	// second call always completes, so a stubborn rejection can't hang the run.
-	if len(m.comments) == 0 && m.rejected > 0 && !m.bounced {
-		m.bounced = true
-		return message.NewToolResultError(fmt.Sprintf(
-			"%d inline comment(s) were rejected and none were recorded, so this review would post a "+
-				"verdict with no findings attached. Re-target each one with AddInlineReview (path plus a "+
-				"bracketed new-side line number from the annotated diff), or — if a finding has no "+
-				"commentable line — fold it into AddSummaryReview and call FinalizeReview again.",
-			m.rejected)), nil
+	// Work the model did and then lost to a rejection: finishing here would
+	// post the loss silently. Each kind bounces at most once — the second call
+	// always completes, so a stubborn rejection can't hang the run.
+	if msg := m.bounceMessage(); msg != "" {
+		return message.NewToolResultError(msg), nil
 	}
 	m.finalized = true
 	return message.NewToolResultText(fmt.Sprintf(

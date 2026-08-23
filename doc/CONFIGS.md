@@ -301,6 +301,20 @@ Either way, what klein's tools bring with them:
 It applies to the `appserver` backend only. codex brings its own shell and
 `apply_patch`, which klein has no business shadowing.
 
+**MCP servers are still the backend's**, not klein's. `[mcp.*]` servers are
+passed to the server as configuration, so it launches them on **its** machine —
+which is what you want for a server klein spawned, and probably not what you want
+for one on a GPU box. Moving them client-side is not implemented yet; until it
+is, an MCP server a dialed backend needs has to exist on the backend's machine.
+
+> **Gotcha for spawned gallium.** `gallium app-server` with no `--config` reads
+> `~/.config/gallium/config.toml`, so if yours sets `[agent] listen` a gallium
+> klein *spawned* will open a socket and never speak stdio — klein then waits for
+> a reply that is not coming. Either hand the server a config explicitly
+> (`args = ["app-server", "--config", "…"]`) or put `GALLIUM_LISTEN = ""` in
+> `[appserver.env]`, which recent gallium reads as "stdio, whatever the config
+> says".
+
 #### Reaching a server on another machine
 
 `appserver.address` dials an app-server that is already listening instead of

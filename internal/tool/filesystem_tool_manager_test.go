@@ -549,3 +549,48 @@ func TestFileSystemToolManager_IsPathAllowed(t *testing.T) {
 		}
 	})
 }
+
+// Read was not safe from this either, which is worth a test of its own: the
+// review that found it in Glob/Grep described Read as the tool that got the
+// boundary right, and it did not — a symlink in the workspace pointing outside
+// was followed and the file read. Both tools share one check now, so this pins
+// the half that was assumed to be fine.
+func TestFileSystemToolManager_RefusesToReadThroughASymlinkOutOfTheWorkspace(t *testing.T) {
+	t.Parallel()
+
+	workingDir, outside := t.TempDir(), t.TempDir()
+	secret := filepath.Join(outside, "secret.txt")
+	if err := os.WriteFile(secret, []byte("not for the workspace\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, filepath.Join(workingDir, "link")); err != nil {
+		t.Fatal(err)
+	}
+
+	m := NewFileSystemToolManager(
+		infra.NewOSFilesystemRepository(),
+		repository.FileSystemConfig{AllowedDirectories: []string{workingDir}},
+		workingDir,
+	)
+
+	res, err := m.CallTool(context.Background(), "Read", message.ToolArgumentValues{
+		sanitizerPathArg: filepath.Join(workingDir, "link", "secret.txt"),
+	})
+	if err != nil {
+		t.Fatalf("Read returned a transport error: %v", err)
+	}
+	if res.Error == "" {
+		t.Fatalf("read a file outside the workspace through a symlink: %q", res.Text)
+	}
+
+	// A file genuinely inside still reads, or the fix is just a broken Read.
+	inside := filepath.Join(workingDir, "ok.txt")
+	if err := os.WriteFile(inside, []byte("fine\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if res, err := m.CallTool(context.Background(), "Read", message.ToolArgumentValues{
+		sanitizerPathArg: inside,
+	}); err != nil || res.Error != "" {
+		t.Errorf("a file inside the workspace stopped reading: err=%v result=%q", err, res.Error)
+	}
+}

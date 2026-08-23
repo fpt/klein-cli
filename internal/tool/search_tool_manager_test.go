@@ -85,8 +85,13 @@ func TestSearchToolManager_ResolvePathAllowsTheWorkspaceAndNamedDirectories(t *t
 			if err != nil {
 				t.Fatalf("%s was refused: %v", tc.path, err)
 			}
-			if got != tc.want {
-				t.Errorf("resolved to %q, want %q", got, tc.want)
+			// Compared against the resolved form of the expectation, not the
+			// literal: resolvePath hands back where the path leads, and on macOS
+			// a temp directory leads through /var, itself a symlink to
+			// /private/var. Hardcoding either spelling would pin a platform quirk
+			// rather than the behavior.
+			if want := resolveSymlinks(tc.want); got != want {
+				t.Errorf("resolved to %q, want %q", got, want)
 			}
 		})
 	}
@@ -130,5 +135,73 @@ func TestSearchToolManager_GrepOutsideTheAllowlistFails(t *testing.T) {
 		if !strings.Contains(res.Error, "outside") {
 			t.Errorf("%s error does not say why: %q", name, res.Error)
 		}
+	}
+}
+
+// symlinkedEscape builds a workspace containing `link`, a directory symlink
+// pointing at an outside directory that holds a file with `needle` in it.
+// Returns the workspace and the outside directory.
+func symlinkedEscape(t *testing.T) (workingDir, outside string) {
+	t.Helper()
+	workingDir, outside = t.TempDir(), t.TempDir()
+	if err := os.WriteFile(filepath.Join(outside, "secret.txt"), []byte("needle-in-the-secret\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, filepath.Join(workingDir, "link")); err != nil {
+		t.Fatal(err)
+	}
+	return workingDir, outside
+}
+
+// A lexical prefix test answers the wrong question: `<workspace>/link` is
+// inside the workspace by every string comparison, and outside it by the only
+// measure that matters — which file gets opened. The check has to be against
+// where the path leads.
+func TestSearchToolManager_RefusesAPathReachedThroughASymlink(t *testing.T) {
+	t.Parallel()
+
+	workingDir, _ := symlinkedEscape(t)
+	m := searchIn(t, workingDir)
+
+	link := filepath.Join(workingDir, "link")
+	if got, err := m.resolvePath(link); err == nil {
+		t.Errorf("a symlink out of the workspace resolved to %q instead of being refused", got)
+	}
+	if got, err := m.resolvePath(filepath.Join(link, "secret.txt")); err == nil {
+		t.Errorf("a file beyond the symlink resolved to %q instead of being refused", got)
+	}
+}
+
+// The traversal case, which is the one that survives a correct path check: the
+// search is aimed squarely at the workspace, and the escape happens inside the
+// walk. GNU grep's -R dereferences directory symlinks and would walk straight
+// out; -r, rg and find do not.
+//
+// The assertion is what came back rather than which flag was passed, so it holds
+// whatever tool is installed — and it is only a real exercise where the walker
+// would have followed. On a BSD grep it passes because nothing follows there
+// either, which is the correct answer for that platform rather than a skip.
+func TestSearchToolManager_SearchDoesNotWalkOutThroughASymlink(t *testing.T) {
+	t.Parallel()
+
+	workingDir, outside := symlinkedEscape(t)
+	// Something inside to find, so an empty result cannot be mistaken for a
+	// search that never ran.
+	if err := os.WriteFile(filepath.Join(workingDir, "inside.txt"), []byte("needle-at-home\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	m := searchIn(t, workingDir)
+
+	res, err := m.CallTool(context.Background(), "Grep", message.ToolArgumentValues{
+		argPattern: "needle",
+	})
+	if err != nil || res.Error != "" {
+		t.Fatalf("searching the workspace failed: err=%v result=%q", err, res.Error)
+	}
+	if !strings.Contains(res.Text, "needle-at-home") {
+		t.Fatalf("the search did not run: %q", res.Text)
+	}
+	if strings.Contains(res.Text, "needle-in-the-secret") || strings.Contains(res.Text, outside) {
+		t.Errorf("the search walked out through the symlink: %q", res.Text)
 	}
 }

@@ -38,6 +38,10 @@ func NewSearchToolManager(cfg SearchConfig) domain.ToolManager {
 	if err != nil {
 		absWorkingDir = cfg.WorkingDir
 	}
+	// Resolved once, here, so every path this manager hands to `rg`/`grep`/`find`
+	// names where the workspace actually is — including the bare working
+	// directory, which is what an omitted `path` argument searches.
+	absWorkingDir = resolveSymlinks(absWorkingDir)
 	m := &SearchToolManager{
 		tools:              make(map[message.ToolName]message.Tool),
 		workingDir:         absWorkingDir,
@@ -117,7 +121,11 @@ func (m *SearchToolManager) resolvePath(p string) (string, error) {
 	if !pathWithinAllowedDirectories(resolved, m.allowedDirectories) {
 		return "", fmt.Errorf("path %s is outside the allowed directories", p)
 	}
-	return resolved, nil
+	// Hand back the resolved location, not the name it was reached by, so the
+	// search runs on exactly what was checked. Passing the symlink instead would
+	// leave `rg`/`grep` to resolve it again, and a check that validates one path
+	// while the command opens another is not a check.
+	return resolveSymlinks(resolved), nil
 }
 
 // handleGlob tries rg --files with --glob when available; falls back to find
@@ -263,7 +271,11 @@ func (m *SearchToolManager) handleGrep(ctx context.Context, args message.ToolArg
 	}
 
 	// Fallback to grep
-	grepArgs := []string{"-R"}
+	// -r, never -R: GNU grep's -R is --dereference-recursive, so it walks out of
+	// the workspace through any directory symlink inside it — past a boundary
+	// that was checked on the way in. -r matches what rg and find already do by
+	// default, which is not to follow.
+	grepArgs := []string{"-r"}
 	if v, ok := args["-i"].(bool); ok && v {
 		grepArgs = append(grepArgs, "-i")
 	}

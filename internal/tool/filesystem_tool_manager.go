@@ -255,17 +255,55 @@ func (m *FileSystemToolManager) isPathAllowed(path string) error {
 // Shared with the search tools, deliberately: "inside the allowlist" has to mean
 // the same thing for a Grep as for a Read, or the boundary is only as strong as
 // whichever tool checks it most loosely.
+//
+// Both sides are symlink-resolved first, because a lexical prefix test answers
+// the wrong question. `<workspace>/link/secret` is lexically inside the
+// workspace however far outside `link` points, and the file that gets opened is
+// the one at the other end — so the comparison has to be between the places the
+// paths actually lead. Resolving the allowed directories too is not optional:
+// macOS puts temp directories under `/var`, itself a symlink to `/private/var`,
+// so resolving only one side would refuse a path that is plainly inside.
 func pathWithinAllowedDirectories(absPath string, allowedDirs []string) bool {
+	realPath := resolveSymlinks(absPath)
 	for _, allowedDir := range allowedDirs {
 		allowedAbs, err := filepath.Abs(allowedDir)
 		if err != nil {
 			continue // Skip invalid allowed directory
 		}
-		if absPath == allowedAbs || strings.HasPrefix(absPath, allowedAbs+string(os.PathSeparator)) {
+		allowedReal := resolveSymlinks(allowedAbs)
+		if realPath == allowedReal || strings.HasPrefix(realPath, allowedReal+string(os.PathSeparator)) {
 			return true
 		}
 	}
 	return false
+}
+
+// resolveSymlinks returns path with its symlinks resolved, as far as the path
+// exists.
+//
+// filepath.EvalSymlinks refuses a path that is not there, and half the paths
+// this is asked about are not there yet — a Write names a file it is about to
+// create. So the deepest existing ancestor is resolved and the rest is appended
+// unchanged, which is enough: a component that does not exist cannot be a
+// symlink pointing anywhere.
+//
+// Best-effort by design. A path whose ancestors cannot be resolved at all comes
+// back as it went in, and the caller compares it lexically — the same answer as
+// before symlinks were considered, never a more permissive one.
+func resolveSymlinks(path string) string {
+	remainder := ""
+	current := path
+	for {
+		if resolved, err := filepath.EvalSymlinks(current); err == nil {
+			return filepath.Join(resolved, remainder)
+		}
+		parent := filepath.Dir(current)
+		if parent == current {
+			return path // reached the root without finding anything that exists
+		}
+		remainder = filepath.Join(filepath.Base(current), remainder)
+		current = parent
+	}
 }
 
 // isFileBlacklisted checks if a file is in the blacklist

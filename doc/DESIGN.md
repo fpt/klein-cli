@@ -504,6 +504,15 @@ Two things follow, both in `internal/agentbackend/workspace.go`:
   was the only caller and a disclosure once the tools are offered to a remote
   one. Both managers now share `pathWithinAllowedDirectories`, so "inside the
   allowlist" means the same thing for a `Grep` as for a `Read`.
+- **The allowlist is about where a path leads, not how it is spelled.** A prefix
+  test on the literal path passes `<workspace>/link/secret` however far outside
+  `link` points, so `pathWithinAllowedDirectories` resolves symlinks on both
+  sides before comparing — both, because macOS temp directories live under
+  `/var`, itself a symlink, and resolving one side alone would refuse paths that
+  are plainly inside. `Read` was following such a symlink out of the workspace
+  before this; the tools that shell out escape a second way, through the walk
+  itself, which is why `Grep` runs `grep -r` and never `-R`
+  (`--dereference-recursive`). `rg` and `find` already decline to follow.
 - **Compound parameters need their shape.** `MultiEdit` takes an array of edit
   objects, and `agentserver.Parameter` had nowhere to put the element schema —
   the backend received a bare `{"type":"array"}` and the model had to guess at

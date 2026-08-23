@@ -264,7 +264,7 @@ the other end would cover for it.
 
 ```bash
 # on the GPU box — nothing to configure but the address
-GALLIUM_LISTEN=127.0.0.1:47821 gallium app-server --config configs/qwen3.8.toml
+gallium app-server --listen 127.0.0.1:47821 --config configs/qwen3.8.toml
 ```
 
 ```toml

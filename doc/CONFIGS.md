@@ -311,15 +311,12 @@ them on the backend's machine does not help, because the config naming them is
 dropped. Running them beside klein and offering their tools as dynamic tools is
 the fix, and it is not implemented yet.
 
-> **Gotcha for spawned gallium.** `gallium app-server` with no `--config` reads
-> `~/.config/gallium/config.toml`, so if yours sets `[agent] listen` a gallium
-> klein *spawned* will open a socket and never speak stdio — klein then waits for
-> a reply that is not coming. Hand the server a config explicitly instead:
-> `args = ["app-server", "--config", "…"]`, naming a file that does not set
-> `listen`. (A future gallium will read `GALLIUM_LISTEN = ""` in
-> `[appserver.env]` as "stdio, whatever the config says" —
-> [fpt/rs-gallium#163](https://github.com/fpt/rs-gallium/pull/163); today an
-> empty value is discarded with the unset ones and the config still wins.)
+> **On the server's side**, `--listen` is the only way to open a socket: gallium
+> reads no environment variable and no config key for it, so an address is always
+> visible in the command that started the server. (It used to honour
+> `[agent] listen`, which meant a config file could quietly turn a *spawned*
+> server into a listener that never spoke stdio; that key is now read only to
+> warn about it.)
 
 #### Reaching a server on another machine
 
@@ -329,11 +326,11 @@ laptop. The protocol is identical over the wire — including the direction that
 runs backwards, where the server calls back for klein's tools, which then run
 **locally**, against your files.
 
-On the server (rs-gallium spells its listen address `GALLIUM_LISTEN`, or
-`[agent] listen` in its own TOML):
+On the server (rs-gallium takes its listen address as `--listen`, and nowhere
+else — no environment variable, no config key):
 
 ```bash
-GALLIUM_LISTEN=127.0.0.1:47821 gallium app-server --config configs/qwen3.8.toml
+gallium app-server --listen 127.0.0.1:47821 --config configs/qwen3.8.toml
 ```
 
 On the client:

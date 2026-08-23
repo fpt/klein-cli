@@ -180,7 +180,7 @@ const tcpKeepAlivePeriod = 30 * time.Second
 
 // tcpTransport speaks the same line-delimited JSON-RPC as stdioTransport, over a
 // socket to an app-server that is already running elsewhere
-// (`GALLIUM_LISTEN=host:port gallium app-server`). Same methods, same
+// (`gallium app-server --listen host:port`). Same methods, same
 // reverse-direction `item/tool/call` — the tools still run in *this* process,
 // which is the entire point: the model can sit on a GPU box while klein's
 // dynamic tools stay on the user's laptop.

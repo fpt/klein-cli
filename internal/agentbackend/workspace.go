@@ -75,7 +75,51 @@ const (
 	toolRead = "Read"
 	toolGlob = "Glob"
 	toolGrep = "Grep"
+	toolLS   = "LS"
 )
+
+// workspaceToolNames is every tool that lets a model touch a file or run a
+// command — the difference between an agent that can look at a directory and one
+// that can only remember things.
+var workspaceToolNames = []string{
+	toolRead, toolWrite, toolEdit, toolMultiEdit, toolLS, toolGlob, toolGrep, toolBash,
+}
+
+// verifyWorkspaceToolsOffered refuses to start a dialed backend that would get
+// none of them.
+//
+// This checks the outcome rather than the setting, and the difference is the
+// whole point. A server on the other end of a socket cannot make this check: it
+// sees a list of dynamic tools and has no idea what any of them do, so a client
+// that registers twelve memory and scheduling tools and no filesystem ones looks
+// exactly like a client that registered everything. Observed in the wild before
+// this shipped — the model was offered memory, schedules, and nothing that could
+// list a directory, and answered "would you like me to?" before discovering
+// mid-turn that it could not.
+//
+// Which makes klein the only side that can tell, and this the only place the
+// answer is knowable before a user has typed a prompt.
+func verifyWorkspaceToolsOffered(address string, tools agentserver.DynamicTools) error {
+	if address == "" {
+		return nil
+	}
+	offered := map[string]bool{}
+	if !isNil(tools) {
+		for _, spec := range tools.Specs() {
+			offered[spec.Name] = true
+		}
+	}
+	for _, name := range workspaceToolNames {
+		if offered[name] {
+			return nil
+		}
+	}
+	return fmt.Errorf(
+		"the app-server at %s would get none of klein's workspace tools (%s), and a server reached over "+
+			"the network lends none of its own — so the model could remember things and schedule things "+
+			"and not read a file. This is a wiring failure in klein, not a setting: report it",
+		address, strings.Join(workspaceToolNames, ", "))
+}
 
 // withApproval puts a mutating tool call to the approver before running it.
 //

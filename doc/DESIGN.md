@@ -424,7 +424,7 @@ next turn (memory-context injection still carries facts across restarts).
 **Spawned or dialed.** The transport is the one place these two deployments
 differ. `appserver.command` spawns a child and speaks JSONL over its stdio;
 `appserver.address` dials a server already listening on `host:port` (rs-gallium's
-`GALLIUM_LISTEN`) and speaks the same JSONL over a socket. Same methods, same
+`--listen`) and speaks the same JSONL over a socket. Same methods, same
 `item/tool/call` in the reverse direction — which is the point of dialing: the
 model can run on a GPU box while klein's dynamic tools keep running on the user's
 machine, in klein's process, against klein's files.
@@ -473,6 +473,12 @@ because the server's behavior does:
   Loopback earns no exception: same machine is not the same user. klein's tools
   are therefore the model's only hands, and `validateWorkspaceTools` refuses an
   explicit `false` rather than obeying it into a session that cannot read a file.
+  `verifyWorkspaceToolsOffered` then checks the *outcome* — that the assembled
+  tool set actually contains them — because the server cannot: it sees a list of
+  dynamic tools and cannot tell what any of them do, so a client offering twelve
+  memory and scheduling tools looks exactly like one offering a full workspace.
+  That is not hypothetical; it reached a user as a model that offered to list a
+  directory and discovered mid-turn that it could not.
 - **Spawned** (`appserver.command`): off. That server is klein's own child with
   klein's privileges and working tools of its own; klein's would only shadow
   them, which is worth doing when klein's boundaries should apply and not

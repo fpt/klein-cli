@@ -451,7 +451,7 @@ type AppServerSettings struct {
 	// which case klein starts nothing and Command must be empty.
 	Command string `toml:"command,omitempty"`
 	// Address dials an app-server already listening on "host:port" (e.g. a
-	// `GALLIUM_LISTEN=… gallium app-server` on a GPU box) instead of spawning
+	// `gallium app-server --listen …` on a GPU box) instead of spawning
 	// one locally. The agent then runs there while klein's dynamic tools keep
 	// running here, on the user's machine.
 	//

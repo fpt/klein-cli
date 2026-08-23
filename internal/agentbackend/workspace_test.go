@@ -19,7 +19,7 @@ import (
 // shipped with only if the spelling agrees, and models emit these spellings from
 // habit.
 var conventionalToolNames = []string{
-	toolBash, toolEdit, "Glob", "Grep", "LS", toolMultiEdit, toolRead, toolWrite,
+	toolBash, toolEdit, toolGlob, toolGrep, "LS", toolMultiEdit, toolRead, toolWrite,
 }
 
 // workspaceHost returns the workspace tools as the backend sees them.
@@ -149,8 +149,26 @@ func TestNewWorkspaceTools_RefuseAPathOutsideTheWorkingDirectory(t *testing.T) {
 	}
 
 	host := workspaceHost(t, t.TempDir())
-	if out, err := host.Call(context.Background(), toolRead, map[string]any{argFilePath: outside}); err == nil {
+	ctx := context.Background()
+	if out, err := host.Call(ctx, toolRead, map[string]any{argFilePath: outside}); err == nil {
 		t.Errorf("reading outside the working directory succeeded: %q", out)
+	}
+
+	// Search is the same boundary by another route, and the easier one to leave
+	// open: Glob and Grep hand their path to rg/find, which answer about
+	// anywhere. A Grep that can report what is in a file Read refuses discloses
+	// it just the same.
+	outsideDir := filepath.Dir(outside)
+	for _, tc := range []struct {
+		args map[string]any
+		tool string
+	}{
+		{map[string]any{"pattern": "not yours", "path": outsideDir}, toolGrep},
+		{map[string]any{"pattern": "*.txt", "path": outsideDir}, toolGlob},
+	} {
+		if out, err := host.Call(ctx, tc.tool, tc.args); err == nil {
+			t.Errorf("%s searched outside the working directory: %q", tc.tool, out)
+		}
 	}
 }
 
@@ -184,8 +202,8 @@ func TestWithApproval_AsksAboutMutationOnly(t *testing.T) {
 		{toolMultiEdit, true},
 		{toolRead, false},
 		{"LS", false},
-		{"Glob", false},
-		{"Grep", false},
+		{toolGlob, false},
+		{toolGrep, false},
 		{"MemorySearch", false},
 	}
 	for _, tc := range tests {

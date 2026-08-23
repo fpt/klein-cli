@@ -288,7 +288,8 @@ Either way, what klein's tools bring with them:
 
 - **klein's boundaries.** The working-directory allowlist, the blacklist of
   secrets, and read-before-write are enforced here, whatever the server would
-  have allowed.
+  have allowed. `Glob` and `Grep` are bounded by the same allowlist as `Read` —
+  searching is reading.
 - **Approvals.** With the server holding the tools, it asks permission and klein
   answers. With klein holding them, nobody would ask — so klein prompts for
   itself before `Write`/`Edit`/`MultiEdit`/`Bash`, on the same `approval_policy`,

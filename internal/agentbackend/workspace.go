@@ -42,7 +42,12 @@ func newWorkspaceTools(settings *config.Settings, workingDir string) domain.Tool
 
 	return tool.NewCompositeToolManager(
 		tool.NewFileSystemToolManager(infra.NewOSFilesystemRepository(), fsConfig, workingDir),
-		tool.NewSearchToolManager(tool.SearchConfig{WorkingDir: workingDir}),
+		// The same allowlist as the filesystem tools: a Grep that can report what
+		// is in a file a Read would refuse is the same disclosure by another route.
+		tool.NewSearchToolManager(tool.SearchConfig{
+			WorkingDir:         workingDir,
+			AllowedDirectories: fsConfig.AllowedDirectories,
+		}),
 		tool.NewBashToolManager(tool.BashConfig{
 			WorkingDir:          workingDir,
 			MaxDuration:         workspaceToolTimeout,
@@ -63,10 +68,14 @@ const (
 	argFilePath   = "file_path"
 )
 
-// toolRead is not in the set above: reading changes nothing and is never asked
-// about. It is named because the tests reach for it, and a tool name is a
-// contract with the backend either way.
-const toolRead = "Read"
+// The read-only tools, never asked about. They are named for the same reason as
+// the mutating ones: a tool name is a contract with the backend, and the tests
+// pin these against a rename.
+const (
+	toolRead = "Read"
+	toolGlob = "Glob"
+	toolGrep = "Grep"
+)
 
 // withApproval puts a mutating tool call to the approver before running it.
 //

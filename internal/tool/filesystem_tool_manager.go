@@ -239,24 +239,33 @@ func (m *FileSystemToolManager) resolvePath(path string) (string, error) {
 // isPathAllowed checks if a file path is within allowed directories
 func (m *FileSystemToolManager) isPathAllowed(path string) error {
 	// Note: allowedDirectories always contains at least the working directory (ensured in constructor)
-
 	// Expect path to already be absolute (resolved by caller)
-	absPath := path
+	if pathWithinAllowedDirectories(path, m.allowedDirectories) {
+		return nil
+	}
+	return errNotInAllowedDirectory
+}
 
-	// Check if path is within any allowed directory
-	for _, allowedDir := range m.allowedDirectories {
-		allowedAbs, err := m.abs(allowedDir)
+// pathWithinAllowedDirectories reports whether absPath is inside one of
+// allowedDirs. absPath is expected to be absolute and cleaned already; a
+// relative entry in allowedDirs is resolved against the process's working
+// directory, and one that cannot be resolved is skipped rather than treated as
+// permissive.
+//
+// Shared with the search tools, deliberately: "inside the allowlist" has to mean
+// the same thing for a Grep as for a Read, or the boundary is only as strong as
+// whichever tool checks it most loosely.
+func pathWithinAllowedDirectories(absPath string, allowedDirs []string) bool {
+	for _, allowedDir := range allowedDirs {
+		allowedAbs, err := filepath.Abs(allowedDir)
 		if err != nil {
 			continue // Skip invalid allowed directory
 		}
-
-		// Check if the file path is under the allowed directory
-		if strings.HasPrefix(absPath, allowedAbs+string(os.PathSeparator)) || absPath == allowedAbs {
-			return nil
+		if absPath == allowedAbs || strings.HasPrefix(absPath, allowedAbs+string(os.PathSeparator)) {
+			return true
 		}
 	}
-
-	return errNotInAllowedDirectory
+	return false
 }
 
 // isFileBlacklisted checks if a file is in the blacklist

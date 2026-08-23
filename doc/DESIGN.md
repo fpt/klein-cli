@@ -496,6 +496,12 @@ Two things follow, both in `internal/agentbackend/workspace.go`:
   request carries its command in `Commands` so `auto_approve_commands` answers
   for it exactly as it does on the other side. Read-only tools are not asked
   about, matching the native loop.
+- **Searching is reading.** `Glob` and `Grep` hand their `path` to `rg`/`find`,
+  which answer about anywhere on the machine, and `SearchToolManager` did not
+  check it against any allowlist — a gap that was cosmetic while klein's own loop
+  was the only caller and a disclosure once the tools are offered to a remote
+  one. Both managers now share `pathWithinAllowedDirectories`, so "inside the
+  allowlist" means the same thing for a `Grep` as for a `Read`.
 - **Compound parameters need their shape.** `MultiEdit` takes an array of edit
   objects, and `agentserver.Parameter` had nowhere to put the element schema —
   the backend received a bare `{"type":"array"}` and the model had to guess at

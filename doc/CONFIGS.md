@@ -301,11 +301,15 @@ Either way, what klein's tools bring with them:
 It applies to the `appserver` backend only. codex brings its own shell and
 `apply_patch`, which klein has no business shadowing.
 
-**MCP servers are still the backend's**, not klein's. `[mcp.*]` servers are
-passed to the server as configuration, so it launches them on **its** machine —
-which is what you want for a server klein spawned, and probably not what you want
-for one on a GPU box. Moving them client-side is not implemented yet; until it
-is, an MCP server a dialed backend needs has to exist on the backend's machine.
+**MCP servers do not reach a dialed backend at all.** klein passes `[mcp.*]`
+servers to the server as configuration. A server klein *spawned* launches them —
+on klein's own machine, which is what you want. A **dialed** rs-gallium ignores
+them and logs that it did: a stdio MCP server is a command line, and running one
+named by whoever reached the port would be arbitrary code execution on the
+server's host. So on a dialed backend those tools are simply absent — installing
+them on the backend's machine does not help, because the config naming them is
+dropped. Running them beside klein and offering their tools as dynamic tools is
+the fix, and it is not implemented yet.
 
 > **Gotcha for spawned gallium.** `gallium app-server` with no `--config` reads
 > `~/.config/gallium/config.toml`, so if yours sets `[agent] listen` a gallium
@@ -342,11 +346,13 @@ approval_policy = "on-request"
 ```
 
 > **This connection is unauthenticated and unencrypted.** Anything that can reach
-> that port drives an agent with that user's privileges on that machine. Bind it
-> to loopback and reach it through an SSH tunnel
-> (`ssh -N -L 47821:127.0.0.1:47821 gpubox`), or use a Tailscale/WireGuard
-> address where the overlay does the authenticating. klein gives `address` no
-> default for this reason.
+> that port runs turns on that agent — the model, the machine's time, and
+> whatever tools that server lends. For rs-gallium over a socket that is not a
+> shell, since it lends none; for a server that does serve its own tools it is
+> everything they can do, as the user it runs as. Bind it to loopback and reach
+> it through an SSH tunnel (`ssh -N -L 47821:127.0.0.1:47821 gpubox`), or use a
+> Tailscale/WireGuard address where the overlay does the authenticating. klein
+> gives `address` no default for this reason.
 
 `command`, `args`, `env` and `config` configure a server klein **starts**, so
 setting any of them alongside `address` is rejected rather than ignored: that

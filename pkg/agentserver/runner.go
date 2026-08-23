@@ -66,9 +66,11 @@ type Config struct {
 	// reached this way is a process this client neither starts, nor configures,
 	// nor stops.
 	//
-	// The connection is unauthenticated and unencrypted — whatever reaches that
-	// port drives an agent with that user's privileges — so the address belongs
-	// on loopback, an SSH tunnel, or an overlay network that does the
+	// The connection is unauthenticated and unencrypted: whatever reaches that
+	// port runs turns on that agent, with whatever tools the server lends it —
+	// nothing, for a server that serves none of its own, and everything they can
+	// do as the user it runs as for one that does. So the address belongs on
+	// loopback, an SSH tunnel, or an overlay network that does the
 	// authenticating. There is deliberately no default.
 	Address string
 	Args    []string

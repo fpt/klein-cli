@@ -454,9 +454,11 @@ Three consequences follow from the socket, all in `pkg/agentserver`:
 There is no read deadline on the socket — a turn can run for minutes with nothing
 on the wire while the remote model works — so liveness is TCP keepalive's job,
 set once at dial. And the connection carries no authentication and no TLS:
-anything that reaches the port drives an agent with that user's privileges, so
-the address belongs on loopback, an SSH tunnel, or an overlay network that does
-the authenticating. klein gives it no default.
+anything that reaches the port runs turns on that agent, with whatever tools the
+server lends it — nothing at all for one that serves none of its own, everything
+they can do as the user it runs as for one that does. So the address belongs on
+loopback, an SSH tunnel, or an overlay network that does the authenticating.
+klein gives it no default.
 
 **Whose tools run: `workspace_tools`.** klein can offer its own workspace tools —
 `Read`, `Write`, `Edit`, `MultiEdit`, `LS`, `Glob`, `Grep`, `Bash` — as

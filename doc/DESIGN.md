@@ -458,6 +458,50 @@ anything that reaches the port drives an agent with that user's privileges, so
 the address belongs on loopback, an SSH tunnel, or an overlay network that does
 the authenticating. klein gives it no default.
 
+**Whose tools run: `workspace_tools`.** klein can offer its own workspace tools —
+`Read`, `Write`, `Edit`, `MultiEdit`, `LS`, `Glob`, `Grep`, `Bash` — as
+`dynamicTools` alongside the native memory and schedule ones, serviced in klein's
+process against klein's working directory. The default follows the transport,
+because the server's behavior does:
+
+- **Dialed** (`appserver.address`): on. A listening rs-gallium lends no
+  filesystem or shell tools at all — its built-ins would run as the user *it* was
+  started as, and a socket carrying no identity cannot say who is asking, so no
+  approval policy could reason about whose privileges a call really uses.
+  Loopback earns no exception: same machine is not the same user. klein's tools
+  are therefore the model's only hands, and `validateWorkspaceTools` refuses an
+  explicit `false` rather than obeying it into a session that cannot read a file.
+- **Spawned** (`appserver.command`): off. That server is klein's own child with
+  klein's privileges and working tools of its own; klein's would only shadow
+  them, which is worth doing when klein's boundaries should apply and not
+  otherwise.
+
+Paired with a listening server, this splits the agent in two: the model reasons
+wherever it runs, and every read, write and command happens where the user is.
+
+The tool *names* are the contract. A server resolves a call to the first exact
+name match, so klein's `Read` replaces a built-in `Read` rather than sitting
+behind it — which is what lets the spawned case work as a substitution at all,
+and why the names are the conventional PascalCase ones and not klein-prefixed.
+`internal/agentbackend`'s `conventionalToolNames` test is what keeps a rename
+from silently unhooking the model's hands.
+
+Two things follow, both in `internal/agentbackend/workspace.go`:
+
+- **Approval has to be re-established.** When the backend owns the tools it asks
+  permission (`item/*/requestApproval`) and klein answers. Hand the tools to
+  klein and nobody asks at all — the backend has nothing to request, and the
+  dynamic-tool path runs what it is called with. So `withApproval` puts
+  `Write`/`Edit`/`MultiEdit`/`Bash` to the same `Approver` first, and a `Bash`
+  request carries its command in `Commands` so `auto_approve_commands` answers
+  for it exactly as it does on the other side. Read-only tools are not asked
+  about, matching the native loop.
+- **Compound parameters need their shape.** `MultiEdit` takes an array of edit
+  objects, and `agentserver.Parameter` had nowhere to put the element schema —
+  the backend received a bare `{"type":"array"}` and the model had to guess at
+  field names, which presents as a model that "cannot use the tool".
+  `Parameter.Schema` carries the JSON Schema keys the struct has no field for.
+
 **Approvals.** `approval_policy` decides who authorizes a mutation. Under
 `never` the backend proceeds unasked (headless surfaces). Otherwise it raises
 `item/commandExecution/requestApproval` / `item/fileChange/requestApproval`, and

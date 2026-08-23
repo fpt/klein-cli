@@ -70,6 +70,11 @@ func (h toolHost) Specs() []agentserver.ToolSpec {
 				Description: string(a.Description),
 				Type:        a.Type,
 				Required:    a.Required,
+				// klein's compound arguments carry their shape here (MultiEdit's
+				// `edits` is an array of objects, and its element schema is the
+				// only thing saying what an element looks like). Dropping it left
+				// the backend a bare {"type":"array"} to guess at.
+				Schema: a.Properties,
 			})
 		}
 		out = append(out, agentserver.ToolSpec{

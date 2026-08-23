@@ -31,6 +31,7 @@ const (
 	testAddress       = "10.0.0.2:4711" // never dialed: only ever configured
 	spawnedBinary     = "gallium"       // never run: only ever configured
 	appServerArg      = "app-server"    // the conventional subcommand
+	configFlag        = "--config"      // how a server is handed its own config file
 )
 
 // jsonlServer is an app-server on a real socket: enough of the protocol to
@@ -416,8 +417,8 @@ func TestConfigValidate(t *testing.T) {
 		},
 		{
 			"args with an address",
-			Config{Address: testAddress, Args: []string{appServerArg, "--config", "x.toml"}},
-			"--config",
+			Config{Address: testAddress, Args: []string{appServerArg, configFlag, "x.toml"}},
+			configFlag,
 		},
 		{
 			// Both stray settings in one diagnostic: a user who set two of them

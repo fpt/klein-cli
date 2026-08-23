@@ -150,6 +150,11 @@ func toInputSchema(params []Parameter) map[string]any {
 		if a.Description != "" {
 			p["description"] = a.Description
 		}
+		// An array's `items`, an enum's values: the shape a caller could not say
+		// in the struct's fields. Last, so an explicit key overrides.
+		for k, v := range a.Schema {
+			p[k] = v
+		}
 		props[a.Name] = p
 		if a.Required {
 			required = append(required, a.Name)

@@ -186,6 +186,7 @@ Two differences from codex worth knowing:
 | `address` | string | *(none)* | `host:port` of an app-server **already running** — klein dials it instead of spawning one. Mutually exclusive with `command`/`args`/`env`. See [Reaching a server on another machine](#reaching-a-server-on-another-machine) |
 | `args` | string[] | `["app-server"]` | Subcommand that puts the binary into app-server mode |
 | `env` | object | — | Environment variables `{ "KEY": "VAL" }` passed to the server. See below. |
+| `workspace_tools` | bool | *(on when dialing, off when spawning)* | Offer klein's own `Read`/`Write`/`Edit`/`MultiEdit`/`LS`/`Glob`/`Grep`/`Bash` to the server as dynamic tools, so they run **here**. See [Whose tools run](#whose-tools-run) |
 | `approval_policy` | string | *(mode-dependent)* | `never` / `on-request`. Same mode defaults as codex: the interactive repl prompts you (y/N) before the server writes a file or runs a command; headless surfaces auto-approve. Set explicitly to override. |
 
 > `config` is **deprecated** and undocumented here — it still parses and still
@@ -243,6 +244,61 @@ backend = "appserver"
 command         = "gallium"
 approval_policy = "on-request"
 ```
+
+#### Whose tools run
+
+Whether the agent's hands are on klein's machine or on the server's follows how
+the server is reached, because the server behaves differently in the two cases.
+
+**Dialed (`address`): klein's tools, and only klein's.** A listening rs-gallium
+lends no filesystem or shell tools at all. That is a privilege decision, not a
+setting: its built-ins would run as the user *gallium* was started as, the socket
+carries no authentication or identity, and a server that handed a connecting
+client a `Bash` with someone else's rights could not be reasoned about by any
+approval policy. Loopback is no exception — same machine is not the same user. So
+klein registers `Read`, `Write`, `Edit`, `MultiEdit`, `LS`, `Glob`, `Grep` and
+`Bash` as dynamic tools on every thread, and they run in klein's process against
+klein's working directory. This is the default when `address` is set; setting
+`workspace_tools = false` alongside it is refused at startup, because nothing on
+the other end would cover for it.
+
+```bash
+# on the GPU box — nothing to configure but the address
+GALLIUM_LISTEN=127.0.0.1:47821 gallium app-server --config configs/qwen3.8.toml
+```
+
+```toml
+# on your laptop
+[appserver]
+address         = "127.0.0.1:47821"
+approval_policy = "on-request"
+```
+
+The model then reasons on the GPU box while every read, write and command happens
+where you are.
+
+**Spawned (`command`): the server's own tools, unless you say otherwise.** That
+server is klein's child, running with klein's privileges, and its tools already
+act on the right machine. `workspace_tools = true` substitutes klein's for them —
+a server resolving a call to the first exact name match runs klein's `Read` in
+place of the one it shipped with. Worth doing when klein's boundaries are the
+ones that should apply; otherwise it only moves the work.
+
+Either way, what klein's tools bring with them:
+
+- **klein's boundaries.** The working-directory allowlist, the blacklist of
+  secrets, and read-before-write are enforced here, whatever the server would
+  have allowed.
+- **Approvals.** With the server holding the tools, it asks permission and klein
+  answers. With klein holding them, nobody would ask — so klein prompts for
+  itself before `Write`/`Edit`/`MultiEdit`/`Bash`, on the same `approval_policy`,
+  and `auto_approve_commands` still answers for the commands it covers.
+  Read-only tools are not prompted, matching klein's own loop.
+- **Your files.** A remote agent edits the checkout on your laptop rather than
+  one on the GPU box.
+
+It applies to the `appserver` backend only. codex brings its own shell and
+`apply_patch`, which klein has no business shadowing.
 
 #### Reaching a server on another machine
 

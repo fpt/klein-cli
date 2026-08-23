@@ -12,6 +12,9 @@ import (
 
 const allowedFile = "allowed.go"
 
+// previousThreadID stands in for a GraphQL review-thread node id.
+const previousThreadID = "PRRT_a"
+
 // rangeValidator allows lines 10-20 of allowed.go only.
 func rangeValidator(path string, line, endLine int) error {
 	if path != allowedFile {
@@ -232,4 +235,86 @@ func TestReviewToolManager_SummaryReplacedAndDefaults(t *testing.T) {
 	if got.Summary != "v2" || got.Verdict != "comment" || got.Finalized {
 		t.Errorf("result: %+v", got)
 	}
+}
+
+// The real thread id is a 21-character opaque GraphQL node id. The model is
+// shown a two-character alias instead and must never have to copy the real one;
+// the harness still needs the real one back, so the mapping has to hold.
+// fpt/rs-gallium#160 lost a verified resolution to a `g` typed as `G`
+// (fpt/klein-cli#120).
+func TestReviewToolManager_ResolveByAlias(t *testing.T) {
+	t.Parallel()
+	const threadID = "PRRT_kwDOSHq0gM6bd94g"
+	m := NewReviewToolManager(rangeValidator, []string{threadID, "PRRT_kwDOSHq0gM6beA4e"})
+
+	expectOK(t, callReview(t, m, "ResolveReviewComment",
+		message.ToolArgumentValues{"id": "P1", "note": "fixed"}), "resolve by alias")
+
+	got := m.Result()
+	if len(got.Resolved) != 1 || got.Resolved[0].ID != threadID {
+		t.Errorf("alias P1 must resolve to the real thread id, got %+v", got.Resolved)
+	}
+}
+
+// The exact case of an opaque id is the thing that broke, so a difference in it
+// must not be the thing that decides. The set of previous ids is closed and
+// small, so a case-insensitive match is unambiguous.
+func TestReviewToolManager_ResolveIgnoresIDCase(t *testing.T) {
+	t.Parallel()
+	const threadID = "PRRT_kwDOSHq0gM6bd94g"
+	m := NewReviewToolManager(rangeValidator, []string{threadID})
+
+	expectOK(t, callReview(t, m, "ResolveReviewComment",
+		message.ToolArgumentValues{"id": "PRRT_kwDOSHq0gM6bd94G"}), "resolve with a mistyped case")
+
+	got := m.Result()
+	if len(got.Resolved) != 1 || got.Resolved[0].ID != threadID {
+		t.Errorf("a case slip must still name the right thread, got %+v", got.Resolved)
+	}
+}
+
+// A model reaching this message has already verified a fix; it needs the right
+// handle, not a second telling that it was wrong.
+func TestReviewToolManager_ResolveRejectionNamesTheValidIDs(t *testing.T) {
+	t.Parallel()
+	m := NewReviewToolManager(rangeValidator, []string{previousThreadID, "PRRT_b"})
+
+	res := callReview(t, m, "ResolveReviewComment", message.ToolArgumentValues{"id": "PRRT_typo"})
+	for _, want := range []string{"unknown comment id", "P1", "P2"} {
+		if !strings.Contains(res.Error, want) {
+			t.Errorf("rejection does not mention %q: %q", want, res.Error)
+		}
+	}
+}
+
+// The bug itself: the resolve was rejected, the model moved on, and the run
+// finalized cleanly having silently dropped a verified resolution. Finalizing
+// must bounce once — and only once, so a model that means it can still finish.
+func TestReviewToolManager_FinalizeBouncesOnADroppedResolve(t *testing.T) {
+	t.Parallel()
+	m := NewReviewToolManager(rangeValidator, []string{previousThreadID})
+
+	expectErr(t, callReview(t, m, "ResolveReviewComment", message.ToolArgumentValues{"id": "PRRT_A_typo"}),
+		"unknown comment id", "mistyped id")
+	expectOK(t, callReview(t, m, "AddInlineReview", inline(allowedFile, 12, nil)), "finding")
+	expectOK(t, callReview(t, m, "AddSummaryReview", message.ToolArgumentValues{"summary": "s"}), "summary")
+
+	expectErr(t, callReview(t, m, "FinalizeReview", nil), "named an unknown id", "first FinalizeReview")
+	expectOK(t, callReview(t, m, "FinalizeReview", nil), "second FinalizeReview")
+	if !m.Result().Finalized {
+		t.Error("the second FinalizeReview must complete; a stubborn rejection cannot hang the run")
+	}
+}
+
+// Retrying is exactly what the bounce asks for, so having retried must not
+// still be treated as having dropped it.
+func TestReviewToolManager_FinalizeAcceptsARetriedResolve(t *testing.T) {
+	t.Parallel()
+	m := NewReviewToolManager(rangeValidator, []string{previousThreadID})
+
+	expectErr(t, callReview(t, m, "ResolveReviewComment", message.ToolArgumentValues{"id": "nonsense"}),
+		"unknown comment id", "mistyped id")
+	expectOK(t, callReview(t, m, "ResolveReviewComment", message.ToolArgumentValues{"id": "P1"}), "retry")
+	expectOK(t, callReview(t, m, "AddSummaryReview", message.ToolArgumentValues{"summary": "s"}), "summary")
+	expectOK(t, callReview(t, m, "FinalizeReview", nil), "FinalizeReview after a successful retry")
 }

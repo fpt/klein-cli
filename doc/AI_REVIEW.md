@@ -83,8 +83,12 @@ new / deleted markers) and plain unified diffs. On an incremental round the
 harness passes only the changes since the last reviewed commit as `diff` and
 the complete PR diff as `full_diff` — commentable-line validation always uses
 the full diff, because GitHub rejects comments outside it. `previous_comments`
-ids are opaque to klein (the harness uses GraphQL review-thread node ids);
-they only round-trip through `ResolveReviewComment` into the result.
+ids are opaque to klein (the harness uses GraphQL review-thread node ids); they
+only round-trip into the result. The model never sees them — the prompt shows a
+short alias per comment (`P1`, `P2`, … in listing order) and
+`ResolveReviewComment` maps it back. A 21-character mixed-case node id is a
+transcription task with no redundancy, and getting one character wrong lost a
+verified resolution on fpt/rs-gallium#160 (fpt/klein-cli#120).
 Type: `review.Request` (`internal/review/prompt.go`).
 
 **Output** (`--output <file>`, stdout when omitted; agent chatter goes to
@@ -291,8 +295,8 @@ construction — the subcommand passes `ranges.Validate`, keeping
 |---|---|
 | `AddInlineReview` | Validates path+line via the injected validator; rejects duplicates (same path+range), missing/bad severities (required: `must/major/minor/nits`), a missing `rationale`, and calls after finalize. Swapped `line`/`end_line` bounds are silently normalized rather than bounced. **`rationale` is required and distinct from `body`**: `body` = the problem + concrete fix, `rationale` = why it's a problem and what was verified in the code — a forcing function at the tool-call site that gives the skill's verify step somewhere structured to land, and lets reviewers audit reasoning quality from the result JSON. The harness renders it as a collapsed `<details>` block so inline comments stay scannable. |
 | `AddSummaryReview` | Sets summary + verdict (`approve/comment/request_changes`, default `comment`); calling again *replaces* (never accumulates). Locked after finalize. |
-| `FinalizeReview` | Requires a summary first; idempotence errors on a second call; locks all further mutation. Bounces **once** when every attempted inline comment was rejected and none was recorded (see below); the retry always completes. |
-| `ResolveReviewComment` | Marks a previous-round comment as verified-fixed (id must match the `previous_comments` input; duplicates rejected). Only registered when previous comments exist. The harness resolves the thread. |
+| `FinalizeReview` | Requires a summary first; idempotence errors on a second call; locks all further mutation. Bounces **once** per kind of dropped work — every attempted inline comment rejected and none recorded, or a rejected `ResolveReviewComment` with nothing resolved afterwards (see below); the retry always completes. |
+| `ResolveReviewComment` | Marks a previous-round comment as verified-fixed. Takes the alias shown in the prompt (`P1`, `P2`, …); the raw thread id is also accepted, case-insensitively, and the result always carries the real id. Duplicates rejected; a rejection names the valid aliases. Only registered when previous comments exist. The harness resolves the thread. |
 
 Every rejection returns a tool *error result* (not a Go error), phrased as an
 instruction the model can act on — this is the self-correction loop that
@@ -446,7 +450,7 @@ caller level even though only the inner `resolve` job uses it.
 | Head commit already reviewed / empty incremental diff | Run skipped with a notice |
 | Sticky comment deleted between rounds | Recreated on the next round (legacy review-body markers still parsed) |
 | `resolveReviewThread` mutation fails | Warning; review is still posted, thread stays open for the next round |
-| Model resolves an id not in `previous_comments` | Tool call bounced (unknown id) |
+| Model resolves an id not in `previous_comments` | Tool call bounced, naming the valid aliases; `FinalizeReview` then bounces once more unless a resolve landed afterwards |
 | More comments than the cap | Sorted by severity, lowest trimmed and not posted (`trimmed_comments`) |
 | More *must* comments than the cap | As above + `force_full` set → next round is a full review |
 

@@ -29,8 +29,10 @@ What NOT to do:
 
 Previous review rounds (when the message lists "Previous Review Comments"):
 - For each listed comment, Read the current code at that location and judge whether the issue was fixed.
-- Fixed → call ResolveReviewComment with the listed id (add a short note on how). Verified against code, not against the diff alone.
+- Fixed → call ResolveReviewComment with the short id listed in the prompt (P1, P2, …), plus a note on how. Verified against code, not against the diff alone.
 - Still present → leave it open; do NOT post a duplicate AddInlineReview for the same issue.
+- If ResolveReviewComment is rejected, retry with an id the error names. A resolution you verified and then dropped leaves a fixed issue flagged as an open finding — never finish a round with one outstanding.
+- A previous finding fixed in a way that introduces a NEW problem is still fixed: resolve it and file the new problem as its own AddInlineReview. Leaving the old thread open to stand in for the new one keeps a stale comment on the PR forever.
 
 Reporting:
 - One AddInlineReview per verified finding. `line` must be a bracketed new-side line number from the annotated diff (lines marked `ctx` are not valid targets). Pick the line where the problem lives; use `end_line` only when the finding truly spans a range.

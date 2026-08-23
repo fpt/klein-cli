@@ -12,8 +12,11 @@ import (
 
 const allowedFile = "allowed.go"
 
-// previousThreadID stands in for a GraphQL review-thread node id.
-const previousThreadID = "PRRT_a"
+// previousThreadID and secondThreadID stand in for GraphQL review-thread node ids.
+const (
+	previousThreadID = "PRRT_a"
+	secondThreadID   = "PRRT_b"
+)
 
 // rangeValidator allows lines 10-20 of allowed.go only.
 func rangeValidator(path string, line, endLine int) error {
@@ -277,7 +280,7 @@ func TestReviewToolManager_ResolveIgnoresIDCase(t *testing.T) {
 // handle, not a second telling that it was wrong.
 func TestReviewToolManager_ResolveRejectionNamesTheValidIDs(t *testing.T) {
 	t.Parallel()
-	m := NewReviewToolManager(rangeValidator, []string{previousThreadID, "PRRT_b"})
+	m := NewReviewToolManager(rangeValidator, []string{previousThreadID, secondThreadID})
 
 	res := callReview(t, m, "ResolveReviewComment", message.ToolArgumentValues{"id": "PRRT_typo"})
 	for _, want := range []string{"unknown comment id", "P1", "P2"} {
@@ -317,4 +320,40 @@ func TestReviewToolManager_FinalizeAcceptsARetriedResolve(t *testing.T) {
 	expectOK(t, callReview(t, m, "ResolveReviewComment", message.ToolArgumentValues{"id": "P1"}), "retry")
 	expectOK(t, callReview(t, m, "AddSummaryReview", message.ToolArgumentValues{"summary": "s"}), "summary")
 	expectOK(t, callReview(t, m, "FinalizeReview", nil), "FinalizeReview after a successful retry")
+}
+
+// The case the single "a resolve landed afterwards" flag got wrong: a typo for
+// P1 followed by a valid P2 cleared it, and P1 stayed dropped — exactly the
+// loss the bounce exists to catch, one comment over.
+func TestReviewToolManager_FinalizeBouncesWhenADifferentCommentWasResolved(t *testing.T) {
+	t.Parallel()
+	m := NewReviewToolManager(rangeValidator, []string{previousThreadID, secondThreadID})
+
+	expectErr(t, callReview(t, m, "ResolveReviewComment", message.ToolArgumentValues{"id": "P1_typo"}),
+		"unknown comment id", "mistyped id")
+	expectOK(t, callReview(t, m, "ResolveReviewComment", message.ToolArgumentValues{"id": "P2"}), "a different comment")
+	expectOK(t, callReview(t, m, "AddSummaryReview", message.ToolArgumentValues{"summary": "s"}), "summary")
+
+	res := callReview(t, m, "FinalizeReview", nil)
+	if res.Error == "" {
+		t.Fatal("resolving P2 must not stand in for the dropped P1")
+	}
+	if !strings.Contains(res.Error, "P1") || strings.Contains(res.Error, "P2") {
+		t.Errorf("the bounce must name the still-open comment and only it: %q", res.Error)
+	}
+	expectOK(t, callReview(t, m, "FinalizeReview", nil), "second FinalizeReview")
+}
+
+// Every previous comment resolved is proof the rejected call's intent was
+// carried out, whichever comment it meant — so there is nothing to bounce on.
+func TestReviewToolManager_FinalizeAcceptsWhenEveryCommentIsResolved(t *testing.T) {
+	t.Parallel()
+	m := NewReviewToolManager(rangeValidator, []string{previousThreadID, secondThreadID})
+
+	expectErr(t, callReview(t, m, "ResolveReviewComment", message.ToolArgumentValues{"id": "nonsense"}),
+		"unknown comment id", "mistyped id")
+	expectOK(t, callReview(t, m, "ResolveReviewComment", message.ToolArgumentValues{"id": "P1"}), "first")
+	expectOK(t, callReview(t, m, "ResolveReviewComment", message.ToolArgumentValues{"id": "P2"}), "second")
+	expectOK(t, callReview(t, m, "AddSummaryReview", message.ToolArgumentValues{"summary": "s"}), "summary")
+	expectOK(t, callReview(t, m, "FinalizeReview", nil), "FinalizeReview with nothing left open")
 }

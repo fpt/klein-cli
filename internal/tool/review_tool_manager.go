@@ -105,10 +105,14 @@ type ReviewToolManager struct {
 	// message. A model that got the id wrong needs to be told the right ones,
 	// not told again that it was wrong.
 	previousAliases []string
-	summary         string
-	verdict         string
-	comments        []ReviewComment
-	resolved        []ResolvedComment
+	// aliasByID names a resolved comment back in the vocabulary the model was
+	// given, so the finalize bounce can say which threads are still open
+	// rather than which opaque ids are.
+	aliasByID map[string]string
+	summary   string
+	verdict   string
+	comments  []ReviewComment
+	resolved  []ResolvedComment
 
 	mu sync.Mutex
 	// rejected counts inline comments that were attempted but not recorded
@@ -116,15 +120,12 @@ type ReviewToolManager struct {
 	// severity, missing field) — i.e. findings the model has lost track of.
 	// Duplicates don't count: that finding is already recorded.
 	rejected int
-	// rejectedResolves counts ResolveReviewComment calls that named nothing,
-	// and resolvedAfterReject records whether any resolve has landed since the
-	// last one. Together they separate "mistyped the id and moved on" — the
-	// bug this exists for — from "mistyped it, then retried correctly".
-	rejectedResolves    int
-	resolvedAfterReject bool
-	bounced             bool
-	bouncedResolve      bool
-	finalized           bool
+	// rejectedResolves counts ResolveReviewComment calls that named nothing:
+	// a resolution the model meant to make and may have walked away from.
+	rejectedResolves int
+	bounced          bool
+	bouncedResolve   bool
+	finalized        bool
 }
 
 // NewReviewToolManager creates a review tool manager. validate must not be
@@ -135,6 +136,7 @@ func NewReviewToolManager(validate LineValidator, previousIDs []string) *ReviewT
 		tools:       make(map[message.ToolName]message.Tool),
 		validate:    validate,
 		previousIDs: make(map[string]string, 2*len(previousIDs)),
+		aliasByID:   make(map[string]string, len(previousIDs)),
 		verdict:     reviewVerdictDefault,
 	}
 	// previousIDs arrives in prompt order, which is what makes the i-th alias
@@ -150,6 +152,7 @@ func NewReviewToolManager(validate LineValidator, previousIDs []string) *ReviewT
 		alias := review.PreviousCommentAlias(i)
 		m.previousAliases = append(m.previousAliases, alias)
 		m.previousIDs[strings.ToLower(alias)] = id
+		m.aliasByID[id] = alias
 	}
 	m.register()
 	return m
@@ -251,7 +254,6 @@ func (m *ReviewToolManager) handleResolve(_ context.Context, args message.ToolAr
 		}
 	}
 	m.resolved = append(m.resolved, ResolvedComment{ID: id, Note: strings.TrimSpace(stringArg(args, reviewArgNote))})
-	m.resolvedAfterReject = true
 	return message.NewToolResultText(fmt.Sprintf("Marked previous comment %s as resolved.", named)), nil
 }
 
@@ -263,7 +265,6 @@ func (m *ReviewToolManager) handleResolve(_ context.Context, args message.ToolAr
 func (m *ReviewToolManager) rejectResolve(msg string) message.ToolResult {
 	m.mu.Lock()
 	m.rejectedResolves++
-	m.resolvedAfterReject = false
 	aliases := strings.Join(m.previousAliases, ", ")
 	m.mu.Unlock()
 
@@ -398,6 +399,39 @@ func (m *ReviewToolManager) handleAddSummary(_ context.Context, args message.Too
 	return message.NewToolResultText("Summary recorded. Call FinalizeReview to complete the review."), nil
 }
 
+// unresolvedAliases names the previous comments no resolve has landed on, in
+// prompt order. Callers hold m.mu.
+//
+// This is what makes the rejected-resolve bounce precise without guessing. A
+// rejected call named nothing, so which comment it *meant* is unknowable — but
+// whatever it meant was one of the comments still open, so an empty result
+// proves the intent was carried out and anything else leaves it in doubt. A
+// single "did any resolve land afterwards" flag got this wrong across
+// comments: mistyping P1 and then resolving P2 cleared it, and P1 stayed
+// dropped — the very failure this bounce exists to catch.
+func (m *ReviewToolManager) unresolvedAliases() []string {
+	done := make(map[string]bool, len(m.resolved))
+	for _, r := range m.resolved {
+		done[m.aliasByID[r.ID]] = true
+	}
+	var open []string
+	for _, alias := range m.previousAliases {
+		if !done[alias] {
+			open = append(open, alias)
+		}
+	}
+	return open
+}
+
+// plural picks the verb form for n, so a bounce message about one open thread
+// does not read as though it were written for a list.
+func plural(n int, one, many string) string {
+	if n == 1 {
+		return one
+	}
+	return many
+}
+
 // bounceMessage returns why FinalizeReview should be refused once, or "" to
 // let it through. Callers hold m.mu; it sets the bounce flags it reports on, so
 // asking twice is what makes the second FinalizeReview succeed.
@@ -417,13 +451,13 @@ func (m *ReviewToolManager) bounceMessage() string {
 				"commentable line — fold it into AddSummaryReview.",
 			m.rejected))
 	}
-	if m.rejectedResolves > 0 && !m.resolvedAfterReject && !m.bouncedResolve {
+	if open := m.unresolvedAliases(); m.rejectedResolves > 0 && len(open) > 0 && !m.bouncedResolve {
 		m.bouncedResolve = true
 		msgs = append(msgs, fmt.Sprintf(
-			"%d ResolveReviewComment call(s) named an unknown id and nothing was resolved afterwards, so a "+
-				"fix you verified would stay flagged as an open finding. Retry with one of: %s — or, if the "+
-				"comment is genuinely still unfixed, leave it open and call FinalizeReview again.",
-			m.rejectedResolves, strings.Join(m.previousAliases, ", ")))
+			"%d ResolveReviewComment call(s) named an unknown id, and %s %s still open — so a fix you "+
+				"verified may be about to stay flagged as an open finding. Retry any of those you confirmed "+
+				"fixed; if they are genuinely still unfixed, leave them open and call FinalizeReview again.",
+			m.rejectedResolves, strings.Join(open, ", "), plural(len(open), "is", "are")))
 	}
 	if len(msgs) == 0 {
 		return ""

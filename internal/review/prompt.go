@@ -54,6 +54,16 @@ type Request struct {
 	FullDiff string `json:"full_diff,omitempty"`
 	// Mode is "full" (default) or "incremental"; only affects prompt phrasing.
 	Mode string `json:"mode,omitempty"`
+	// PreviousSummary is the summary the last round wrote, carried forward
+	// because nothing else preserves it. The sticky comment holding it is
+	// overwritten every round, so only the most recent one is recoverable —
+	// hence one field and not a history.
+	//
+	// It matters because the review skill sends findings with no commentable
+	// line (deleted files, pre-existing issues) to the summary and nowhere
+	// else: without this the one channel for them is also the one channel
+	// structurally guaranteed to be forgotten. See fpt/klein-cli#122.
+	PreviousSummary string `json:"previous_summary,omitempty"`
 	// PreviousComments are unresolved inline comments from earlier rounds.
 	PreviousComments []PreviousComment `json:"previous_comments,omitempty"`
 	// PRComments are top-level comments on the pull request written since the
@@ -90,6 +100,7 @@ func BuildPrompt(req Request, enrichedDiff, language string) string {
 	b.WriteString("lines marked `ctx` are surrounding context for understanding only and MUST NOT be comment targets.\n\n")
 	b.WriteString(enrichedDiff)
 
+	writePreviousSummary(&b, req.PreviousSummary)
 	writePreviousComments(&b, req.PreviousComments)
 	writePRComments(&b, req.PRComments)
 
@@ -143,6 +154,31 @@ const controlTokenNote = "\nNote on notation: chat-template control tokens in th
 // harness contract — the tool manager maps the alias back before Result().
 func PreviousCommentAlias(i int) string {
 	return fmt.Sprintf("P%d", i+1)
+}
+
+// writePreviousSummary renders the last round's own summary.
+//
+// The framing matters as much as the text. An assessment is not a
+// verification, and the code has moved since it was written, so carrying it in
+// as settled fact would let a stale judgement outlive the code it judged —
+// the failure mode the "verify against the current code" rule exists to
+// prevent everywhere else. It is carried as a record of what was already
+// considered, which is exactly what a fresh context cannot reconstruct.
+func writePreviousSummary(b *strings.Builder, summary string) {
+	summary = strings.TrimSpace(summary)
+	if summary == "" {
+		return
+	}
+	b.WriteString("\n# Your Previous Review Summary (last round)\n")
+	b.WriteString("What you wrote at the end of the last round. Nothing else preserves it: it is the ")
+	b.WriteString("only record of findings that had no commentable line — deleted files, pre-existing ")
+	b.WriteString("issues — and of ground you have already been over.\n")
+	b.WriteString("Context, not fact about the current code. The code has changed since, and an ")
+	b.WriteString("assessment is not a verification: anything from it you intend to report again must ")
+	b.WriteString("be re-verified against the code as it stands now. Do not restate it — this round ")
+	b.WriteString("gets its own summary, written for the change in front of you.\n\n")
+	b.WriteString(summary)
+	b.WriteString("\n")
 }
 
 // writePreviousComments renders the unresolved comments from earlier rounds,

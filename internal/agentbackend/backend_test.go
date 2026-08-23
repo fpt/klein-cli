@@ -2,6 +2,7 @@ package agentbackend
 
 import (
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/fpt/klein-cli/internal/config"
@@ -14,6 +15,12 @@ const (
 	appServerBin     = "gallium"
 	appServerBinPath = "/opt/gallium"
 	codexBinPath     = "/opt/codex"
+	// An app-server somewhere else; never dialed, only ever configured.
+	dialedAddress = "10.0.0.2:4711"
+	// The settings that configure a server klein spawns, by their TOML names.
+	fieldArgs   = "args"
+	fieldEnv    = "env"
+	fieldConfig = "config"
 )
 
 // TestDialectFor confirms only codex is driven as codex. Everything else — a
@@ -169,5 +176,71 @@ func TestApprovalPolicyPrefersBackendBlock(t *testing.T) {
 	got = approvalPolicy(codex, RunnerOptions{ApprovalPolicy: agentserver.ApprovalNever})
 	if got != agentserver.ApprovalOnRequest {
 		t.Errorf("codex explicit policy: got %q", got)
+	}
+}
+
+// TestDialAddressIsAppServerOnly confirms only the generic backend can name an
+// address: codex is a local CLI klein launches, and would silently ignore one.
+func TestDialAddressIsAppServerOnly(t *testing.T) {
+	t.Parallel()
+
+	appServer := &config.Settings{}
+	appServer.LLM.Backend = config.BackendAppServer
+	appServer.AppServer.Address = dialedAddress
+	if got := dialAddress(appServer); got != dialedAddress {
+		t.Errorf("appserver address = %q", got)
+	}
+
+	codex := &config.Settings{}
+	codex.LLM.Backend = config.BackendCodex
+	codex.AppServer.Address = dialedAddress // belongs to the other block
+	if got := dialAddress(codex); got != "" {
+		t.Errorf("codex must not dial: got %q", got)
+	}
+}
+
+// TestValidateDialedAppServerRejectsSpawnSettings is the guard against the
+// quietest way this feature could go wrong: a user sets appserver.env believing
+// they picked a model, when the process reading it runs on another machine and
+// was configured there. Silence would look like success.
+func TestValidateDialedAppServerRejectsSpawnSettings(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		want     string
+		settings config.AppServerSettings
+	}{
+		{argCommand, argCommand, config.AppServerSettings{Command: appServerBin}},
+		{fieldArgs, fieldArgs, config.AppServerSettings{Args: []string{appServerSubcommand}}},
+		{fieldEnv, fieldEnv, config.AppServerSettings{Env: map[string]string{"MODEL_PATH": "/m.gguf"}}},
+		{fieldConfig, fieldConfig, config.AppServerSettings{Config: "/etc/agent.toml"}},
+		{"address alone", "", config.AppServerSettings{}},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			s := tc.settings
+			s.Address = dialedAddress
+
+			err := validateDialedAppServer(s)
+			if tc.want == "" {
+				if err != nil {
+					t.Fatalf("want no error, got %v", err)
+				}
+				return
+			}
+			if err == nil {
+				t.Fatalf("want an error naming appserver.%s", tc.want)
+			}
+			if !strings.Contains(err.Error(), tc.want) {
+				t.Errorf("error %q does not name %q", err, tc.want)
+			}
+			// It must also name the address, or the user cannot tell which half
+			// of the configuration to drop.
+			if !strings.Contains(err.Error(), s.Address) {
+				t.Errorf("error %q does not name the address", err)
+			}
+		})
 	}
 }

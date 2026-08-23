@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"strings"
 
 	"github.com/fpt/klein-cli/internal/config"
 	"github.com/fpt/klein-cli/internal/tool"
@@ -99,6 +100,45 @@ func command(settings *config.Settings) (string, []string, error) {
 	}
 }
 
+// dialAddress returns the address of an app-server klein should dial rather than
+// spawn, or "" when there is none. Only the generic appserver backend has one:
+// codex is a local CLI klein launches.
+func dialAddress(settings *config.Settings) string {
+	if settings.LLM.Backend != config.BackendAppServer {
+		return ""
+	}
+	return settings.AppServer.Address
+}
+
+// validateDialedAppServer rejects settings that only mean something for a server
+// klein starts itself. Ignoring them silently would be the worse failure: a user
+// who set appserver.env believes they chose a model, and the process that reads
+// it is on another machine entirely.
+func validateDialedAppServer(s config.AppServerSettings) error {
+	var stray []string
+	if s.Command != "" {
+		stray = append(stray, "command")
+	}
+	if len(s.Args) > 0 {
+		stray = append(stray, "args")
+	}
+	if len(s.Env) > 0 {
+		stray = append(stray, "env")
+	}
+	//nolint:staticcheck // SA1019: deprecated, but still honored — and still meaningless when dialing.
+	if s.Config != "" {
+		stray = append(stray, "config")
+	}
+	if len(stray) == 0 {
+		return nil
+	}
+	return fmt.Errorf(
+		"appserver.address = %q dials an app-server klein does not start, so appserver.%s "+
+			"would have no effect: they configure a spawned server. Remove them, or set them "+
+			"where that server runs",
+		s.Address, strings.Join(stray, "/"))
+}
+
 // approvalPolicy resolves the policy the backend runs under: an explicit setting
 // in the backend's own block wins over the mode default from opts.
 func approvalPolicy(settings *config.Settings, opts RunnerOptions) string {
@@ -138,18 +178,29 @@ func NewRunnerFromSettings(
 	}
 	nativeTools := tool.NewCompositeToolManager(nativeManagers...)
 
-	path, args, err := command(settings)
-	if err != nil {
-		return nil, err
-	}
-
-	env, err := appServerEnvironment(settings, opts.Logger)
-	if err != nil {
-		return nil, err
+	// Dialed or spawned: an address names a server running somewhere else, which
+	// klein neither launches nor configures, so none of the launch settings apply.
+	var (
+		path, address string
+		args, env     []string
+	)
+	if address = dialAddress(settings); address != "" {
+		if err := validateDialedAppServer(settings.AppServer); err != nil {
+			return nil, err
+		}
+	} else {
+		var err error
+		if path, args, err = command(settings); err != nil {
+			return nil, err
+		}
+		if env, err = appServerEnvironment(settings, opts.Logger); err != nil {
+			return nil, err
+		}
 	}
 
 	runner, err := agentserver.NewRunner(ctx, agentserver.Config{
 		Command:        path,
+		Address:        address,
 		Args:           args,
 		Env:            env,
 		Dialect:        dialectFor(settings.LLM.Backend),

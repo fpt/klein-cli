@@ -423,8 +423,23 @@ var ShellEnvironmentInheritModes = []string{"core", "all", "none"}
 // because there is no single "the" app-server binary.
 type AppServerSettings struct {
 	// Command is the app-server binary (e.g. "gallium", or an absolute path).
-	// Required — this backend has no default binary.
+	// Required — this backend has no default binary — unless Address is set, in
+	// which case klein starts nothing and Command must be empty.
 	Command string `toml:"command,omitempty"`
+	// Address dials an app-server already listening on "host:port" (e.g. a
+	// `GALLIUM_LISTEN=… gallium app-server` on a GPU box) instead of spawning
+	// one locally. The agent then runs there while klein's dynamic tools keep
+	// running here, on the user's machine.
+	//
+	// It is mutually exclusive with Command, and with everything that configures
+	// a spawned child (Args, Env, Config): that process is started and
+	// configured wherever it runs.
+	//
+	// There is deliberately no default. The connection carries no
+	// authentication and no TLS, so anything that can reach the port runs tools
+	// as that user on that machine — point it at loopback, an SSH tunnel, or a
+	// Tailscale/WireGuard address where the overlay does the authenticating.
+	Address string `toml:"address,omitempty"`
 	// ApprovalPolicy is never|on-request ("" → the mode default).
 	ApprovalPolicy string `toml:"approval_policy,omitempty"`
 	// Config is a path to the server's own TOML config (e.g.

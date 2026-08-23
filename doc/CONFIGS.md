@@ -150,7 +150,9 @@ memory-context injection, and session↔thread mapping.
 subset klein uses — `initialize` with the `experimentalApi` capability,
 `thread/start`, `turn/start`, and `dynamicTools` — can be plugged in. Because
 there is no single "the" app-server binary, **`appserver.command` is required**;
-klein does not guess a default and will refuse to start without it. The reference
+klein does not guess a default and will refuse to start without it. (The one
+alternative is `appserver.address`, which dials a server somebody else started —
+see [below](#reaching-a-server-on-another-machine).) The reference
 implementation is [rs-gallium](https://github.com/fpt/rs-gallium), whose binary is
 `gallium`.
 
@@ -180,7 +182,8 @@ Two differences from codex worth knowing:
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
-| `command` | string | *(none — **required**)* | The app-server binary, e.g. `gallium` or an absolute path |
+| `command` | string | *(none — **required**, unless `address` is set)* | The app-server binary, e.g. `gallium` or an absolute path |
+| `address` | string | *(none)* | `host:port` of an app-server **already running** — klein dials it instead of spawning one. Mutually exclusive with `command`/`args`/`env`. See [Reaching a server on another machine](#reaching-a-server-on-another-machine) |
 | `args` | string[] | `["app-server"]` | Subcommand that puts the binary into app-server mode |
 | `env` | object | — | Environment variables `{ "KEY": "VAL" }` passed to the server. See below. |
 | `approval_policy` | string | *(mode-dependent)* | `never` / `on-request`. Same mode defaults as codex: the interactive repl prompts you (y/N) before the server writes a file or runs a command; headless surfaces auto-approve. Set explicitly to override. |
@@ -240,6 +243,57 @@ backend = "appserver"
 command         = "gallium"
 approval_policy = "on-request"
 ```
+
+#### Reaching a server on another machine
+
+`appserver.address` dials an app-server that is already listening instead of
+spawning one, so the agent can run where the GPU is while klein stays on your
+laptop. The protocol is identical over the wire — including the direction that
+runs backwards, where the server calls back for klein's tools, which then run
+**locally**, against your files.
+
+On the server (rs-gallium spells its listen address `GALLIUM_LISTEN`, or
+`[agent] listen` in its own TOML):
+
+```bash
+GALLIUM_LISTEN=127.0.0.1:47821 gallium app-server --config configs/qwen3.8.toml
+```
+
+On the client:
+
+```toml
+[llm]
+backend = "appserver"
+
+[appserver]
+address         = "127.0.0.1:47821"   # e.g. the local end of an SSH tunnel
+approval_policy = "on-request"
+```
+
+> **This connection is unauthenticated and unencrypted.** Anything that can reach
+> that port drives an agent with that user's privileges on that machine. Bind it
+> to loopback and reach it through an SSH tunnel
+> (`ssh -N -L 47821:127.0.0.1:47821 gpubox`), or use a Tailscale/WireGuard
+> address where the overlay does the authenticating. klein gives `address` no
+> default for this reason.
+
+`command`, `args`, `env` and `config` configure a server klein **starts**, so
+setting any of them alongside `address` is rejected rather than ignored: that
+process was configured wherever it runs, and silently dropping a `MODEL_PATH`
+would leave you believing you had chosen a model.
+
+Two behaviours are worth knowing:
+
+- **Being displaced is normal.** A server like gallium serves one client at a
+  time and prefers the newest, closing the older connection — which is what keeps
+  a laptop that slept from locking you out of your own box. klein reports that as
+  the session being taken over, not as the backend dying.
+- **Reconnects happen on your next turn.** klein redials when you ask for
+  something, never in the background (two idle klein instances would otherwise
+  take the session from each other forever). Thread ids do not survive the
+  reconnect — they belong to the connection — so that turn starts a fresh thread
+  on the server. Your conversation history is klein's and is unaffected; what is
+  lost is the server-side context of the old thread.
 
 ### `agent` — Agent behaviour
 

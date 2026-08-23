@@ -150,6 +150,35 @@ GALLIUM_GPU_LAYERS = "20"
 	}
 }
 
+// TestAppServerAddressRoundTrip confirms appserver.address parses. A wrong tag
+// would leave it empty and klein would try to spawn a binary that is not there,
+// blaming the wrong machine.
+func TestAppServerAddressRoundTrip(t *testing.T) {
+	t.Parallel()
+	p := filepath.Join(t.TempDir(), "settings.toml")
+	body := "[llm]\nbackend = \"" + BackendAppServer + `"
+
+[appserver]
+address = "gpubox:4711"
+approval_policy = "on-request"
+`
+	if err := os.WriteFile(p, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	s, err := LoadSettings(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s.AppServer.Address != "gpubox:4711" {
+		t.Errorf("address: got %q", s.AppServer.Address)
+	}
+	// Nothing is spawned in this shape, so command stays empty rather than
+	// acquiring a default.
+	if s.AppServer.Command != "" {
+		t.Errorf("command: got %q, want empty", s.AppServer.Command)
+	}
+}
+
 // loadCodexBlock writes a settings file carrying codexTOML (the [codex] tables,
 // written out in full) and returns the parsed block.
 func loadCodexBlock(t *testing.T, codexTOML string) CodexSettings {

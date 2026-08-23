@@ -472,3 +472,73 @@ func TestValidateWorkspaceTools_RefusesADialedServerWithNoTools(t *testing.T) {
 		}
 	}
 }
+
+// nativeOnlyTools is what klein offered before this feature existed, and what a
+// wiring regression would offer again: memory and scheduling, nothing that
+// touches a file.
+type nativeOnlyTools struct{}
+
+func (nativeOnlyTools) Specs() []agentserver.ToolSpec {
+	names := []string{
+		"MemorySearch", "MemoryGet", "MemoryWrite", "Forget", "Recall", "Remember",
+		"Reinforce", "Revise", "MemoryHistory", "ScheduleCreate", "ScheduleList", "ScheduleDelete",
+	}
+	specs := make([]agentserver.ToolSpec, 0, len(names))
+	for _, name := range names {
+		specs = append(specs, agentserver.ToolSpec{Name: name, Description: "a native tool"})
+	}
+	return specs
+}
+
+func (nativeOnlyTools) Call(context.Context, string, map[string]any) (string, error) {
+	return "", nil
+}
+
+// The check the server cannot make. A backend on the other end of a socket sees
+// a list of dynamic tools and cannot tell what any of them do, so twelve memory
+// and scheduling tools look exactly like a full workspace — which is how this
+// reached a user: the model was offered memory, offered to list a directory, and
+// found out mid-turn that it could not.
+func TestVerifyWorkspaceToolsOffered(t *testing.T) {
+	t.Parallel()
+
+	// The regression it exists to catch: dialed, tools registered, none of them
+	// the ones that matter.
+	err := verifyWorkspaceToolsOffered(dialedAddress, nativeOnlyTools{})
+	if err == nil {
+		t.Fatal("a dialed backend with no workspace tools was allowed to start")
+	}
+	if !strings.Contains(err.Error(), dialedAddress) {
+		t.Errorf("error does not name the address: %v", err)
+	}
+
+	// Nothing registered at all is the same failure, more obviously.
+	if verifyWorkspaceToolsOffered(dialedAddress, nil) == nil {
+		t.Error("a dialed backend with no tools at all was allowed to start")
+	}
+
+	// A spawned backend is not this check's business: it has tools of its own.
+	if err := verifyWorkspaceToolsOffered("", nativeOnlyTools{}); err != nil {
+		t.Errorf("a spawned backend was refused: %v", err)
+	}
+
+	// And the real thing passes, which is what stops this from being a check
+	// that only ever fires.
+	actual := newToolHost(tool.NewCompositeToolManager(offeredManagers(dialedSettings(), t.TempDir())...))
+	if err := verifyWorkspaceToolsOffered(dialedAddress, actual); err != nil {
+		t.Errorf("the tools klein actually offers a dialed backend were refused: %v", err)
+	}
+}
+
+// The production list and the contract list in this file must not drift apart:
+// the second is what pins the names against a rename, and it is worthless if the
+// first can be renamed without it noticing.
+func TestWorkspaceToolNamesMatchTheContract(t *testing.T) {
+	t.Parallel()
+
+	got := slices.Clone(workspaceToolNames)
+	slices.Sort(got)
+	if !slices.Equal(got, conventionalToolNames) {
+		t.Errorf("workspaceToolNames = %v, want %v", got, conventionalToolNames)
+	}
+}

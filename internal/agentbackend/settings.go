@@ -265,6 +265,11 @@ func NewRunnerFromSettings(
 	// the approval that came with them has to come from somewhere.
 	offeredTools := withApproval(newToolHost(nativeTools), backendApprover(opts.Approver))
 	logOfferedTools(opts.Logger, offeredTools)
+	// Last check before the connection: what was actually assembled, not what the
+	// settings asked for.
+	if err := verifyWorkspaceToolsOffered(address, offeredTools); err != nil {
+		return nil, err
+	}
 
 	runner, err := agentserver.NewRunner(ctx, agentserver.Config{
 		Command:        path,

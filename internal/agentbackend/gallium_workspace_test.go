@@ -80,10 +80,13 @@ func writeFixture(t *testing.T, name, content string) string {
 // or parsing its output — but a lost race fails loudly (gallium exits saying it
 // cannot bind) rather than quietly.
 //
-// --config, pointing at a file that configures nothing, is not decoration:
-// without it gallium falls back to ~/.config/gallium/config.toml, and a
-// developer whose own config sets `[agent] listen` gets a server listening
-// somewhere else entirely. Observed exactly that.
+// --listen is the only way to open a socket: gallium reads no env var and no
+// config key for it, so the address is always visible in the command line.
+//
+// --config still names a file that configures nothing, though the reason has
+// narrowed: it no longer guards against a developer's `[agent] listen` (which
+// gallium stopped reading), but it still keeps their inferenceEngine or
+// skillPaths out of a test that believes it controls the server.
 func listeningGallium(t *testing.T, script string) string {
 	t.Helper()
 
@@ -98,9 +101,8 @@ func listeningGallium(t *testing.T, script string) string {
 
 	emptyConfig := writeFixture(t, "gallium.toml", "[agent]\n")
 	//nolint:gosec // G204: the binary is GALLIUM_BIN, named by whoever ran the test
-	cmd := exec.Command(galliumBin(t), appServerSubcommand, "--config", emptyConfig)
+	cmd := exec.Command(galliumBin(t), appServerSubcommand, "--listen", address, "--config", emptyConfig)
 	cmd.Env = append(os.Environ(),
-		"GALLIUM_LISTEN="+address,
 		"INFERENCE_ENGINE=scripted",
 		"MODEL_PATH="+script,
 	)

@@ -111,12 +111,13 @@ func newGalliumRunner(t *testing.T, bin, script, workDir string) (*Runner, *byte
 // appServerArgs puts gallium into app-server mode, pointed at a config file that
 // configures nothing.
 //
-// The --config is what makes these tests hermetic, and it was learned the hard
-// way: without it gallium falls back to ~/.config/gallium/config.toml, so a
-// developer whose own config sets `[agent] listen` gets a server that opens a
-// socket and never speaks the stdio these tests are waiting on — and the test
-// hangs until its timeout rather than failing. The file names the server's
-// configuration instead of inheriting whoever's machine this is.
+// The --config is what makes these tests hermetic. It was learned the hard way,
+// from a developer config whose `[agent] listen` turned a stdio test into a
+// server that opened a socket and never answered — gallium stopped reading that
+// key (an address is typed on the command line now, nowhere else), but the same
+// file can still hand a test an inferenceEngine or skillPaths it did not choose.
+// The flag names the server's configuration instead of inheriting whoever's
+// machine this is.
 func appServerArgs(t *testing.T) []string {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "gallium.toml")
@@ -445,10 +446,11 @@ func listenAt(t *testing.T, bin, script, workDir string) string {
 	t.Helper()
 	address := reserveAddress(t)
 
-	cmd := exec.Command(bin, appServerArgs(t)...) //nolint:gosec // the binary is GALLIUM_BIN, the tester's own
+	args := append([]string{}, appServerArgs(t)...)
+	args = append(args, "--listen", address)
+	cmd := exec.Command(bin, args...) //nolint:gosec // the binary is GALLIUM_BIN, the tester's own
 	cmd.Dir = workDir
 	cmd.Env = append(os.Environ(),
-		"GALLIUM_LISTEN="+address,
 		"INFERENCE_ENGINE=scripted",
 		"MODEL_PATH="+script,
 		"GALLIUM_AUTO_APPROVE=1",

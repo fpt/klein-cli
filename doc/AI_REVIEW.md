@@ -72,6 +72,7 @@ Steps 1–2 and 8 live in `.github/actions/ai-review/action.yml`; steps 3–7 ar
   "diff": "<unified diff to review>",
   "full_diff": "<complete PR diff>",        // optional; incremental rounds only
   "mode": "full",                            // full (default) | incremental
+  "previous_summary": "…",                   // optional; last round's own summary
   "previous_comments": [                     // optional; unresolved earlier findings
     { "id": "PRRT_…", "path": "a.go", "line": 9, "body": "…" }
   ]
@@ -82,7 +83,12 @@ Steps 1–2 and 8 live in `.github/actions/ai-review/action.yml`; steps 3–7 ar
 new / deleted markers) and plain unified diffs. On an incremental round the
 harness passes only the changes since the last reviewed commit as `diff` and
 the complete PR diff as `full_diff` — commentable-line validation always uses
-the full diff, because GitHub rejects comments outside it. `previous_comments`
+the full diff, because GitHub rejects comments outside it. `previous_summary` is the
+last round's own summary — the sticky comment's body minus the state marker.
+Nothing else preserves it: the comment is overwritten each round, and the review
+skill sends findings with no commentable line (deleted files, pre-existing
+issues) to the summary and nowhere else (fpt/klein-cli#122). It is rendered as
+context to re-verify, never as a finding to repeat. `previous_comments`
 ids are opaque to klein (the harness uses GraphQL review-thread node ids); they
 only round-trip into the result. The model never sees them — the prompt shows a
 short alias per comment (`P1`, `P2`, … in listing order) and

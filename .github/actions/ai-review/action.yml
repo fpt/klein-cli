@@ -158,10 +158,20 @@ runs:
           > /tmp/sticky.json || true
         STICKY_ID=""
         STATE=""
+        # Always exists, empty when there is no previous round: the request
+        # builder reads it with --rawfile, which has no "absent" case.
+        : > /tmp/previous-summary.md
         if [ -s /tmp/sticky.json ]; then
           STICKY_ID=$(jq -r .id /tmp/sticky.json)
           STATE=$(jq -r .body /tmp/sticky.json \
             | grep -o '<!-- klein-review-state {[^}]*} -->' | tail -1 || true)
+          # The previous round's summary, carried into this one's prompt. The
+          # state marker is machine state rather than review content, so it is
+          # stripped; everything else — assessment and stats footer — is what
+          # the reviewer wrote and is the only surviving record of it, since
+          # this comment is overwritten each round (fpt/klein-cli#122).
+          jq -r .body /tmp/sticky.json \
+            | sed 's|<!-- klein-review-state {[^}]*} -->||' > /tmp/previous-summary.md
         else
           STATE=$(gh api "repos/$GITHUB_REPOSITORY/pulls/$PR/reviews" --paginate 2>/dev/null \
             | jq -rs 'add // [] | .[] | select(.user.login == "github-actions[bot]") | .body' \
@@ -335,15 +345,19 @@ runs:
           jq --rawfile diff /tmp/pr-incremental.diff --rawfile full /tmp/pr-full.diff \
              --slurpfile prev /tmp/previous-comments.json \
              --slurpfile prcomments /tmp/pr-comments.json \
+             --rawfile prevsummary /tmp/previous-summary.md \
             '{title: .title, body: (.body // ""), diff: $diff, full_diff: $full,
-              mode: "incremental", previous_comments: $prev[0],
+              mode: "incremental", previous_summary: $prevsummary,
+              previous_comments: $prev[0],
               pr_comments: $prcomments[0]}' \
             /tmp/pr-meta.json > /tmp/review-request.json
         else
           jq --rawfile diff /tmp/pr-full.diff --slurpfile prev /tmp/previous-comments.json \
              --slurpfile prcomments /tmp/pr-comments.json \
+             --rawfile prevsummary /tmp/previous-summary.md \
             '{title: .title, body: (.body // ""), diff: $diff,
-              mode: "full", previous_comments: $prev[0],
+              mode: "full", previous_summary: $prevsummary,
+              previous_comments: $prev[0],
               pr_comments: $prcomments[0]}' \
             /tmp/pr-meta.json > /tmp/review-request.json
         fi

@@ -314,10 +314,12 @@ the fix, and it is not implemented yet.
 > **Gotcha for spawned gallium.** `gallium app-server` with no `--config` reads
 > `~/.config/gallium/config.toml`, so if yours sets `[agent] listen` a gallium
 > klein *spawned* will open a socket and never speak stdio — klein then waits for
-> a reply that is not coming. Either hand the server a config explicitly
-> (`args = ["app-server", "--config", "…"]`) or put `GALLIUM_LISTEN = ""` in
-> `[appserver.env]`, which recent gallium reads as "stdio, whatever the config
-> says".
+> a reply that is not coming. Hand the server a config explicitly instead:
+> `args = ["app-server", "--config", "…"]`, naming a file that does not set
+> `listen`. (A future gallium will read `GALLIUM_LISTEN = ""` in
+> `[appserver.env]` as "stdio, whatever the config says" —
+> [fpt/rs-gallium#163](https://github.com/fpt/rs-gallium/pull/163); today an
+> empty value is discarded with the unset ones and the config still wins.)
 
 #### Reaching a server on another machine
 

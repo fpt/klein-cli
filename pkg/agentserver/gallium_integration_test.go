@@ -427,7 +427,7 @@ func listenAt(t *testing.T, bin, script, workDir string) string {
 	t.Helper()
 	address := reserveAddress(t)
 
-	cmd := exec.Command(bin, "app-server")
+	cmd := exec.Command(bin, appServerArg)
 	cmd.Dir = workDir
 	cmd.Env = append(os.Environ(),
 		"GALLIUM_LISTEN="+address,

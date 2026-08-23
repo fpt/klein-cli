@@ -30,6 +30,7 @@ const (
 	pingTool          = "KleinPing"
 	testAddress       = "10.0.0.2:4711" // never dialed: only ever configured
 	spawnedBinary     = "gallium"       // never run: only ever configured
+	appServerArg      = "app-server"    // the conventional subcommand
 )
 
 // jsonlServer is an app-server on a real socket: enough of the protocol to
@@ -369,6 +370,28 @@ func TestDialTCP_UnreachableAddressFailsNamingIt(t *testing.T) {
 	}
 }
 
+// assertNamesStraySettings checks that a rejection names every launch setting
+// that was configured alongside an address. Naming them is the whole point: a
+// user told only that "something" cannot reach the server cannot tell which half
+// of their configuration to drop.
+func assertNamesStraySettings(t *testing.T, err error, cfg Config) {
+	t.Helper()
+	if cfg.Address == "" {
+		return
+	}
+	for _, arg := range cfg.Args {
+		if !strings.Contains(err.Error(), arg) {
+			t.Errorf("error %q does not name the argument %q", err, arg)
+		}
+	}
+	for _, kv := range cfg.Env {
+		key, _, _ := strings.Cut(kv, "=")
+		if !strings.Contains(err.Error(), key) {
+			t.Errorf("error %q does not name the variable %q", err, key)
+		}
+	}
+}
+
 // The config says either "spawn this" or "dial that", never both and never
 // neither, and the settings that configure a spawned child cannot reach a server
 // on another machine. Each of these is caught before anything is opened.
@@ -391,6 +414,22 @@ func TestConfigValidate(t *testing.T) {
 			Config{Address: testAddress, Env: []string{"MODEL_PATH=/models/x.gguf"}},
 			"MODEL_PATH",
 		},
+		{
+			"args with an address",
+			Config{Address: testAddress, Args: []string{appServerArg, "--config", "x.toml"}},
+			"--config",
+		},
+		{
+			// Both stray settings in one diagnostic: a user who set two of them
+			// should not have to fix one, rerun, and discover the other.
+			"args and env with an address",
+			Config{
+				Address: testAddress,
+				Args:    []string{appServerArg},
+				Env:     []string{"MODEL_PATH=/models/x.gguf"},
+			},
+			"and",
+		},
 		{"an address alone", Config{Address: testAddress}, ""},
 		{"a command alone", Config{Command: spawnedBinary}, ""},
 	}
@@ -410,6 +449,7 @@ func TestConfigValidate(t *testing.T) {
 			if !strings.Contains(err.Error(), tc.want) {
 				t.Errorf("error %q does not mention %q", err, tc.want)
 			}
+			assertNamesStraySettings(t, err, tc.cfg)
 		})
 	}
 }

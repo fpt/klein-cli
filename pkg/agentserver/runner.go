@@ -61,9 +61,10 @@ type Config struct {
 	Command string
 	// Address dials an app-server already listening on "host:port" instead of
 	// spawning one, so the agent can run on another machine while the dynamic
-	// tools it calls back for still run here. Mutually exclusive with Command:
-	// a server reached this way is a process this client neither starts, nor
-	// configures, nor stops.
+	// tools it calls back for still run here. Mutually exclusive with Command —
+	// and with Args and Env, which describe how to launch a child: a server
+	// reached this way is a process this client neither starts, nor configures,
+	// nor stops.
 	//
 	// The connection is unauthenticated and unencrypted — whatever reaches that
 	// port drives an agent with that user's privileges — so the address belongs
@@ -139,15 +140,26 @@ func (c Config) validate() error {
 			"agent backend: both a command (%s) and an address (%s) are configured; "+
 				"an app-server is either spawned or dialed, not both", c.Command, c.Address)
 	}
-	// Env configures a child process, and a dialed server is not one: it read its
-	// own configuration wherever it runs. Dropping these silently would leave a
-	// user believing they had selected a model they had not.
-	if c.Address != "" && len(c.Env) > 0 {
+	if c.Address == "" {
+		return nil
+	}
+	// Args and Env describe how to launch a child process, and a dialed server is
+	// not one: it was started and configured wherever it runs. Dropping them
+	// silently would leave a user believing they had chosen a model, or a
+	// subcommand, that never reached anything.
+	var stray []string
+	if len(c.Args) > 0 {
+		stray = append(stray, "arguments ("+strings.Join(c.Args, " ")+")")
+	}
+	if len(c.Env) > 0 {
+		stray = append(stray, "environment overrides ("+strings.Join(envKeys(c.Env), ", ")+")")
+	}
+	if len(stray) > 0 {
 		return fmt.Errorf(
-			"agent backend: environment overrides (%s) cannot reach the app-server at %s, "+
-				"which is a separate process that reads its own configuration on its own machine; "+
-				"set them where that server runs, or remove them",
-			strings.Join(envKeys(c.Env), ", "), c.Address)
+			"agent backend: %s cannot reach the app-server at %s, which is a separate process, "+
+				"started and configured on its own machine; set them where that server runs, "+
+				"or remove them",
+			strings.Join(stray, " and "), c.Address)
 	}
 	return nil
 }

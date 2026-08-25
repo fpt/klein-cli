@@ -269,7 +269,7 @@ while [ $# -gt 0 ]; do
     -c) mode=count; shift ;;
     -n|-i) flags+=("$1"); shift ;;
     -B|-A|-C) flags+=("$1" "$2"); shift 2 ;;
-    --glob) flags+=(--include "$2"); shift 2 ;;
+    --glob) case "$2" in !*) flags+=(--exclude "${2#!}") ;; *) flags+=(--include "$2") ;; esac; shift 2 ;;
     *) break ;;
   esac
 done
@@ -392,6 +392,7 @@ func TestSearchToolManager_GrepFallbackRefusesWhatItCannotExpress(t *testing.T) 
 		{argType, message.ToolArgumentValues{argType: "go"}, "ripgrep"},
 		{argMultiline, message.ToolArgumentValues{argMultiline: true}, "ripgrep"},
 		{"a glob with a directory component", message.ToolArgumentValues{argGlob: "pkg/**/*.go"}, "directory component"},
+		{"a negated glob with a directory", message.ToolArgumentValues{argGlob: "!pkg/**/*.go"}, "directory component"},
 	}
 	for _, tc := range unsupported { //nolint:paralleltest // PATH is process-wide
 		t.Run(tc.name, func(t *testing.T) {
@@ -416,35 +417,50 @@ func TestSearchToolManager_GrepFallbackRefusesWhatItCannotExpress(t *testing.T) 
 	}
 }
 
-// A basename glob is the one shape both tools agree on, so it is honored
-// rather than refused — including the `**/`-anywhere spelling, which is what
-// grep's recursive walk already does.
+// A basename glob is the shape both tools agree on, so it is honored rather
+// than refused — including the `**/`-anywhere spelling, which is what grep's
+// recursive walk already does, and ripgrep's `!` exclusion, which is what
+// grep's --exclude already means. Mapping a `!` glob onto --include would ask
+// for files *named* `!foo` and answer with nothing: the empty result a model
+// reads as "not there".
 func TestSearchToolManager_GrepFallbackHonorsABasenameGlob(t *testing.T) { //nolint:paralleltest // t.Setenv
-	for _, glob := range []string{"*.go", "**/*.go"} { //nolint:paralleltest // PATH is process-wide
-		t.Run(glob, func(t *testing.T) {
+	globs := []struct {
+		glob string
+		// kept is the file the glob should leave in the result, dropped the
+		// one it should filter out. Both hold the same needle, so only the
+		// glob can tell them apart.
+		kept    string
+		dropped string
+	}{
+		{"*.go", "match.go", "skip.txt"},
+		{"**/*.go", "match.go", "skip.txt"},
+		{"!*.txt", "match.go", "skip.txt"},
+		{"!**/*.go", "skip.txt", "match.go"},
+	}
+	for _, tc := range globs { //nolint:paralleltest // PATH is process-wide
+		t.Run(tc.glob, func(t *testing.T) {
 			workingDir := t.TempDir()
-			if err := os.WriteFile(filepath.Join(workingDir, "match.go"), []byte("needle\n"), 0o600); err != nil {
-				t.Fatal(err)
-			}
-			if err := os.WriteFile(filepath.Join(workingDir, "skip.txt"), []byte("needle\n"), 0o600); err != nil {
-				t.Fatal(err)
+			for _, name := range []string{"match.go", "skip.txt"} {
+				if err := os.WriteFile(filepath.Join(workingDir, name), []byte("needle\n"), 0o600); err != nil {
+					t.Fatal(err)
+				}
 			}
 			m := searchIn(t, workingDir)
 			_ = searchPath(t, "grep")
 
 			res, err := m.CallTool(context.Background(), "Grep", message.ToolArgumentValues{
 				argPattern:    "needle",
-				argGlob:       glob,
+				argGlob:       tc.glob,
 				argOutputMode: outputModeFilesWithMatches,
 			})
 			if err != nil || res.Error != "" {
 				t.Fatalf("Grep failed: err=%v result=%q", err, res.Error)
 			}
-			if !strings.Contains(res.Text, "match.go") {
-				t.Errorf("the glob excluded the file it should have matched: %q", res.Text)
+			if !strings.Contains(res.Text, tc.kept) {
+				t.Errorf("the glob excluded %s, which it should have matched: %q", tc.kept, res.Text)
 			}
-			if strings.Contains(res.Text, "skip.txt") {
-				t.Errorf("the glob was ignored: %q", res.Text)
+			if strings.Contains(res.Text, tc.dropped) {
+				t.Errorf("the glob did not filter out %s: %q", tc.dropped, res.Text)
 			}
 		})
 	}

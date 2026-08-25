@@ -355,11 +355,11 @@ func grepFlags(req grepRequest) ([]string, error) {
 	// default, which is not to follow.
 	flags := append([]string{"-r"}, outputModeFlag(req.outputMode)...)
 	if v, ok := req.args[argGlob].(string); ok && v != "" {
-		include, err := grepIncludeForGlob(v)
+		globFlags, err := grepGlobFlags(v)
 		if err != nil {
 			return nil, err
 		}
-		flags = append(flags, "--include", include)
+		flags = append(flags, globFlags...)
 	}
 	return append(flags, sharedFlags(req.args)...), nil
 }
@@ -377,21 +377,32 @@ func grepCannotExpress(args message.ToolArgumentValues) error {
 	return nil
 }
 
-// grepIncludeForGlob maps rg's --glob onto grep's --include, or says it cannot.
+// grepGlobFlags maps rg's --glob onto grep's --include/--exclude, or says it
+// cannot.
 //
-// grep matches --include against the file name alone, so only a basename glob
-// survives the translation. A pattern with a directory component would silently
-// match nothing, and an empty result reads to a model as "not there" — a wrong
-// answer is worse than a refused one. A leading `**/` is the common spelling of
-// "anywhere", and means exactly what grep's recursive walk already does.
-func grepIncludeForGlob(glob string) (string, error) {
-	include := strings.TrimPrefix(glob, "**/")
-	if strings.Contains(include, "/") {
-		return "", fmt.Errorf(
+// A leading `!` is ripgrep's exclusion, and grep's --exclude means exactly the
+// same thing — passing it to --include would ask for files *named* `!foo` and
+// answer with nothing. The two tools do part company on directory components:
+// grep matches these patterns against the file name alone, so only a basename
+// glob survives the translation. A pattern with a directory component would
+// silently match nothing, and an empty result reads to a model as "not there" —
+// a wrong answer is worse than a refused one. A leading `**/` is the common
+// spelling of "anywhere", and means exactly what grep's recursive walk already
+// does.
+func grepGlobFlags(glob string) ([]string, error) {
+	flag := "--include"
+	pattern := glob
+	if strings.HasPrefix(pattern, "!") {
+		flag = "--exclude"
+		pattern = pattern[1:]
+	}
+	pattern = strings.TrimPrefix(pattern, "**/")
+	if pattern == "" || strings.Contains(pattern, "/") {
+		return nil, fmt.Errorf(
 			"glob %q has a directory component, which requires ripgrep; use a basename pattern such as %q",
 			glob, "*"+filepath.Ext(glob))
 	}
-	return include, nil
+	return []string{flag, pattern}, nil
 }
 
 // dropZeroCounts removes grep -c's `path:0` lines for files that did not match.

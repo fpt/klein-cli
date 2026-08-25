@@ -253,10 +253,18 @@ func (r *Runner) openTransport(ctx context.Context) (rpc.Transport, *tcpTranspor
 // would let two idle klein instances take it from each other forever; tied to a
 // turn, reclaiming a session takes someone actually typing.
 //
-// What the old connection held is gone: connect() forgets its thread ids and
-// this turn starts a fresh thread. The conversation itself is klein's, so what
-// is lost is the server-side context of a thread whose connection no longer
-// exists.
+// The conversation does not survive this. connect() forgets its thread ids, so
+// the next turn opens a fresh thread — and a thread's history lives on the
+// server, not here: this client sends a prompt per turn and nothing else. The
+// new thread therefore begins with the developerInstructions the caller passes
+// and no memory of anything said before it.
+//
+// Re-seeding is the caller's to do, and RunTurn's contract is what makes it
+// possible. developerInstructions is read at every thread start, so a caller
+// that puts the conversation so far in there hands it to whichever thread ends
+// up carrying the turn; and a threadID coming back different from the one
+// passed in is how the caller learns this happened. What no re-seed brings back
+// is the backend's own working state — files it had read, commands it had run.
 func (r *Runner) ensureConnected(ctx context.Context) error {
 	if !r.needsRedial() {
 		return nil
@@ -324,8 +332,17 @@ func probeReady(ctx context.Context, client *rpc.Client, dialect Dialect) error 
 // final assistant text. An empty threadID (or one this process did not start)
 // begins a fresh thread with klein's dynamic tools registered — codex's
 // thread/resume cannot re-register dynamic tools, so a tool-enabled thread is
-// always one we started this run. developerInstructions (the active skill
-// prompt) steers codex.
+// always one we started this run.
+//
+// developerInstructions steers the new thread, and is read only when one is
+// started. It is where a caller puts anything a fresh thread must begin with,
+// including the conversation so far: the server holds a thread's history, so a
+// thread started here has none.
+//
+// A returned id that differs from the one passed in means the thread was
+// replaced rather than continued — this process did not start the old one, or
+// the connection behind it died (see ensureConnected). For a caller that keeps
+// its own log of the exchange, that is the signal to re-seed.
 func (r *Runner) RunTurn(
 	ctx context.Context, threadID, prompt, developerInstructions string, obs Observer,
 ) (string, string, error) {

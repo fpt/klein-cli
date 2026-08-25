@@ -1485,14 +1485,27 @@ func (a *Agent) InjectContextFile() {
 // setupEventHandlers configures event handlers to convert events back to output format.
 // invokeCodex runs one turn through the codex app-server backend. The skill's
 // rendered prompt is passed as codex developer instructions; the user input is
-// the turn prompt (any memory context is already prepended by the gateway). The
-// session↔thread mapping is persisted next to the session file so a resumed
-// session continues the same codex thread.
+// the turn prompt (any memory context is already prepended by the gateway).
+//
+// The thread's history lives on the backend, and klein sends only the prompt, so
+// every thread klein does not continue starts with no memory of the
+// conversation. That happens more often than it sounds: the connection drops
+// (laptop sleeps, server restarts) and RunTurn opens a fresh thread, and a
+// resumed session is a new process, which cannot continue a thread it did not
+// start. So the developer instructions carry the conversation so far, and the
+// session↔thread mapping persisted beside the session file is what tells the
+// two cases apart.
 func (a *Agent) invokeCodex(
 	ctx context.Context, activeSkill *skill.Definition, userInput string,
 ) (message.Message, error) {
 	threadID := a.loadCodexThreadID()
-	devInstr := activeSkill.RenderContent("", a.workingDir)
+	// The transcript is built every turn and used only when a thread is actually
+	// started — klein cannot know beforehand which turn that is, because the
+	// reconnect that forces one is discovered inside RunTurn.
+	devInstr := seedInstructions(
+		activeSkill.RenderContent("", a.workingDir),
+		renderBackendTranscript(a.sharedState.GetMessages()),
+	)
 
 	// Route the backend's intermediate activity (commands it runs, reasoning,
 	// file changes, tool calls) through the same event pipeline as the ReAct
@@ -1512,6 +1525,18 @@ func (a *Agent) invokeCodex(
 		return nil, err
 	}
 	if newThreadID != "" && newThreadID != threadID {
+		if threadID != "" {
+			// A different id back for an id we passed in means the thread was
+			// replaced, not created: the connection died and this turn ran on a
+			// fresh one. Said out loud because the repair is best-effort — the
+			// re-seed is bounded, and the backend's own working state (what it
+			// read, what it ran) did not come back with it.
+			a.logger.Warn(
+				"the app-server connection was lost, so this turn ran on a new thread "+
+					"seeded from the session log; anything the backend had open is gone",
+				"previous_thread", threadID, "new_thread", newThreadID,
+			)
+		}
 		a.saveCodexThreadID(newThreadID)
 	}
 

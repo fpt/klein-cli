@@ -2,10 +2,12 @@ package tool
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os/exec"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/fpt/klein-cli/pkg/agent/domain"
@@ -15,6 +17,24 @@ import (
 // argPattern is the argument both search tools take: a glob for Glob, a regex
 // for Grep.
 const argPattern = "pattern"
+
+// The three shapes a Grep result can take. They are a contract, not a hint:
+// whichever of rg or grep ends up running, the same output_mode has to come
+// back as the same shape.
+const (
+	outputModeContent          = "content"
+	outputModeFilesWithMatches = "files_with_matches"
+	outputModeCount            = "count"
+)
+
+// The Grep arguments named more than once: declared here, then honored or
+// refused by each branch.
+const (
+	argOutputMode = "output_mode"
+	argGlob       = "glob"
+	argType       = "type"
+	argMultiline  = "multiline"
+)
 
 // SearchToolManager provides Glob and Grep tools
 type SearchToolManager struct {
@@ -79,16 +99,16 @@ func (m *SearchToolManager) register() {
 		[]message.ToolArgument{
 			{Name: argPattern, Description: "Regex pattern to search", Required: true, Type: "string"},
 			{Name: "path", Description: "File/dir to search (optional)", Required: false, Type: "string"},
-			{Name: "glob", Description: "Glob filter (maps to --glob)", Required: false, Type: "string"},
-			{Name: "output_mode", Description: "content|files_with_matches|count", Required: false, Type: "string"},
+			{Name: argGlob, Description: "Glob filter (--glob); a basename without ripgrep", Required: false, Type: "string"},
+			{Name: argOutputMode, Description: "content|files_with_matches|count", Required: false, Type: "string"},
 			{Name: "-B", Description: "Lines before (content mode)", Required: false, Type: "number"},
 			{Name: "-A", Description: "Lines after (content mode)", Required: false, Type: "number"},
 			{Name: "-C", Description: "Lines before/after (content mode)", Required: false, Type: "number"},
 			{Name: "-n", Description: "Show line numbers (content mode)", Required: false, Type: "boolean"},
 			{Name: "-i", Description: "Case-insensitive", Required: false, Type: "boolean"},
-			{Name: "type", Description: "File type (rg --type)", Required: false, Type: "string"},
+			{Name: argType, Description: "File type (rg --type); requires ripgrep", Required: false, Type: "string"},
 			{Name: "head_limit", Description: "Limit lines/entries", Required: false, Type: "number"},
-			{Name: "multiline", Description: "Dot matches newlines", Required: false, Type: "boolean"},
+			{Name: argMultiline, Description: "Dot matches newlines; requires ripgrep", Required: false, Type: "boolean"},
 		}, m.handleGrep)
 }
 
@@ -200,114 +220,204 @@ func (m *SearchToolManager) handleGrep(ctx context.Context, args message.ToolArg
 		base = rp
 	}
 
-	outputMode := "files_with_matches"
-	if om, ok := args["output_mode"].(string); ok && om != "" {
+	outputMode := outputModeFilesWithMatches
+	if om, ok := args[argOutputMode].(string); ok && om != "" {
 		outputMode = om
 	}
-
-	useRG := true
-	if _, err := exec.LookPath("rg"); err != nil {
-		useRG = false
+	switch outputMode {
+	case outputModeContent, outputModeFilesWithMatches, outputModeCount:
+	default:
+		// Refused rather than quietly treated as the default: output_mode
+		// decides the *shape* of the result, so a caller that asked for one
+		// shape and silently got another has no way to notice.
+		return message.NewToolResultError(fmt.Sprintf(
+			"unknown output_mode %q: expected %s, %s or %s",
+			outputMode, outputModeContent, outputModeFilesWithMatches, outputModeCount)), nil
 	}
 
-	if useRG {
-		rgArgs := []string{}
-		switch outputMode {
-		case "content":
-			// default: show matches
-		case "files_with_matches":
-			rgArgs = append(rgArgs, "-l")
-		case "count":
-			rgArgs = append(rgArgs, "-c")
-		default:
-			// keep default
-		}
-		if v, ok := args["-B"].(float64); ok {
-			rgArgs = append(rgArgs, "-B", fmt.Sprintf("%d", int(v)))
-		}
-		if v, ok := args["-A"].(float64); ok {
-			rgArgs = append(rgArgs, "-A", fmt.Sprintf("%d", int(v)))
-		}
-		if v, ok := args["-C"].(float64); ok {
-			rgArgs = append(rgArgs, "-C", fmt.Sprintf("%d", int(v)))
-		}
-		if v, ok := args["-n"].(bool); ok && v {
-			rgArgs = append(rgArgs, "-n")
-		}
-		if v, ok := args["-i"].(bool); ok && v {
-			rgArgs = append(rgArgs, "-i")
-		}
-		if v, ok := args["type"].(string); ok && v != "" {
-			rgArgs = append(rgArgs, "--type", v)
-		}
-		if v, ok := args["glob"].(string); ok && v != "" {
-			rgArgs = append(rgArgs, "--glob", v)
-		}
-		if v, ok := args["multiline"].(bool); ok && v {
-			rgArgs = append(rgArgs, "-U", "--multiline-dotall")
-		}
-
-		rgArgs = append(rgArgs, pattern)
-		rgArgs = append(rgArgs, base)
-
-		cmd := exec.CommandContext(ctx, "rg", rgArgs...)
-		out, err := cmd.CombinedOutput()
-		if err != nil {
-			// non-zero with no matches returns exit 1; handle it as empty
-			if ee, ok := err.(*exec.ExitError); ok && ee.ExitCode() == 1 {
-				return message.NewToolResultText(""), nil
-			}
-			return message.NewToolResultError(fmt.Sprintf("rg failed: %v\nOutput: %s", err, string(out))), nil
-		}
-		text := string(out)
-		// head_limit trim
-		if v, ok := args["head_limit"].(float64); ok && int(v) > 0 {
-			lines := strings.Split(strings.TrimRight(text, "\n"), "\n")
-			if len(lines) > int(v) {
-				text = strings.Join(lines[:int(v)], "\n")
-			}
-		}
-		return message.NewToolResultText(strings.TrimRight(text, "\n")), nil
+	req := grepRequest{args: args, pattern: pattern, base: base, outputMode: outputMode}
+	if _, err := exec.LookPath("rg"); err == nil {
+		return runRipgrep(ctx, req)
 	}
+	return runGrep(ctx, req)
+}
 
-	// Fallback to grep
+// grepRequest is one validated Grep call: the caller's arguments, the pattern,
+// the path it resolved to, and the shape it asked for.
+type grepRequest struct {
+	args       message.ToolArgumentValues
+	pattern    string
+	base       string
+	outputMode string
+}
+
+// runRipgrep is the branch taken where ripgrep is installed.
+func runRipgrep(ctx context.Context, req grepRequest) (message.ToolResult, error) {
+	rgArgs := append(ripgrepFlags(req), req.pattern, req.base)
+	text, err := runSearch(ctx, "rg", rgArgs...)
+	if err != nil {
+		return message.NewToolResultError(err.Error()), nil
+	}
+	return message.NewToolResultText(strings.TrimRight(headLimit(text, req.args), "\n")), nil
+}
+
+// runGrep is the fallback branch, taken where ripgrep is not installed.
+//
+// Every argument rg honors has to be honored here too, or refused. The same
+// Grep call must not come back in a different shape depending on whether
+// ripgrep happens to be installed on the machine klein runs on — that is a
+// contract with a model, which asks for files_with_matches and would otherwise
+// be handed whole files.
+func runGrep(ctx context.Context, req grepRequest) (message.ToolResult, error) {
+	if err := grepCannotExpress(req.args); err != nil {
+		return message.NewToolResultError(err.Error()), nil
+	}
+	grepArgs, err := grepFlags(req)
+	if err != nil {
+		return message.NewToolResultError(err.Error()), nil
+	}
+	text, err := runSearch(ctx, "grep", append(grepArgs, "-E", req.pattern, req.base)...)
+	if err != nil {
+		return message.NewToolResultError(err.Error()), nil
+	}
+	if req.outputMode == outputModeCount {
+		// grep -r -c reports every file it walked, matches or not; rg -c lists
+		// only the files that matched. Same shape, or the count mode means two
+		// different things on two machines.
+		text = dropZeroCounts(text)
+	}
+	return message.NewToolResultText(strings.TrimRight(headLimit(text, req.args), "\n")), nil
+}
+
+// runSearch executes rg or grep and hands back what it printed. Exit 1 means no
+// matches, which is an empty answer rather than a failure.
+func runSearch(ctx context.Context, name string, cmdArgs ...string) (string, error) {
+	out, err := exec.CommandContext(ctx, name, cmdArgs...).CombinedOutput()
+	if err == nil {
+		return string(out), nil
+	}
+	var exit *exec.ExitError
+	if errors.As(err, &exit) && exit.ExitCode() == 1 {
+		return "", nil
+	}
+	return "", fmt.Errorf("%s failed: %w\nOutput: %s", name, err, string(out))
+}
+
+// outputModeFlag is the flag that gives a result its shape. rg and grep spell
+// all three the same way, which is what makes the two branches agreeable at
+// all — everything else about them differs.
+func outputModeFlag(outputMode string) []string {
+	switch outputMode {
+	case outputModeFilesWithMatches:
+		return []string{"-l"}
+	case outputModeCount:
+		return []string{"-c"}
+	}
+	// content: both tools print the matching lines by default.
+	return nil
+}
+
+// sharedFlags are the arguments rg and grep spell identically.
+func sharedFlags(args message.ToolArgumentValues) []string {
+	var flags []string
+	for _, name := range []string{"-B", "-A", "-C"} {
+		if v, ok := args[name].(float64); ok {
+			flags = append(flags, name, strconv.Itoa(int(v)))
+		}
+	}
+	for _, name := range []string{"-n", "-i"} {
+		if v, ok := args[name].(bool); ok && v {
+			flags = append(flags, name)
+		}
+	}
+	return flags
+}
+
+func ripgrepFlags(req grepRequest) []string {
+	flags := outputModeFlag(req.outputMode)
+	flags = append(flags, sharedFlags(req.args)...)
+	if v, ok := req.args[argType].(string); ok && v != "" {
+		flags = append(flags, "--type", v)
+	}
+	if v, ok := req.args[argGlob].(string); ok && v != "" {
+		flags = append(flags, "--glob", v)
+	}
+	if v, ok := req.args[argMultiline].(bool); ok && v {
+		flags = append(flags, "-U", "--multiline-dotall")
+	}
+	return flags
+}
+
+func grepFlags(req grepRequest) ([]string, error) {
 	// -r, never -R: GNU grep's -R is --dereference-recursive, so it walks out of
 	// the workspace through any directory symlink inside it — past a boundary
 	// that was checked on the way in. -r matches what rg and find already do by
 	// default, which is not to follow.
-	grepArgs := []string{"-r"}
-	if v, ok := args["-i"].(bool); ok && v {
-		grepArgs = append(grepArgs, "-i")
-	}
-	if v, ok := args["-n"].(bool); ok && v {
-		grepArgs = append(grepArgs, "-n")
-	}
-	if v, ok := args["-B"].(float64); ok {
-		grepArgs = append(grepArgs, "-B", fmt.Sprintf("%d", int(v)))
-	}
-	if v, ok := args["-A"].(float64); ok {
-		grepArgs = append(grepArgs, "-A", fmt.Sprintf("%d", int(v)))
-	}
-	if v, ok := args["-C"].(float64); ok {
-		grepArgs = append(grepArgs, "-C", fmt.Sprintf("%d", int(v)))
-	}
-	grepArgs = append(grepArgs, "-E", pattern, base)
-	cmd := exec.CommandContext(ctx, "grep", grepArgs...)
-	out, err := cmd.CombinedOutput()
-	if err != nil {
-		if ee, ok := err.(*exec.ExitError); ok && ee.ExitCode() == 1 {
-			return message.NewToolResultText(""), nil
+	flags := append([]string{"-r"}, outputModeFlag(req.outputMode)...)
+	if v, ok := req.args[argGlob].(string); ok && v != "" {
+		include, err := grepIncludeForGlob(v)
+		if err != nil {
+			return nil, err
 		}
-		return message.NewToolResultError(fmt.Sprintf("grep failed: %v\nOutput: %s", err, string(out))), nil
+		flags = append(flags, "--include", include)
 	}
-	text := string(out)
-	if v, ok := args["head_limit"].(float64); ok && int(v) > 0 {
-		lines := strings.Split(strings.TrimRight(text, "\n"), "\n")
-		if len(lines) > int(v) {
-			text = strings.Join(lines[:int(v)], "\n")
+	return append(flags, sharedFlags(req.args)...), nil
+}
+
+// grepCannotExpress names the arguments the fallback has no way to honor.
+// Refused rather than ignored: silently answering a narrower question than the
+// one asked is how the two branches drifted apart in the first place.
+func grepCannotExpress(args message.ToolArgumentValues) error {
+	if v, ok := args[argType].(string); ok && v != "" {
+		return errors.New("type requires ripgrep, which is not installed; filter with glob instead")
+	}
+	if v, ok := args[argMultiline].(bool); ok && v {
+		return errors.New("multiline requires ripgrep, which is not installed")
+	}
+	return nil
+}
+
+// grepIncludeForGlob maps rg's --glob onto grep's --include, or says it cannot.
+//
+// grep matches --include against the file name alone, so only a basename glob
+// survives the translation. A pattern with a directory component would silently
+// match nothing, and an empty result reads to a model as "not there" — a wrong
+// answer is worse than a refused one. A leading `**/` is the common spelling of
+// "anywhere", and means exactly what grep's recursive walk already does.
+func grepIncludeForGlob(glob string) (string, error) {
+	include := strings.TrimPrefix(glob, "**/")
+	if strings.Contains(include, "/") {
+		return "", fmt.Errorf(
+			"glob %q has a directory component, which requires ripgrep; use a basename pattern such as %q",
+			glob, "*"+filepath.Ext(glob))
+	}
+	return include, nil
+}
+
+// dropZeroCounts removes grep -c's `path:0` lines for files that did not match.
+func dropZeroCounts(text string) string {
+	lines := strings.Split(strings.TrimRight(text, "\n"), "\n")
+	kept := lines[:0]
+	for _, line := range lines {
+		if line == "" || strings.HasSuffix(line, ":0") {
+			continue
 		}
+		kept = append(kept, line)
 	}
-	return message.NewToolResultText(strings.TrimRight(text, "\n")), nil
+	return strings.Join(kept, "\n")
+}
+
+// headLimit trims the result to the caller's head_limit lines, if any.
+func headLimit(text string, args message.ToolArgumentValues) string {
+	v, ok := args["head_limit"].(float64)
+	if !ok || int(v) <= 0 {
+		return text
+	}
+	lines := strings.Split(strings.TrimRight(text, "\n"), "\n")
+	if len(lines) <= int(v) {
+		return text
+	}
+	return strings.Join(lines[:int(v)], "\n")
 }
 
 type searchTool struct {

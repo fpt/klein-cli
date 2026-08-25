@@ -38,25 +38,33 @@ const DefaultAgentMaxIterations = 10
 
 // Agent handles skill-based tool management and sequential action execution.
 type Agent struct {
-	llmClient            domain.LLM
-	allToolManagers      *tool.CompositeToolManager // ALL tool managers combined
-	deferredTools        *tool.DeferredToolManager  // tool-search view over allToolManagers (used when a skill omits allowed-tools)
-	todoToolManager      *tool.TodoToolManager
-	taskToolManager      *tool.TaskToolManager
-	askQuestionManager   *tool.AskUserQuestionToolManager
-	planMode             *tool.PlanModeState // shared with planToolManager and guard
-	planToolManager      *tool.PlanToolManager
-	taskAgentManager     *tool.TaskAgentToolManager      // Provides the Task tool that delegates to loaded agent definitions
-	fsRepo               repository.FilesystemRepository // Shared filesystem repository instance
-	workingDir           string
-	sharedState          domain.State
-	definitions          skill.DefinitionMap
-	sessionFilePath      string
-	settings             *config.Settings
-	logger               *pkgLogger.Logger
-	out                  io.Writer
-	router               *SkillsRouter
-	thinkingStarted      bool
+	llmClient          domain.LLM
+	allToolManagers    *tool.CompositeToolManager // ALL tool managers combined
+	deferredTools      *tool.DeferredToolManager  // tool-search view over allToolManagers (used when a skill omits allowed-tools)
+	todoToolManager    *tool.TodoToolManager
+	taskToolManager    *tool.TaskToolManager
+	askQuestionManager *tool.AskUserQuestionToolManager
+	planMode           *tool.PlanModeState // shared with planToolManager and guard
+	planToolManager    *tool.PlanToolManager
+	taskAgentManager   *tool.TaskAgentToolManager      // Provides the Task tool that delegates to loaded agent definitions
+	fsRepo             repository.FilesystemRepository // Shared filesystem repository instance
+	workingDir         string
+	sharedState        domain.State
+	definitions        skill.DefinitionMap
+	sessionFilePath    string
+	settings           *config.Settings
+	logger             *pkgLogger.Logger
+	out                io.Writer
+	router             *SkillsRouter
+	thinkingStarted    bool
+	// codexThreadIsOurs says this process started the app-server thread named
+	// by codexThreadID, rather than reading the id off disk. It separates a
+	// thread this process lost from one it never had: a thread id belongs to
+	// the connection that issued it, and the runner tracks started threads
+	// per-process, so a resumed session gets a new thread without any
+	// connection having dropped. It sits with the other bools, rather than
+	// beside the field it qualifies, so it packs into their word.
+	codexThreadIsOurs    bool
 	sessionRules         *permission.RuleSet // in-memory allow/deny rules created during this session
 	permRules            *permission.RuleSet // persistent allow/deny rules from JSON files
 	allowedToolsOverride []string            // CLI override for skill's allowed-tools (guarded by sandboxMu)
@@ -72,6 +80,8 @@ type Agent struct {
 	// codexBackend, when set (llm.backend == "codex"), routes Invoke to a codex
 	// app-server thread instead of the ReAct loop. codexThreadID caches this
 	// session's thread id (also persisted alongside the session file).
+	// codexThreadIsOurs, packed with the bools above, says whether this
+	// process started the thread codexThreadID names.
 	codexBackend  domain.BackendRunner
 	codexThreadID string
 
@@ -1525,18 +1535,8 @@ func (a *Agent) invokeCodex(
 		return nil, err
 	}
 	if newThreadID != "" && newThreadID != threadID {
-		if threadID != "" {
-			// A different id back for an id we passed in means the thread was
-			// replaced, not created: the connection died and this turn ran on a
-			// fresh one. Said out loud because the repair is best-effort — the
-			// re-seed is bounded, and the backend's own working state (what it
-			// read, what it ran) did not come back with it.
-			a.logger.Warn(
-				"the app-server connection was lost, so this turn ran on a new thread "+
-					"seeded from the session log; anything the backend had open is gone",
-				"previous_thread", threadID, "new_thread", newThreadID,
-			)
-		}
+		// Before the save, which is what makes the id one this process issued.
+		a.reportThreadRestart(threadID, newThreadID)
 		a.saveCodexThreadID(newThreadID)
 	}
 
@@ -1583,8 +1583,40 @@ func (a *Agent) loadCodexThreadID() string {
 	return a.codexThreadID
 }
 
+// reportThreadRestart explains a turn that ran on a thread other than the one
+// the session was pointing at. Both cases re-seed identically, but they are not
+// the same event and must not be reported as one: only one of them means
+// something went wrong.
+func (a *Agent) reportThreadRestart(previous, current string) {
+	switch {
+	case previous == "":
+		// The session's first thread. Nothing was replaced, so there is nothing
+		// to say.
+	case a.codexThreadIsOurs:
+		// A thread this process started, replaced under it: the connection died
+		// and ensureConnected redialed. Said out loud because the repair is
+		// best-effort — the re-seed is bounded, and the backend's own working
+		// state (files it had read, commands it had run) did not come back.
+		a.logger.Warn(
+			"the app-server connection was lost, so this turn ran on a new thread "+
+				"seeded from the session log; anything the backend had open is gone",
+			"previous_thread", previous, "new_thread", current,
+		)
+	default:
+		// A thread id off disk, from an earlier run. Nothing failed: a thread
+		// belongs to the connection that issued it, and this process never had
+		// that connection. Expected on every resume, hence Info.
+		a.logger.Info(
+			"the app-server thread from the previous run cannot be continued, so this turn "+
+				"ran on a new one seeded from the session log",
+			"previous_thread", previous, "new_thread", current,
+		)
+	}
+}
+
 func (a *Agent) saveCodexThreadID(id string) {
 	a.codexThreadID = id
+	a.codexThreadIsOurs = true
 	if p := a.codexThreadPath(); p != "" {
 		if err := os.WriteFile(p, []byte(id), 0o644); err != nil {
 			a.logger.Warn("Failed to persist codex thread id", "error", err)

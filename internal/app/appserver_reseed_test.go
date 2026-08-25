@@ -46,9 +46,12 @@ func backendAgent(t *testing.T, backend *recordingBackend) (*Agent, *bytes.Buffe
 	t.Helper()
 	logs := &bytes.Buffer{}
 	a, cleanup, err := NewAgentWithOptions(context.Background(), AgentOptions{
-		Settings:          config.GetDefaultSettings(),
-		WorkingDir:        t.TempDir(),
-		Logger:            pkgLogger.NewLoggerWithConsoleWriter(pkgLogger.LogLevelWarn, logs),
+		Settings:   config.GetDefaultSettings(),
+		WorkingDir: t.TempDir(),
+		// Info, not Warn: the two restart cases are reported at different
+		// levels on purpose, and a helper that captured only one would let the
+		// quieter one say anything at all.
+		Logger:            pkgLogger.NewLoggerWithConsoleWriter(pkgLogger.LogLevelInfo, logs),
 		Out:               io.Discard,
 		FsRepo:            infra.NewOSFilesystemRepository(),
 		IsInteractiveMode: false,
@@ -105,6 +108,7 @@ func TestInvokeCodex_ARestartedThreadIsGivenTheConversation(t *testing.T) {
 	}
 }
 
+// A thread this process started, replaced under it, means the connection died.
 // The repair is best-effort — the re-seed is bounded, and whatever the backend
 // had open (files it had read, commands it had run) did not come back with the
 // thread. Losing that silently is how the gap stayed invisible.
@@ -146,5 +150,54 @@ func TestInvokeCodex_QuietWhileTheThreadHolds(t *testing.T) {
 	}
 	if got := logs.String(); strings.Contains(got, "connection was lost") {
 		t.Errorf("a thread that never changed was reported as replaced:\n%s", got)
+	}
+}
+
+// A thread id off disk is the other way a turn ends up on a new thread, and it
+// is not a failure: a thread belongs to the connection that issued it, and a
+// resumed session is a new process that never had that connection. It happens
+// on every `klein -c`. Reporting it as a lost connection would cry wolf on the
+// one signal that is supposed to mean something went wrong.
+func TestInvokeCodex_AThreadFromAnEarlierRunIsNotALostConnection(t *testing.T) {
+	t.Parallel()
+
+	backend := &recordingBackend{threadIDs: []string{secondThread}}
+	a, logs := backendAgent(t, backend)
+	// What a resumed session looks like: an id loaded from the sidecar file,
+	// which this process did not issue.
+	a.codexThreadID = firstThread
+
+	if _, err := a.Invoke(context.Background(), "carry on", "code"); err != nil {
+		t.Fatalf("resumed turn: %v", err)
+	}
+
+	got := logs.String()
+	if strings.Contains(got, "connection was lost") {
+		t.Errorf("a resumed session was reported as a dropped connection:\n%s", got)
+	}
+	if !strings.Contains(got, "previous run") {
+		t.Errorf("the restart went unexplained:\n%s", got)
+	}
+}
+
+// The distinction has to survive the first turn: once this process has issued a
+// thread of its own, losing it is a lost connection again.
+func TestInvokeCodex_AResumedSessionStillReportsALaterDrop(t *testing.T) {
+	t.Parallel()
+
+	backend := &recordingBackend{threadIDs: []string{secondThread, "thread_3"}}
+	a, logs := backendAgent(t, backend)
+	a.codexThreadID = firstThread
+
+	ctx := context.Background()
+	if _, err := a.Invoke(ctx, "carry on", "code"); err != nil {
+		t.Fatalf("resumed turn: %v", err)
+	}
+	if _, err := a.Invoke(ctx, "and again", "code"); err != nil {
+		t.Fatalf("second turn: %v", err)
+	}
+
+	if got := logs.String(); !strings.Contains(got, "connection was lost") {
+		t.Errorf("a thread this process started was replaced without being reported:\n%s", got)
 	}
 }

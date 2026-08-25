@@ -104,9 +104,67 @@ type Runner struct {
 	link     *tcpTransport
 	started  map[string]bool
 	dynTools []map[string]any
+
+	// Two locks, because they are held for very different spans.
+	//
+	// mu serializes whole turns. clientMu guards client, link and closed, and is
+	// held only long enough to read or replace the handle — so Close does not
+	// wait out the turn it is stopping, and a redial mid-turn cannot be read
+	// half-done. clientMu is a leaf: never take mu while holding it.
 	mu       sync.Mutex
+	clientMu sync.Mutex
+	// closed marks a Runner that has been shut down, so a turn still in flight
+	// cannot redial its way back to a live server afterwards.
+	closed bool
 	// startGraceOverride shortens startTurnGrace for tests; zero uses the const.
 	startGraceOverride time.Duration
+}
+
+// conn returns the live client, or an error when there is none: the Runner was
+// closed, or a redial failed and left it without one.
+//
+// The turn path goes through here rather than reading r.client, and takes the
+// handle once — so a Close landing mid-turn ends the turn with an error from a
+// closed connection, rather than a nil dereference on a field that changed
+// underneath it.
+func (r *Runner) conn() (*rpc.Client, error) {
+	r.clientMu.Lock()
+	defer r.clientMu.Unlock()
+	if r.closed {
+		return nil, errors.New("the app-server connection is closed")
+	}
+	if r.client == nil {
+		return nil, errors.New("no app-server connection")
+	}
+	return r.client, nil
+}
+
+// setConn publishes a freshly opened connection, or refuses it because Close
+// got there first — in which case the caller's new client is closed here rather
+// than left running with nobody holding it.
+func (r *Runner) setConn(client *rpc.Client, link *tcpTransport) error {
+	r.clientMu.Lock()
+	if r.closed {
+		r.clientMu.Unlock()
+		_ = client.Close()
+		return errors.New("the app-server connection was closed while reconnecting")
+	}
+	r.client, r.link = client, link
+	r.clientMu.Unlock()
+	return nil
+}
+
+// dropConn closes the current connection and forgets it, so needsRedial sees a
+// Runner with nothing to talk to. Closing happens outside the lock: it can
+// block, and nothing else may proceed while clientMu is held.
+func (r *Runner) dropConn() {
+	r.clientMu.Lock()
+	client := r.client
+	r.client, r.link = nil, nil
+	r.clientMu.Unlock()
+	if client != nil {
+		_ = client.Close()
+	}
 }
 
 const clientName = "klein"
@@ -207,8 +265,9 @@ func (r *Runner) connect(ctx context.Context) error {
 		return err
 	}
 
-	r.client = client
-	r.link = link
+	if err := r.setConn(client, link); err != nil {
+		return err
+	}
 	// Thread ids belong to the connection that issued them. A server hands out
 	// per-connection, sequential ids, so after a redial "thread_1" names a
 	// thread this client never started — and turn/start on it is refused.
@@ -268,10 +327,7 @@ func (r *Runner) ensureConnected(ctx context.Context) error {
 		)
 	}
 
-	if r.client != nil {
-		_ = r.client.Close()
-	}
-	r.client, r.link = nil, nil
+	r.dropConn()
 
 	if err := r.connect(ctx); err != nil {
 		// The runner keeps no client, so the next turn tries again rather than
@@ -288,6 +344,14 @@ func (r *Runner) ensureConnected(ctx context.Context) error {
 // otherwise would turn a clear failure into a nil client dereference.
 func (r *Runner) needsRedial() bool {
 	if r.cfg.Address == "" {
+		return false
+	}
+	r.clientMu.Lock()
+	defer r.clientMu.Unlock()
+	// A closed Runner has nothing to redial to. Answering "no" here is not a
+	// claim that the connection is fine — it sends the turn on to fail at conn()
+	// with the reason, instead of dialing a server it is about to refuse.
+	if r.closed {
 		return false
 	}
 	return r.client == nil || (r.link != nil && r.link.hungUp())
@@ -381,7 +445,11 @@ func (r *Runner) startThread(ctx context.Context, developerInstructions string) 
 			ID string `json:"id"`
 		} `json:"thread"`
 	}
-	if err := r.client.Call(ctx, "thread/start", params, &resp); err != nil {
+	client, err := r.conn()
+	if err != nil {
+		return "", err
+	}
+	if err := client.Call(ctx, "thread/start", params, &resp); err != nil {
 		return "", fmt.Errorf("codex thread/start: %w", err)
 	}
 	if resp.Thread.ID == "" {
@@ -397,7 +465,14 @@ func (r *Runner) startThread(ctx context.Context, developerInstructions string) 
 func (r *Runner) runTurn(
 	ctx context.Context, threadID, prompt string, obs Observer,
 ) (string, error) {
-	iter := r.client.SubscribeNotifications(0)
+	// Taken once and used for the whole turn, including the goroutine below:
+	// two reads could straddle a redial and leave the turn talking to one
+	// connection and listening to another.
+	client, err := r.conn()
+	if err != nil {
+		return "", err
+	}
+	iter := client.SubscribeNotifications(0)
 	defer iter.Close()
 
 	turnParams := map[string]any{
@@ -407,7 +482,7 @@ func (r *Runner) runTurn(
 	if r.cfg.Effort != "" {
 		turnParams["effort"] = r.cfg.Effort
 	}
-	turnID, err := r.startTurn(ctx, threadID, turnParams)
+	turnID, err := r.startTurn(ctx, client, threadID, turnParams)
 	if err != nil {
 		// A start that was canceled in flight may still have left a turn running,
 		// and startTurn hands back its id when it managed to learn one. An empty
@@ -466,7 +541,9 @@ const startTurnGrace = 3 * time.Second
 // A response that arrives after that grace is not discarded either: by then
 // nobody is left to act on it, so the goroutine stops the turn itself. Ownership
 // of that duty passes under the lock, so exactly one of the two does it.
-func (r *Runner) startTurn(ctx context.Context, threadID string, params map[string]any) (string, error) {
+func (r *Runner) startTurn(
+	ctx context.Context, client *rpc.Client, threadID string, params map[string]any,
+) (string, error) {
 	// Already given up before asking: starting a turn would be work for nobody.
 	if err := ctx.Err(); err != nil {
 		return "", fmt.Errorf("turn not started: %w", err)
@@ -491,7 +568,7 @@ func (r *Runner) startTurn(ctx context.Context, threadID string, params map[stri
 				ID string `json:"id"`
 			} `json:"turn"`
 		}
-		err := r.client.Call(context.WithoutCancel(ctx), "turn/start", params, &started)
+		err := client.Call(context.WithoutCancel(ctx), "turn/start", params, &started)
 		id := started.Turn.ID
 
 		mu.Lock()
@@ -569,8 +646,14 @@ func (r *Runner) interruptTurn(ctx context.Context, threadID, turnID string) {
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), interruptTimeout)
 	defer cancel()
 
+	client, err := r.conn()
+	if err != nil {
+		// Nothing to interrupt through: the connection this turn ran on is gone,
+		// which already ended it.
+		return
+	}
 	params := map[string]any{keyThreadID: threadID, keyTurnID: turnID}
-	if err := r.client.Call(ctx, "turn/interrupt", params, &json.RawMessage{}); err != nil && r.cfg.Logger != nil {
+	if err := client.Call(ctx, "turn/interrupt", params, &json.RawMessage{}); err != nil && r.cfg.Logger != nil {
 		r.cfg.Logger.Warn(
 			"could not stop the abandoned turn; the backend may still be working",
 			"thread", threadID,
@@ -1067,12 +1150,29 @@ func (r *Runner) sandboxMode() string {
 
 // Close lets the app-server go: the spawned process is stopped, a dialed one
 // merely loses this connection and goes on serving whoever connects next. Safe
-// on a nil Runner.
+// on a nil Runner, and safe to call while a turn is running — that turn ends
+// with an error from a connection that is no longer there, which is what
+// shutting down means.
+//
+// It takes clientMu rather than mu on purpose. mu is held for a whole turn, so
+// waiting for it would make shutdown wait out the very turn it is stopping.
+// Marking the Runner closed is what keeps a turn still in flight from redialing
+// its way back to a live server afterwards.
 func (r *Runner) Close() error {
-	if r == nil || r.client == nil {
+	if r == nil {
 		return nil
 	}
-	if err := r.client.Close(); err != nil {
+	r.clientMu.Lock()
+	client := r.client
+	r.client, r.link, r.closed = nil, nil, true
+	r.clientMu.Unlock()
+
+	if client == nil {
+		return nil
+	}
+	// Outside the lock: closing can block, and holding clientMu through it would
+	// stall every reader for as long as it takes.
+	if err := client.Close(); err != nil {
 		return fmt.Errorf("close codex client: %w", err)
 	}
 	return nil

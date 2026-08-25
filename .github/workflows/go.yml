@@ -22,3 +22,11 @@ jobs:
 
       - name: Run Unit Tests
         run: go test ./... -v
+
+      # Scoped to the one package whose shared state two goroutines actually
+      # touch: a Runner is closed while a turn is running. Its race tests only
+      # detect what they are for under the detector, so without this step the
+      # guard would not run in CI at all. Not repo-wide yet — `go test -race ./...`
+      # still reports pre-existing races in internal/app and pkg/agent/react.
+      - name: Run Race Detector (app-server client)
+        run: go test -race ./pkg/agentserver/

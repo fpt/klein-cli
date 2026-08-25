@@ -404,6 +404,12 @@ func grepCannotExpress(args message.ToolArgumentValues) error {
 // grepGlobFlags maps rg's --glob onto grep's --include/--exclude, or says it
 // cannot.
 //
+// Both flags are portable to the grep klein actually shells out to on the
+// platforms it ships for: GNU grep has them, and so does macOS's BSD grep
+// ("GNU compatible", 2.6.0-FreeBSD) — measured, not assumed, since its own
+// usage line does not list them. On a grep that truly lacked them the search
+// would fail loudly with "unrecognized option" rather than answer wrongly.
+//
 // A leading `!` is ripgrep's exclusion, and grep's --exclude means exactly the
 // same thing — passing it to --include would ask for files *named* `!foo` and
 // answer with nothing. The two tools do part company on directory components:

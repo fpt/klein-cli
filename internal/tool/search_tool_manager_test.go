@@ -202,6 +202,7 @@ func TestSearchToolManager_SearchDoesNotWalkOutThroughASymlink(t *testing.T) {
 	}{
 		{outputModeContent, needleAtHome, "needle-in-the-secret"},
 		{outputModeFilesWithMatches, "inside.txt", "secret.txt"},
+		{outputModeCount, "inside.txt:1", "secret.txt"},
 	}
 	for _, shape := range shapes {
 		t.Run(shape.mode, func(t *testing.T) {
@@ -259,7 +260,7 @@ func standInRipgrep(t *testing.T) {
 		t.Skip("bash is not installed")
 	}
 	dir := searchPath(t, "grep", "bash")
-	script := `#!/bin/bash
+	script := `#!/usr/bin/env bash
 set -o pipefail
 mode=content
 flags=()
@@ -267,13 +268,19 @@ while [ $# -gt 0 ]; do
   case "$1" in
     -l) mode=files; shift ;;
     -c) mode=count; shift ;;
-    -n|-i) flags+=("$1"); shift ;;
+    -n|-i|-H) flags+=("$1"); shift ;;
     -B|-A|-C) flags+=("$1" "$2"); shift 2 ;;
     --glob) case "$2" in !*) flags+=(--exclude "${2#!}") ;; *) flags+=(--include "$2") ;; esac; shift 2 ;;
+    --type) flags+=(--include "*.$2"); shift 2 ;;
+    -U|--multiline-dotall) shift ;;
     *) break ;;
   esac
 done
 pattern="$1"; target="$2"
+# rg prints the path only when more than one file is searched, unless -H says so.
+if [ -f "$target" ] && [[ ! " ${flags[*]} " == *" -H "* ]]; then
+  flags+=(-h)
+fi
 case "$mode" in
   files) exec grep -rl "${flags[@]}" -E "$pattern" "$target" ;;
   count) grep -rc "${flags[@]}" -E "$pattern" "$target" | grep -v ':0$' ;;
@@ -393,6 +400,7 @@ func TestSearchToolManager_GrepFallbackRefusesWhatItCannotExpress(t *testing.T) 
 		{argMultiline, message.ToolArgumentValues{argMultiline: true}, "ripgrep"},
 		{"a glob with a directory component", message.ToolArgumentValues{argGlob: "pkg/**/*.go"}, "directory component"},
 		{"a negated glob with a directory", message.ToolArgumentValues{argGlob: "!pkg/**/*.go"}, "directory component"},
+		{"a brace list", message.ToolArgumentValues{argGlob: "*.{go,txt}"}, "brace list"},
 	}
 	for _, tc := range unsupported { //nolint:paralleltest // PATH is process-wide
 		t.Run(tc.name, func(t *testing.T) {
@@ -463,5 +471,122 @@ func TestSearchToolManager_GrepFallbackHonorsABasenameGlob(t *testing.T) { //nol
 				t.Errorf("the glob did not filter out %s: %q", tc.dropped, res.Text)
 			}
 		})
+	}
+}
+
+// A file grep cannot open is not a reason to throw away the matches it did
+// find. grep exits 2 for that — "an error occurred" — even though it searched
+// everything else successfully and printed the results, so treating exit 2 as
+// failure would put one unreadable file anywhere under the workspace between
+// the caller and every result. On an rg host the identical call answers
+// normally (rg warns on stderr and exits 0), which makes this the same
+// host-dependent divergence one layer down.
+//
+// The warning itself must stay out of the result: in a path list a
+// "Permission denied" line reads as a path.
+func TestSearchToolManager_GrepKeepsMatchesFoundBesideAnUnreadableFile(t *testing.T) { //nolint:paralleltest // t.Setenv
+	if os.Geteuid() == 0 {
+		t.Skip("root reads unreadable directories, so there is nothing to fail on")
+	}
+	workingDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(workingDir, "readable.txt"), []byte(needleAtHome+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	locked := filepath.Join(workingDir, "locked")
+	if err := os.Mkdir(locked, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(locked, "b.txt"), []byte("needle\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(locked, 0o000); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(locked, 0o700) })
+
+	m := searchIn(t, workingDir)
+	_ = searchPath(t, "grep")
+
+	res, err := m.CallTool(context.Background(), "Grep", message.ToolArgumentValues{
+		argPattern:    "needle",
+		argOutputMode: outputModeFilesWithMatches,
+	})
+	if err != nil || res.Error != "" {
+		t.Fatalf("one unreadable file failed the whole search: err=%v result=%q", err, res.Error)
+	}
+	if !strings.Contains(res.Text, "readable.txt") {
+		t.Errorf("the matches found alongside it were discarded: %q", res.Text)
+	}
+	if strings.Contains(res.Text, "Permission denied") {
+		t.Errorf("grep's stderr was folded into the path list: %q", res.Text)
+	}
+}
+
+// rg prints the path prefix only when more than one file is searched; grep -r
+// prints it always. klein pins -H on both so a single-file Grep — the call a
+// model makes to follow up a files_with_matches search — does not come back as
+// `1` on one host and `file:1` on the other.
+func TestSearchToolManager_GrepPrefixesASingleFileEitherWay(t *testing.T) { //nolint:paralleltest // t.Setenv
+	branches := []struct {
+		setup func(*testing.T)
+		name  string
+	}{
+		{standInRipgrep, "with ripgrep"},
+		{func(t *testing.T) { _ = searchPath(t, "grep") }, "without ripgrep"},
+	}
+	for _, branch := range branches { //nolint:paralleltest // PATH is process-wide
+		for _, mode := range []string{outputModeContent, outputModeCount} {
+			t.Run(branch.name+"/"+mode, func(t *testing.T) {
+				workingDir := t.TempDir()
+				if err := os.WriteFile(filepath.Join(workingDir, "one.txt"), []byte(needleAtHome+"\n"), 0o600); err != nil {
+					t.Fatal(err)
+				}
+				m := searchIn(t, workingDir)
+				branch.setup(t)
+
+				res, err := m.CallTool(context.Background(), "Grep", message.ToolArgumentValues{
+					argPattern:    "needle",
+					reviewArgPath: filepath.Join(workingDir, "one.txt"),
+					argOutputMode: mode,
+				})
+				if err != nil || res.Error != "" {
+					t.Fatalf("Grep failed: err=%v result=%q", err, res.Error)
+				}
+				if !strings.Contains(res.Text, "one.txt:") {
+					t.Errorf("%s dropped the path prefix on a single file: %q", mode, res.Text)
+				}
+			})
+		}
+	}
+}
+
+// The rg-only arguments are otherwise exercised by nothing: the fallback
+// refuses them, and standInRipgrep replaces PATH even on a host that has real
+// ripgrep. This pins ripgrepFlags' side of `type` — that it reaches the tool as
+// --type rather than being dropped the way the fallback used to drop it.
+// `multiline` has no honest stand-in, so it stays covered only by its refusal.
+func TestSearchToolManager_RipgrepBranchPassesType(t *testing.T) { //nolint:paralleltest // t.Setenv
+	workingDir := t.TempDir()
+	for _, name := range []string{"match.go", "skip.txt"} {
+		if err := os.WriteFile(filepath.Join(workingDir, name), []byte("needle\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	m := searchIn(t, workingDir)
+	standInRipgrep(t)
+
+	res, err := m.CallTool(context.Background(), "Grep", message.ToolArgumentValues{
+		argPattern:    "needle",
+		argType:       "go",
+		argOutputMode: outputModeFilesWithMatches,
+	})
+	if err != nil || res.Error != "" {
+		t.Fatalf("Grep failed: err=%v result=%q", err, res.Error)
+	}
+	if !strings.Contains(res.Text, "match.go") {
+		t.Errorf("type excluded the file it should have matched: %q", res.Text)
+	}
+	if strings.Contains(res.Text, "skip.txt") {
+		t.Errorf("type was dropped on the way to rg: %q", res.Text)
 	}
 }

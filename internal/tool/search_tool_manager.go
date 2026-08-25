@@ -289,32 +289,56 @@ func runGrep(ctx context.Context, req grepRequest) (message.ToolResult, error) {
 	return message.NewToolResultText(strings.TrimRight(headLimit(text, req.args), "\n")), nil
 }
 
-// runSearch executes rg or grep and hands back what it printed. Exit 1 means no
-// matches, which is an empty answer rather than a failure.
+// runSearch executes rg or grep and hands back what it printed.
+//
+// Output(), never CombinedOutput(): a file grep or rg cannot read produces a
+// "Permission denied" line on stderr, and folding that into the result puts it
+// in a files_with_matches path list where a caller reads it as a path.
+//
+// Exit 1 is "no matches", which is an empty answer rather than a failure. Exit
+// 2 is "something went wrong" — but grep also returns it when it searched
+// successfully and merely could not open some file along the way, so it comes
+// with the matches it did find. Discarding those would put one unreadable file
+// anywhere under the workspace between the caller and every result on a host
+// without ripgrep, while the same call on an rg host answered normally: the
+// host-dependent divergence this file exists to close, one layer down. Anything
+// that printed matches is treated as an answer, which is what rg does with the
+// same unreadable file — it warns on stderr and exits 0.
 func runSearch(ctx context.Context, name string, cmdArgs ...string) (string, error) {
-	out, err := exec.CommandContext(ctx, name, cmdArgs...).CombinedOutput()
+	out, err := exec.CommandContext(ctx, name, cmdArgs...).Output()
 	if err == nil {
 		return string(out), nil
 	}
 	var exit *exec.ExitError
-	if errors.As(err, &exit) && exit.ExitCode() == 1 {
-		return "", nil
+	if errors.As(err, &exit) && (exit.ExitCode() == 1 || len(out) > 0) {
+		return string(out), nil
 	}
-	return "", fmt.Errorf("%s failed: %w\nOutput: %s", name, err, string(out))
+	if errors.As(err, &exit) && len(exit.Stderr) > 0 {
+		return "", fmt.Errorf("%s failed: %w\n%s", name, err, strings.TrimSpace(string(exit.Stderr)))
+	}
+	return "", fmt.Errorf("%s failed: %w", name, err)
 }
 
-// outputModeFlag is the flag that gives a result its shape. rg and grep spell
-// all three the same way, which is what makes the two branches agreeable at
+// outputModeFlags are the flags that decide a result's shape: the mode's own
+// flag, plus -H where a path prefix is part of that shape. rg and grep spell
+// all of them the same way, which is what makes the two branches agreeable at
 // all — everything else about them differs.
-func outputModeFlag(outputMode string) []string {
+//
+// -H is pinned rather than left to the default because the defaults disagree:
+// rg prints the path only when more than one file is searched, grep -r prints
+// it always. Without it, `Grep` on a single file comes back as `1` on one host
+// and `file:1` on the other — exactly the call a model makes to follow up a
+// files_with_matches search. dropZeroCounts reads that prefix too.
+func outputModeFlags(outputMode string) []string {
 	switch outputMode {
 	case outputModeFilesWithMatches:
+		// A path list is nothing but paths; there is no prefix to pin.
 		return []string{"-l"}
 	case outputModeCount:
-		return []string{"-c"}
+		return []string{"-c", "-H"}
 	}
 	// content: both tools print the matching lines by default.
-	return nil
+	return []string{"-H"}
 }
 
 // sharedFlags are the arguments rg and grep spell identically.
@@ -334,7 +358,7 @@ func sharedFlags(args message.ToolArgumentValues) []string {
 }
 
 func ripgrepFlags(req grepRequest) []string {
-	flags := outputModeFlag(req.outputMode)
+	flags := outputModeFlags(req.outputMode)
 	flags = append(flags, sharedFlags(req.args)...)
 	if v, ok := req.args[argType].(string); ok && v != "" {
 		flags = append(flags, "--type", v)
@@ -353,7 +377,7 @@ func grepFlags(req grepRequest) ([]string, error) {
 	// the workspace through any directory symlink inside it — past a boundary
 	// that was checked on the way in. -r matches what rg and find already do by
 	// default, which is not to follow.
-	flags := append([]string{"-r"}, outputModeFlag(req.outputMode)...)
+	flags := append([]string{"-r"}, outputModeFlags(req.outputMode)...)
 	if v, ok := req.args[argGlob].(string); ok && v != "" {
 		globFlags, err := grepGlobFlags(v)
 		if err != nil {
@@ -396,11 +420,19 @@ func grepGlobFlags(glob string) ([]string, error) {
 		flag = "--exclude"
 		pattern = pattern[1:]
 	}
-	pattern = strings.TrimPrefix(pattern, "**/")
+	for strings.HasPrefix(pattern, "**/") {
+		pattern = strings.TrimPrefix(pattern, "**/")
+	}
 	if pattern == "" || strings.Contains(pattern, "/") {
 		return nil, fmt.Errorf(
 			"glob %q has a directory component, which requires ripgrep; use a basename pattern such as %q",
 			glob, "*"+filepath.Ext(glob))
+	}
+	// grep does not brace-expand, and hands `*.{go,txt}` to fnmatch as a
+	// literal — which matches nothing at all. Same argument as the directory
+	// component: an empty result reads to a model as "not there".
+	if strings.ContainsAny(pattern, "{}") {
+		return nil, fmt.Errorf("glob %q is a brace list, which requires ripgrep; search one pattern at a time", glob)
 	}
 	return []string{flag, pattern}, nil
 }

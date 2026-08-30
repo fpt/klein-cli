@@ -10,7 +10,9 @@ import (
 
 	"github.com/fpt/klein-cli/internal/config"
 	"github.com/fpt/klein-cli/internal/tool"
+	"github.com/fpt/klein-cli/pkg/agent/domain"
 	"github.com/fpt/klein-cli/pkg/agentserver"
+	"github.com/fpt/klein-cli/pkg/message"
 )
 
 // The names a server resolves against its own built-ins. They are a contract
@@ -328,7 +330,7 @@ func TestWithApproval_TypedNilApproverIsStillHeadless(t *testing.T) {
 // offeredNames returns what a backend would be offered under these settings.
 func offeredNames(t *testing.T, settings *config.Settings) []string {
 	t.Helper()
-	managers := offeredManagers(settings, t.TempDir())
+	managers := offeredManagers(settings, t.TempDir(), nil)
 	return specNames(newToolHost(tool.NewCompositeToolManager(managers...)))
 }
 
@@ -524,7 +526,7 @@ func TestVerifyWorkspaceToolsOffered(t *testing.T) {
 
 	// And the real thing passes, which is what stops this from being a check
 	// that only ever fires.
-	actual := newToolHost(tool.NewCompositeToolManager(offeredManagers(dialedSettings(), t.TempDir())...))
+	actual := newToolHost(tool.NewCompositeToolManager(offeredManagers(dialedSettings(), t.TempDir(), nil)...))
 	if err := verifyWorkspaceToolsOffered(dialedAddress, actual); err != nil {
 		t.Errorf("the tools klein actually offers a dialed backend were refused: %v", err)
 	}
@@ -540,5 +542,130 @@ func TestWorkspaceToolNamesMatchTheContract(t *testing.T) {
 	slices.Sort(got)
 	if !slices.Equal(got, conventionalToolNames) {
 		t.Errorf("workspaceToolNames = %v, want %v", got, conventionalToolNames)
+	}
+}
+
+// stubToolManager stands in for a connected MCP server: a manager holding tools
+// klein did not build, offered to the backend as its own.
+//
+// Calls are recorded in the tool's handler rather than in CallTool because that
+// is the seam the real path uses. CompositeToolManager dispatches by calling
+// tool.Handler() directly, never the owning manager's CallTool, and an MCP tool's
+// handler closes over its own live client — which is what makes a proxied call
+// land on klein's connection. Recording in CallTool would test a method nothing
+// upstream reaches.
+type stubToolManager struct {
+	tools map[message.ToolName]message.Tool
+	calls *[]message.ToolName
+}
+
+func newStubToolManager(names ...string) *stubToolManager {
+	calls := &[]message.ToolName{}
+	m := &stubToolManager{tools: map[message.ToolName]message.Tool{}, calls: calls}
+	for _, n := range names {
+		m.tools[message.ToolName(n)] = &stubTool{name: message.ToolName(n), calls: calls}
+	}
+	return m
+}
+
+func (m *stubToolManager) GetTools() map[message.ToolName]message.Tool { return m.tools }
+
+func (m *stubToolManager) CallTool(
+	ctx context.Context, name message.ToolName, args message.ToolArgumentValues,
+) (message.ToolResult, error) {
+	t, ok := m.tools[name]
+	if !ok {
+		return message.NewToolResultError("not found"), nil
+	}
+	return t.Handler()(ctx, args)
+}
+
+func (m *stubToolManager) RegisterTool(
+	message.ToolName,
+	message.ToolDescription,
+	[]message.ToolArgument,
+	func(context.Context, message.ToolArgumentValues) (message.ToolResult, error),
+) {
+}
+
+type stubTool struct {
+	calls *[]message.ToolName
+	name  message.ToolName
+}
+
+func (t *stubTool) RawName() message.ToolName            { return t.name }
+func (t *stubTool) Name() message.ToolName               { return t.name }
+func (t *stubTool) Description() message.ToolDescription { return "stub" }
+func (t *stubTool) Arguments() []message.ToolArgument    { return nil }
+func (t *stubTool) Handler() func(context.Context, message.ToolArgumentValues) (message.ToolResult, error) {
+	return func(context.Context, message.ToolArgumentValues) (message.ToolResult, error) {
+		*t.calls = append(*t.calls, t.name)
+		return message.NewToolResultText("ok"), nil
+	}
+}
+
+// The point of the whole feature: a proxied MCP manager reaches the backend as
+// dynamic tools, alongside the ones settings can describe.
+func TestOfferedManagers_ProxiedToolsAreOffered(t *testing.T) {
+	t.Parallel()
+
+	proxied := newStubToolManager("tree_dir", "search_local_files")
+	managers := offeredManagers(dialedSettings(), t.TempDir(), []domain.ToolManager{proxied})
+	names := specNames(newToolHost(tool.NewCompositeToolManager(managers...)))
+
+	for _, want := range []string{"tree_dir", "search_local_files"} {
+		if !slices.Contains(names, want) {
+			t.Errorf("proxied tool %q was not offered; got %v", want, names)
+		}
+	}
+	// And it did not cost the workspace tools, which share the same list.
+	if !slices.Contains(names, toolRead) {
+		t.Errorf("proxying displaced the workspace tools; got %v", names)
+	}
+}
+
+// A proxied call has to land on klein's live manager. Registering the schema
+// while executing somewhere else is the failure this feature exists to avoid.
+func TestOfferedManagers_ProxiedCallReachesTheLiveManager(t *testing.T) {
+	t.Parallel()
+
+	proxied := newStubToolManager("tree_dir")
+	managers := offeredManagers(dialedSettings(), t.TempDir(), []domain.ToolManager{proxied})
+	host := newToolHost(tool.NewCompositeToolManager(managers...))
+
+	if _, err := host.Call(context.Background(), "tree_dir", map[string]any{}); err != nil {
+		t.Fatalf("Call: %v", err)
+	}
+	if !slices.Contains(*proxied.calls, "tree_dir") {
+		t.Errorf("the call did not reach the proxied manager; saw %v", *proxied.calls)
+	}
+}
+
+// Nothing proxied is the default, and it must not disturb the existing set.
+func TestOfferedManagers_NoProxiedToolsIsUnchanged(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	without := specNames(newToolHost(tool.NewCompositeToolManager(offeredManagers(dialedSettings(), dir, nil)...)))
+	empty := specNames(newToolHost(tool.NewCompositeToolManager(
+		offeredManagers(dialedSettings(), dir, []domain.ToolManager{})...)))
+
+	if !slices.Equal(without, empty) {
+		t.Errorf("an empty proxy list changed the offered set:\n nil=%v\nempty=%v", without, empty)
+	}
+}
+
+// A typed-nil manager in the list is the isNil trap again: as an interface it is
+// not nil, and enumerating it would panic at thread start rather than at the
+// call site that passed it.
+func TestOfferedManagers_TypedNilProxiedToolIsSkipped(t *testing.T) {
+	t.Parallel()
+
+	var absent *stubToolManager
+	managers := offeredManagers(dialedSettings(), t.TempDir(), []domain.ToolManager{absent})
+
+	names := specNames(newToolHost(tool.NewCompositeToolManager(managers...)))
+	if !slices.Contains(names, toolRead) {
+		t.Errorf("a typed-nil proxied manager broke the offered set; got %v", names)
 	}
 }

@@ -397,3 +397,104 @@ func (t *mcpTool) Arguments() []message.ToolArgument {
 func (t *mcpTool) Handler() func(ctx context.Context, args message.ToolArgumentValues) (message.ToolResult, error) {
 	return t.handler
 }
+
+// SelectServersWildcard selects every connected server when it is the only
+// entry in a SelectServers list. It is spelled out rather than implied by an
+// empty list because empty has to keep meaning "none": the caller's list comes
+// from a config file, and a user who has not opted in yet must not get
+// everything.
+const SelectServersWildcard = "*"
+
+// SelectServers returns a read-only view of this manager exposing only the
+// tools contributed by the named servers, plus the names it did not recognize.
+//
+// It exists for the app-server backend, which offers klein's tools to another
+// agent as dynamic tools. That list is fixed when a thread starts and every
+// schema in it travels with each thread start, so "all the MCP tools klein
+// happens to have" is the wrong default there in a way it never is for klein's
+// own loop — hence a subset, chosen by server rather than by tool, because a
+// server is the unit a user configured and can name.
+//
+// The view shares this manager's live clients: a call through it reaches the
+// same connection, so there is no second copy of a server to keep in step.
+func (m *MCPEnhancedToolManager) SelectServers(names []string) (domain.ToolManager, []string) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	wildcard := len(names) == 1 && names[0] == SelectServersWildcard
+	allowed := make(map[message.ToolName]bool)
+	var unknown []string
+	for _, name := range names {
+		if wildcard {
+			break
+		}
+		tools, exists := m.mcpTools[name]
+		if !exists {
+			unknown = append(unknown, name)
+			continue
+		}
+		for _, t := range tools {
+			allowed[t.Name()] = true
+		}
+	}
+	if wildcard {
+		for _, tools := range m.mcpTools {
+			for _, t := range tools {
+				allowed[t.Name()] = true
+			}
+		}
+	}
+	return &mcpServerSubset{source: m, allowed: allowed}, unknown
+}
+
+// mcpServerSubset exposes a fixed set of an MCPEnhancedToolManager's tools.
+//
+// The allowed set is computed once, at construction: a caller registering the
+// subset as another agent's tools has already sent the list, and a view that
+// silently grew afterwards would advertise tools the other side never saw.
+type mcpServerSubset struct {
+	source  *MCPEnhancedToolManager
+	allowed map[message.ToolName]bool
+}
+
+// GetTools returns the selected servers' tools.
+func (s *mcpServerSubset) GetTools() map[message.ToolName]message.Tool {
+	out := make(map[message.ToolName]message.Tool, len(s.allowed))
+	for name, t := range s.source.GetTools() {
+		if s.allowed[name] {
+			out[name] = t
+		}
+	}
+	return out
+}
+
+// GetTool retrieves a selected tool by name.
+func (s *mcpServerSubset) GetTool(name message.ToolName) (message.Tool, bool) {
+	if !s.allowed[name] {
+		return nil, false
+	}
+	return s.source.GetTool(name)
+}
+
+// CallTool runs a selected tool. A name outside the selection is refused here
+// rather than passed down, so the subset bounds execution and not just display.
+func (s *mcpServerSubset) CallTool(
+	ctx context.Context, name message.ToolName, args message.ToolArgumentValues,
+) (message.ToolResult, error) {
+	if !s.allowed[name] {
+		return message.NewToolResultError(fmt.Sprintf("tool '%s' is not offered to this backend", name)), nil
+	}
+	return s.source.CallTool(ctx, name, args)
+}
+
+// RegisterTool is not supported: the selection is fixed at construction.
+func (s *mcpServerSubset) RegisterTool(
+	message.ToolName,
+	message.ToolDescription,
+	[]message.ToolArgument,
+	func(context.Context, message.ToolArgumentValues) (message.ToolResult, error),
+) {
+	panic("mcpServerSubset does not support RegisterTool; register on the underlying manager")
+}
+
+var _ domain.ToolManager = (*mcpServerSubset)(nil)

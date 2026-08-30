@@ -28,6 +28,16 @@ type RunnerOptions struct {
 	// StartAgentBackend, the one place upstream that holds a logger; nil
 	// elsewhere, and nil is silent.
 	Logger *pkgLogger.Logger
+	// ProxiedTools are already-connected tool managers the caller wants offered
+	// to the backend on top of the ones settings can describe — in practice
+	// klein's live MCP servers, selected by appserver.proxy_mcp_servers.
+	//
+	// They arrive as managers rather than as config because that is the whole
+	// point: settings can only say how to *start* an MCP server, and a started
+	// copy on the far side of a socket is a different server on a different
+	// machine. Passing the live manager makes the backend's call land on the
+	// connection klein already holds.
+	ProxiedTools []domain.ToolManager
 }
 
 // backendLogger converts klein's logger into the client's Logger interface.
@@ -159,7 +169,7 @@ func approvalPolicy(settings *config.Settings, opts RunnerOptions) string {
 // klein's Read/Write/Bash in place of the ones it shipped with. Where the server
 // has good tools of its own and runs on the same machine, that only moves the
 // work; it earns its keep when the server is somewhere else.
-func offeredManagers(settings *config.Settings, workingDir string) []domain.ToolManager {
+func offeredManagers(settings *config.Settings, workingDir string, proxied []domain.ToolManager) []domain.ToolManager {
 	managers := []domain.ToolManager{
 		tool.NewMemoryToolManager(settings.MemoryDir()),
 		tool.NewScheduleToolManager(settings.SchedulesFile()),
@@ -175,6 +185,14 @@ func offeredManagers(settings *config.Settings, workingDir string) []domain.Tool
 	}
 	if wantsWorkspaceTools(settings) {
 		managers = append(managers, newWorkspaceTools(settings, workingDir))
+	}
+	// Live managers from the caller (klein's connected MCP servers). Skipped when
+	// nil so a caller with no MCP integration passes nothing rather than a typed
+	// nil that would panic on enumeration.
+	for _, m := range proxied {
+		if !isNil(m) {
+			managers = append(managers, m)
+		}
 	}
 	return managers
 }
@@ -236,7 +254,7 @@ func validateWorkspaceTools(s config.AppServerSettings) error {
 func NewRunnerFromSettings(
 	ctx context.Context, settings *config.Settings, workingDir string, opts RunnerOptions,
 ) (*agentserver.Runner, error) {
-	nativeTools := tool.NewCompositeToolManager(offeredManagers(settings, workingDir)...)
+	nativeTools := tool.NewCompositeToolManager(offeredManagers(settings, workingDir, opts.ProxiedTools)...)
 
 	// Dialed or spawned: an address names a server running somewhere else, which
 	// klein neither launches nor configures, so none of the launch settings apply.
@@ -261,6 +279,8 @@ func NewRunnerFromSettings(
 		}
 	}
 
+	warnUnproxiedStdioServers(opts.Logger, settings.MCP.Servers, settings.AppServer.ProxyMCPServers, address)
+
 	// Wrapped, not raw: klein now runs tools the backend used to run itself, and
 	// the approval that came with them has to come from somewhere.
 	offeredTools := withApproval(newToolHost(nativeTools), backendApprover(opts.Approver))
@@ -282,7 +302,7 @@ func NewRunnerFromSettings(
 		ApprovalPolicy: approvalPolicy(settings, opts),
 		SandboxMode:    settings.Codex.SandboxMode,
 		Cwd:            workingDir,
-		MCPServers:     MCPServersConfig(settings.MCP.Servers),
+		MCPServers:     MCPServersConfig(settings.MCP.Servers, settings.AppServer.ProxyMCPServers),
 		Tools:          offeredTools,
 		Approver:       backendApprover(opts.Approver),
 		Logger:         backendLogger(opts.Logger),

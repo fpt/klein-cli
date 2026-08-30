@@ -353,7 +353,10 @@ func main() {
 
 		// Whole-agent backend (codex/appserver): one shared app-server process for all sessions (headless).
 		backendRunner, startErr := agentbackend.Start(
-			ctx, settings, workingDirectory, logger, agentbackend.RunnerOptions{ApprovalPolicy: agentserver.ApprovalNever},
+			ctx, settings, workingDirectory, logger, agentbackend.RunnerOptions{
+				ApprovalPolicy: agentserver.ApprovalNever,
+				ProxiedTools:   proxiedMCPTools(mcpIntegration, settings),
+			},
 		)
 		if startErr != nil {
 			logger.Error("Failed to start agent backend", "error", startErr)
@@ -379,7 +382,11 @@ func main() {
 	// Only the interactive REPL prompts for approvals; one-shot/file mode is headless.
 	// agentbackend.Select returns nil for every backend that needs no external process, so the factory just
 	// runs the ReAct loop as usual.
-	backendOpts := agentbackend.RunnerOptions{ApprovalPolicy: agentserver.ApprovalNever}
+	proxiedTools := proxiedMCPTools(mcpIntegration, settings)
+	backendOpts := agentbackend.RunnerOptions{
+		ApprovalPolicy: agentserver.ApprovalNever,
+		ProxiedTools:   proxiedTools,
+	}
 	if isInteractiveMode {
 		// auto_approve_commands answers the allowlisted requests before the prompt
 		// ever reaches the terminal; everything else still asks.
@@ -388,6 +395,7 @@ func main() {
 		backendOpts = agentbackend.RunnerOptions{
 			ApprovalPolicy: agentserver.ApprovalOnRequest,
 			Approver:       approver,
+			ProxiedTools:   proxiedTools,
 		}
 	}
 
@@ -686,6 +694,24 @@ func (t terminalApprover) Approve(_ context.Context, req agentserver.ApprovalReq
 	}
 	ans := strings.ToLower(strings.TrimSpace(string(b)))
 	return ans == "y" || ans == "yes"
+}
+
+// proxiedMCPTools resolves appserver.proxy_mcp_servers into the live tool
+// managers to offer a whole-agent backend as dynamic tools. Returns nil when
+// there is no MCP integration or nothing was opted in, which is the common case.
+//
+// The managers are the ones klein is already using, not copies: a backend that
+// calls one reaches the MCP server running on this machine, which for a dialed
+// app-server is the only place its answers mean anything.
+func proxiedMCPTools(integration *mcp.Integration, settings *config.Settings) []domain.ToolManager {
+	if integration == nil || len(settings.AppServer.ProxyMCPServers) == 0 {
+		return nil
+	}
+	proxied := integration.ProxyToolManager(settings.AppServer.ProxyMCPServers)
+	if proxied == nil {
+		return nil
+	}
+	return []domain.ToolManager{proxied}
 }
 
 // hasEnabledMCPServers checks if there are any enabled MCP servers

@@ -102,7 +102,10 @@ func runClawCommand(args []string) int {
 			backendWorkingDir = "."
 		}
 		backendRunner, startErr := agentbackend.Start(
-			ctx, settings, backendWorkingDir, logger, agentbackend.RunnerOptions{ApprovalPolicy: agentserver.ApprovalNever},
+			ctx, settings, backendWorkingDir, logger, agentbackend.RunnerOptions{
+				ApprovalPolicy: agentserver.ApprovalNever,
+				ProxiedTools:   proxiedMCPTools(integration, settings),
+			},
 		)
 		if startErr != nil {
 			fmt.Fprintf(os.Stderr, "Failed to start agent backend: %v\n", startErr)
@@ -271,6 +274,7 @@ func runClawREPL(args []string) int {
 		ApprovalPolicy: agentserver.ApprovalOnRequest,
 		Approver: agentbackend.WithAutoApprove(
 			settings.AutoApproveCommands, logger, terminalApprover{backend: settings.LLM.Backend}),
+		ProxiedTools: proxiedMCPTools(integration, settings),
 	}
 	a, cleanup, err := app.NewAgentWithOptions(ctx, app.AgentOptions{
 		Settings:          settings,

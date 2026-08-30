@@ -487,6 +487,31 @@ type AppServerSettings struct {
 	// Empty → ["app-server"], the protocol's conventional entry point.
 	// Late by fieldalignment: the only one carrying a slice header.
 	Args []string `toml:"args,omitempty"`
+	// ProxyMCPServers names MCP servers from klein's own [mcp.<name>] tables —
+	// the bare table key, so [mcp.godevmcp] is named "godevmcp" — whose tools are
+	// offered to the app-server as dynamic tools. The server process then runs
+	// here, connected to klein, and the model reaches it by calling back over the
+	// app-server connection. A single "*" selects every connected server. Empty
+	// (the default) proxies nothing, and an unrecognized name is logged with the
+	// list of connected servers rather than failing the session.
+	//
+	// This is the only thing that works for a stdio MCP server when Address is
+	// set. Without it klein passes the server's command line along as config for
+	// the app-server to launch itself, which on a dialed server means launching
+	// it on *that* machine: the binary has to exist there, it runs as whoever
+	// started the server, and anything it reports about the filesystem is about
+	// the wrong host. Proxying keeps the server where its answers are true.
+	//
+	// Opt-in, and per-server rather than all-or-nothing, because an app-server
+	// thread is handed its dynamic tools once at thread start and keeps them for
+	// the life of the thread. There is no ToolSearch on that path to defer a
+	// schema that turns out to be unused, so every tool named here is paid for on
+	// every thread — a 30-tool server is a real cost, and only the user knows
+	// whether this session is the one that needs it.
+	//
+	// A url server needs nothing here if the app-server host can reach the URL
+	// itself; naming it is still valid, and moves the connection to klein.
+	ProxyMCPServers []string `toml:"proxy_mcp_servers,omitempty"`
 }
 
 // EnvSlice renders the env table as sorted "KEY=VAL" entries, the shape the

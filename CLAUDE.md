@@ -219,6 +219,14 @@ This is a Go-based skill-driven coding agent that uses SKILL.md-configured skill
     dynamic tools (`appserver.workspace_tools`; on by default when dialing, since a
     listening server lends none of its own), plus the approval gate that has to come
     with them
+  - `mcpconfig.go` - klein's MCP servers reach a backend two ways. By default they
+    are described in `config.mcp_servers` for the backend to launch **itself** —
+    which for a dialed server means launching on *that* machine. Naming a server in
+    `appserver.proxy_mcp_servers` (`"*"` = all) instead offers its tools as dynamic
+    tools, so the server runs here and the backend calls back into klein; that
+    server is then omitted from `mcp_servers` so it is not started twice. Opt-in
+    because an app-server thread takes its dynamic-tool list once at `thread/start`
+    and there is no `ToolSearch` on that path to defer an unused schema
 - `pkg/agent/` - Agent domain layer:
   - `domain/` - Domain interfaces and types
   - `react/` - ReAct pattern implementation with thinking channel support

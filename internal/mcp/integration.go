@@ -84,6 +84,31 @@ func (i *Integration) GetMCPTools(serverName string) ([]message.Tool, error) {
 	return i.toolManager.GetMCPTools(serverName)
 }
 
+// ProxyToolManager returns a tool manager exposing only the tools contributed
+// by the named servers, for offering to a whole-agent backend as dynamic tools.
+// Unset (no names) returns nil — nothing is proxied until a server is asked for
+// by name.
+//
+// Opt-in, unlike klein's own loop, because the two have different economics: the
+// ReAct loop keeps every MCP tool reachable and defers the schemas behind
+// ToolSearch, while an app-server thread takes its whole dynamic-tool list at
+// thread start and carries it for the life of the thread. Nothing there thins it
+// out later, so the choice of what to send is the user's, once, in settings.
+func (i *Integration) ProxyToolManager(serverNames []string) domain.ToolManager {
+	if len(serverNames) == 0 {
+		return nil
+	}
+	selected, unknown := i.toolManager.SelectServers(serverNames)
+	for _, name := range unknown {
+		logger.Warn("appserver.proxy_mcp_servers names an MCP server that is not connected",
+			"server", name, "connected", i.ListServers())
+	}
+	if len(selected.GetTools()) == 0 {
+		return nil
+	}
+	return selected
+}
+
 // Close closes all MCP server connections
 func (i *Integration) Close() error {
 	servers := i.toolManager.ListServers()

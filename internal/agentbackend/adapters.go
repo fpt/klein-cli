@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"reflect"
 
+	"github.com/fpt/klein-cli/internal/tool"
 	"github.com/fpt/klein-cli/pkg/agent/domain"
 	"github.com/fpt/klein-cli/pkg/agent/events"
 	"github.com/fpt/klein-cli/pkg/agentserver"
@@ -36,6 +37,71 @@ func newToolHost(tm domain.ToolManager) agentserver.DynamicTools {
 		return nil
 	}
 	return toolHost{tools: tm}
+}
+
+// newSplitToolHost offers two groups: tools the backend advertises to the model,
+// and tools it registers but keeps back until something makes them visible.
+//
+// The split is by manager rather than by a set of names, because that is how
+// klein already knows the difference — the deferred group is the proxied MCP
+// managers, whole. Nothing has to enumerate tool names to classify them, so a
+// server that grows a tool does not need klein to be told about it.
+//
+// A nil or empty deferred group collapses to a plain toolHost: identical specs,
+// identical wire payload, none of this reachable. That is the shape every caller
+// had before deferral existed, and the one they keep by not asking for it.
+func newSplitToolHost(advertised, deferred domain.ToolManager) agentserver.DynamicTools {
+	if isNil(deferred) || len(deferred.GetTools()) == 0 {
+		return newToolHost(advertised)
+	}
+	if isNil(advertised) {
+		return deferredOnlyHost(deferred)
+	}
+	return splitToolHost{
+		advertised: toolHost{tools: advertised},
+		deferred:   toolHost{tools: deferred},
+	}
+}
+
+// deferredOnlyHost is the degenerate split: everything deferred, nothing
+// advertised. Legitimate — a backend with its own tools may want klein's only on
+// request — so it is built rather than refused.
+func deferredOnlyHost(deferred domain.ToolManager) agentserver.DynamicTools {
+	return splitToolHost{
+		advertised: toolHost{tools: tool.NewCompositeToolManager()},
+		deferred:   toolHost{tools: deferred},
+	}
+}
+
+// splitToolHost renders one group advertised and the other deferred, and routes
+// a call to whichever group holds the name.
+type splitToolHost struct {
+	advertised toolHost
+	deferred   toolHost
+}
+
+// Specs lists both groups, marking the deferred half.
+func (h splitToolHost) Specs() []agentserver.ToolSpec {
+	specs := h.advertised.Specs()
+	for _, spec := range h.deferred.Specs() {
+		spec.Deferred = true
+		specs = append(specs, spec)
+	}
+	return specs
+}
+
+// Call routes to whichever group holds the name, advertised first.
+//
+// A deferred tool is callable exactly like an advertised one: deferral governs
+// what the model is told about, never what it is allowed to reach. A backend
+// that lets a model call a tool it was never shown — by guessing the name, or
+// because its own matching is lenient — gets the tool, and that is the intended
+// contract.
+func (h splitToolHost) Call(ctx context.Context, name string, args map[string]any) (string, error) {
+	if _, ok := h.advertised.tools.GetTools()[message.ToolName(name)]; ok {
+		return h.advertised.Call(ctx, name, args)
+	}
+	return h.deferred.Call(ctx, name, args)
 }
 
 // isNil reports whether an interface value is nil or holds a nil pointer.

@@ -54,6 +54,22 @@ type ToolSpec struct {
 	Name        string
 	Description string
 	Parameters  []Parameter
+	// Deferred registers the tool without advertising it: the backend can route
+	// a call to it, but does not list it among the tools it offers the model
+	// until something makes it visible — a discovery tool the backend provides,
+	// typically. It is how a caller offers a large catalog without paying for
+	// every schema on every thread.
+	//
+	// The zero value advertises, which is both the older behavior and the safer
+	// one: a backend that has not implemented deferral ignores the field and
+	// lists the tool as it always did, so a caller that sets this never loses
+	// access to a tool — at worst it does not save anything.
+	//
+	// Deferral is about the model's attention, not authority. A deferred tool
+	// stays callable by name, so this is a context-budget mechanism and never a
+	// permission boundary; a caller that must refuse a tool has to refuse it in
+	// Call.
+	Deferred bool
 }
 
 // DynamicTools is a set of tools the caller wants the backend to be able to

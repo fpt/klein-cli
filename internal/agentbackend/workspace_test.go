@@ -206,7 +206,7 @@ func TestWithApproval_AsksAboutMutationOnly(t *testing.T) {
 		{"LS", false},
 		{toolGlob, false},
 		{toolGrep, false},
-		{"MemorySearch", false},
+		{toolMemorySearch, false},
 	}
 	for _, tc := range tests {
 		t.Run(tc.tool, func(t *testing.T) {
@@ -367,7 +367,7 @@ func TestOfferedManagers_WorkspaceToolsAreOptInForASpawnedServer(t *testing.T) {
 	}
 	// klein's own stores are offered either way: they are what this path has
 	// always registered, and they are not a substitution for anything.
-	if !slices.Contains(without, "MemorySearch") {
+	if !slices.Contains(without, toolMemorySearch) {
 		t.Errorf("the native tools stopped being offered: %v", without)
 	}
 
@@ -377,7 +377,7 @@ func TestOfferedManagers_WorkspaceToolsAreOptInForASpawnedServer(t *testing.T) {
 			t.Errorf("%s is missing with appserver.workspace_tools on: %v", name, with)
 		}
 	}
-	if !slices.Contains(with, "MemorySearch") {
+	if !slices.Contains(with, toolMemorySearch) {
 		t.Error("turning on the workspace tools dropped the native ones")
 	}
 }
@@ -667,5 +667,138 @@ func TestOfferedManagers_TypedNilProxiedToolIsSkipped(t *testing.T) {
 	names := specNames(newToolHost(tool.NewCompositeToolManager(managers...)))
 	if !slices.Contains(names, toolRead) {
 		t.Errorf("a typed-nil proxied manager broke the offered set; got %v", names)
+	}
+}
+
+// toolMemorySearch is klein's, not the workspace set's, but it is the one
+// non-workspace tool these tests name repeatedly: the check that klein's own
+// tools stay advertised needs a tool from a different manager to be meaningful.
+const toolMemorySearch = "MemorySearch"
+
+// deferSettings returns dialed settings that proxy MCP tools and defer them.
+func deferSettings() *config.Settings {
+	s := dialedSettings()
+	s.AppServer.DeferMCPTools = true
+	return s
+}
+
+// specsByName indexes a host's specs so a test can ask about one tool.
+func specsByName(tools agentserver.DynamicTools) map[string]agentserver.ToolSpec {
+	out := map[string]agentserver.ToolSpec{}
+	for _, spec := range tools.Specs() {
+		out[spec.Name] = spec
+	}
+	return out
+}
+
+// The point of deferral: proxied MCP tools are still registered — the backend can
+// route to them — but marked so it need not spend the model's attention on them.
+func TestDeferMCPTools_ProxiedToolsAreRegisteredButDeferred(t *testing.T) {
+	t.Parallel()
+
+	proxied := newStubToolManager("tree_dir", "search_local_files")
+	advertised, deferred := splitOfferedManagers(deferSettings(), t.TempDir(), []domain.ToolManager{proxied})
+	specs := specsByName(newSplitToolHost(
+		tool.NewCompositeToolManager(advertised...), tool.NewCompositeToolManager(deferred...)))
+
+	for _, name := range []string{"tree_dir", "search_local_files"} {
+		spec, ok := specs[name]
+		if !ok {
+			t.Errorf("%q was not registered at all", name)
+			continue
+		}
+		if !spec.Deferred {
+			t.Errorf("%q was registered but not deferred", name)
+		}
+	}
+}
+
+// klein's own tools are never deferred. A turn that has to discover Read before
+// reading a file has already paid more than the schema ever cost.
+func TestDeferMCPTools_KleinsOwnToolsStayAdvertised(t *testing.T) {
+	t.Parallel()
+
+	proxied := newStubToolManager("tree_dir")
+	advertised, deferred := splitOfferedManagers(deferSettings(), t.TempDir(), []domain.ToolManager{proxied})
+	specs := specsByName(newSplitToolHost(
+		tool.NewCompositeToolManager(advertised...), tool.NewCompositeToolManager(deferred...)))
+
+	for _, name := range []string{toolRead, toolBash, toolMemorySearch} {
+		spec, ok := specs[name]
+		if !ok {
+			t.Errorf("%q went missing", name)
+			continue
+		}
+		if spec.Deferred {
+			t.Errorf("%q was deferred; klein's own tools must stay advertised", name)
+		}
+	}
+}
+
+// Deferral governs what the model is told about, never what it may reach. A
+// backend that routes a call to a deferred tool must get the tool.
+func TestDeferMCPTools_DeferredToolIsStillCallable(t *testing.T) {
+	t.Parallel()
+
+	proxied := newStubToolManager("tree_dir")
+	advertised, deferred := splitOfferedManagers(deferSettings(), t.TempDir(), []domain.ToolManager{proxied})
+	host := newSplitToolHost(
+		tool.NewCompositeToolManager(advertised...), tool.NewCompositeToolManager(deferred...))
+
+	if _, err := host.Call(context.Background(), "tree_dir", map[string]any{}); err != nil {
+		t.Fatalf("a deferred tool must still be callable: %v", err)
+	}
+	if !slices.Contains(*proxied.calls, "tree_dir") {
+		t.Errorf("the call did not reach the proxied manager; saw %v", *proxied.calls)
+	}
+}
+
+// Off by default. Without the setting the split is empty and every tool is
+// advertised, which is what every existing deployment already has.
+func TestDeferMCPTools_OffByDefault(t *testing.T) {
+	t.Parallel()
+
+	proxied := newStubToolManager("tree_dir")
+	advertised, deferred := splitOfferedManagers(dialedSettings(), t.TempDir(), []domain.ToolManager{proxied})
+
+	if len(deferred) != 0 {
+		t.Errorf("deferral happened without the setting: %d deferred managers", len(deferred))
+	}
+	specs := specsByName(newSplitToolHost(tool.NewCompositeToolManager(advertised...), nil))
+	if spec, ok := specs["tree_dir"]; !ok || spec.Deferred {
+		t.Errorf("tree_dir should be advertised by default; got %+v (present=%v)", spec, ok)
+	}
+}
+
+// The setting is appserver-only: codex brings its own tools and its own ideas
+// about them, and this flag is not part of the protocol it speaks.
+func TestDeferMCPTools_IgnoredForCodexBackend(t *testing.T) {
+	t.Parallel()
+
+	s := config.NewSettings()
+	s.LLM.Backend = config.BackendCodex
+	s.AppServer.DeferMCPTools = true
+
+	if defersMCPTools(s) {
+		t.Error("defer_mcp_tools should not apply to the codex backend")
+	}
+}
+
+// offeredManagers is the union of both halves, so callers that only want to know
+// what klein offers at all are unaffected by the split.
+func TestSplitOfferedManagers_UnionMatchesOfferedManagers(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	proxied := newStubToolManager("tree_dir")
+	union := specNames(newToolHost(tool.NewCompositeToolManager(
+		offeredManagers(deferSettings(), dir, []domain.ToolManager{proxied})...)))
+
+	advertised, deferred := splitOfferedManagers(deferSettings(), dir, []domain.ToolManager{proxied})
+	split := specNames(newSplitToolHost(
+		tool.NewCompositeToolManager(advertised...), tool.NewCompositeToolManager(deferred...)))
+
+	if !slices.Equal(union, split) {
+		t.Errorf("the split lost or gained a tool:\nunion=%v\nsplit=%v", union, split)
 	}
 }

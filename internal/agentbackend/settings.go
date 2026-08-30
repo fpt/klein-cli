@@ -170,6 +170,20 @@ func approvalPolicy(settings *config.Settings, opts RunnerOptions) string {
 // has good tools of its own and runs on the same machine, that only moves the
 // work; it earns its keep when the server is somewhere else.
 func offeredManagers(settings *config.Settings, workingDir string, proxied []domain.ToolManager) []domain.ToolManager {
+	advertised, deferred := splitOfferedManagers(settings, workingDir, proxied)
+	return append(advertised, deferred...)
+}
+
+// splitOfferedManagers separates the tools the backend should advertise to the
+// model from the ones it should register but keep back until asked for.
+//
+// Only the proxied MCP managers are ever deferred, and only when the setting
+// asks. klein's own tools stay advertised: they are few, they are used on nearly
+// every turn, and a turn that has to discover Read before reading a file has
+// paid more than the schema ever cost.
+func splitOfferedManagers(
+	settings *config.Settings, workingDir string, proxied []domain.ToolManager,
+) (advertised, deferred []domain.ToolManager) {
 	managers := []domain.ToolManager{
 		tool.NewMemoryToolManager(settings.MemoryDir()),
 		tool.NewScheduleToolManager(settings.SchedulesFile()),
@@ -189,12 +203,30 @@ func offeredManagers(settings *config.Settings, workingDir string, proxied []dom
 	// Live managers from the caller (klein's connected MCP servers). Skipped when
 	// nil so a caller with no MCP integration passes nothing rather than a typed
 	// nil that would panic on enumeration.
+	live := make([]domain.ToolManager, 0, len(proxied))
 	for _, m := range proxied {
 		if !isNil(m) {
-			managers = append(managers, m)
+			live = append(live, m)
 		}
 	}
-	return managers
+	if defersMCPTools(settings) {
+		return managers, live
+	}
+	return append(managers, live...), nil
+}
+
+// defersMCPTools reports whether proxied MCP tools should be registered without
+// being advertised.
+//
+// Off by default, and deliberately not inferred from the transport the way
+// workspace_tools is. Deferral only pays off against a backend that both honors
+// the flag and gives the model some way to discover what was held back; against
+// one that honors it and offers no discovery, every proxied tool becomes
+// invisible and the session quietly loses them. klein cannot detect that from
+// here — the flag is advisory and nothing acknowledges it — so the judgment
+// stays with whoever knows which server they are pointing at.
+func defersMCPTools(settings *config.Settings) bool {
+	return settings.LLM.Backend == config.BackendAppServer && settings.AppServer.DeferMCPTools
 }
 
 // wantsWorkspaceTools reports whether klein should supply the workspace tools.
@@ -254,7 +286,11 @@ func validateWorkspaceTools(s config.AppServerSettings) error {
 func NewRunnerFromSettings(
 	ctx context.Context, settings *config.Settings, workingDir string, opts RunnerOptions,
 ) (*agentserver.Runner, error) {
-	nativeTools := tool.NewCompositeToolManager(offeredManagers(settings, workingDir, opts.ProxiedTools)...)
+	advertisedManagers, deferredManagers := splitOfferedManagers(settings, workingDir, opts.ProxiedTools)
+	nativeTools := newSplitToolHost(
+		tool.NewCompositeToolManager(advertisedManagers...),
+		tool.NewCompositeToolManager(deferredManagers...),
+	)
 
 	// Dialed or spawned: an address names a server running somewhere else, which
 	// klein neither launches nor configures, so none of the launch settings apply.
@@ -283,7 +319,7 @@ func NewRunnerFromSettings(
 
 	// Wrapped, not raw: klein now runs tools the backend used to run itself, and
 	// the approval that came with them has to come from somewhere.
-	offeredTools := withApproval(newToolHost(nativeTools), backendApprover(opts.Approver))
+	offeredTools := withApproval(nativeTools, backendApprover(opts.Approver))
 	logOfferedTools(opts.Logger, offeredTools)
 	// Last check before the connection: what was actually assembled, not what the
 	// settings asked for.

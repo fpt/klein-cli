@@ -525,7 +525,21 @@ func (r *Runner) runTurn(
 			r.interruptTurn(ctx, threadID, turnID)
 			return "", fmt.Errorf("codex notification stream: %w", err)
 		}
-		text, status := classifyNote(note, threadID, progress)
+		// The subscription is connection-wide, so notifications for other
+		// threads arrive here too. Filtering once, before anything dispatches on
+		// them, is what keeps another session's activity out of this turn — its
+		// text, its verdict, and its token accounting alike.
+		if id := noteThreadID(note.Raw); id != "" && id != threadID {
+			continue
+		}
+		// Accounting is handled here rather than in classifyNote: it reports a
+		// number and never changes what the turn does next, so it has no verdict
+		// for a function whose only job is producing one.
+		if note.Method == methodTokenUsage {
+			progress.reportTokenUsage(note.Raw)
+			continue
+		}
+		text, status := classifyNote(note, progress)
 		if text != "" {
 			final = text
 		}
@@ -683,6 +697,9 @@ func (r *Runner) interruptTurn(ctx context.Context, threadID, turnID string) {
 // methodError is codex's `error` server notification (v2 ErrorNotification).
 const methodError = "error"
 
+// methodTokenUsage is codex's per-model-call accounting notification.
+const methodTokenUsage = "thread/tokenUsage/updated"
+
 type noteStatus int
 
 const (
@@ -691,16 +708,30 @@ const (
 	noteFailed
 )
 
-// classifyNote returns any assistant text carried by the notification and
-// whether the turn is done/failed. Notifications for other threads are ignored
-// (the subscription is process-global). Along the way it forwards item activity
-// (item/started announces a command/tool call; item/completed carries its
-// result or a completed reasoning block) to the progress tracker for display.
-func classifyNote(note rpc.Notification, threadID string, progress *turnProgress) (string, noteStatus) {
+// noteThreadID reads the thread a notification names, or "" when it names none.
+//
+// Separate from classifyNote's own parse because the answer is needed before
+// dispatch: the subscription is connection-wide, and every kind of notification
+// — not only the ones that carry a verdict — has to be checked against the turn
+// being run.
+func noteThreadID(raw json.RawMessage) string {
 	var p struct {
-		ThreadID string          `json:"threadId"`
-		Item     json.RawMessage `json:"item"`
-		Turn     struct {
+		ThreadID string `json:"threadId"`
+	}
+	_ = json.Unmarshal(raw, &p)
+	return p.ThreadID
+}
+
+// classifyNote returns any assistant text carried by the notification and
+// whether the turn is done/failed. It is only ever handed notifications for its
+// own thread; the caller filters (see noteThreadID). Along the way it forwards
+// item activity (item/started announces a command/tool call; item/completed
+// carries its result or a completed reasoning block) to the progress tracker for
+// display.
+func classifyNote(note rpc.Notification, progress *turnProgress) (string, noteStatus) {
+	var p struct {
+		Item json.RawMessage `json:"item"`
+		Turn struct {
 			Status string `json:"status"`
 		} `json:"turn"`
 		// The `error` notification's payload (codex v2 ErrorNotification).
@@ -710,9 +741,6 @@ func classifyNote(note rpc.Notification, threadID string, progress *turnProgress
 		WillRetry bool `json:"willRetry"`
 	}
 	_ = json.Unmarshal(note.Raw, &p)
-	if p.ThreadID != "" && p.ThreadID != threadID {
-		return "", noteContinue
-	}
 	switch note.Method {
 	case "item/started":
 		progress.render(p.Item, false)
@@ -939,6 +967,57 @@ func (tp *turnProgress) reportRetry(msg string) {
 		"app-server hit a transient error and is retrying; the turn is still running",
 		"detail", strings.TrimSpace(msg),
 	)
+}
+
+// reportTokenUsage parses the accounting notification and hands it to an Observer
+// that asked for it.
+//
+// `last` rather than `total` is what reaches ContextWindow's side of the gauge.
+// The two are different questions and only one of them fits: the total is the
+// thread's cumulative spend across every call, so it climbs past the window
+// partway through any real conversation, while `last.inputTokens` is the prompt
+// the most recent call actually sent — what the context had to hold. Both are
+// carried, so a caller wanting the spend figure still has it, but the field
+// names say which is which.
+//
+// A missing or null modelContextWindow stays zero, meaning "no gauge". The
+// backend sends null deliberately when it cannot vouch for the number, and the
+// one thing not to do with that is substitute a plausible constant: the result
+// looks exactly like a measurement and is not one.
+func (tp *turnProgress) reportTokenUsage(raw json.RawMessage) {
+	obs, ok := tp.obs.(TokenUsageObserver)
+	if !ok {
+		return
+	}
+	var p struct {
+		TokenUsage struct {
+			// Nullable, and the nullability is the message: a backend that will
+			// not vouch for a window sends null rather than omitting the key.
+			ModelContextWindow *int `json:"modelContextWindow"`
+			Total              struct {
+				TotalTokens int `json:"totalTokens"`
+			} `json:"total"`
+			Last struct {
+				InputTokens  int `json:"inputTokens"`
+				OutputTokens int `json:"outputTokens"`
+			} `json:"last"`
+		} `json:"tokenUsage"`
+	}
+	if err := json.Unmarshal(raw, &p); err != nil {
+		if tp.logger != nil {
+			tp.logger.Warn("app-server sent token usage this client could not parse", "error", err)
+		}
+		return
+	}
+	usage := TokenUsage{
+		LastInputTokens:  p.TokenUsage.Last.InputTokens,
+		LastOutputTokens: p.TokenUsage.Last.OutputTokens,
+		TotalTokens:      p.TokenUsage.Total.TotalTokens,
+	}
+	if w := p.TokenUsage.ModelContextWindow; w != nil && *w > 0 {
+		usage.ContextWindow = *w
+	}
+	obs.TokenUsageUpdated(usage)
 }
 
 // render emits progress for one ThreadItem, dispatching by variant. completed

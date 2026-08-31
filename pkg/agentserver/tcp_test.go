@@ -51,6 +51,12 @@ type jsonlServer struct {
 	// the one direction of this protocol that runs backwards.
 	toolCall *toolCallScript
 
+	// strayUsageThread, when set, makes the fake emit one token-usage
+	// notification naming that thread mid-turn. The subscription is
+	// connection-wide, so this is what a second session's accounting looks like
+	// arriving in the middle of this turn.
+	strayUsageThread string
+
 	seen []map[string]any
 
 	mu        sync.Mutex
@@ -215,6 +221,12 @@ func (s *session) runTurn(threadID string) {
 		case <-time.After(5 * time.Second):
 			script.answered <- ""
 		}
+	}
+	if other := s.srv.strayUsageThread; other != "" {
+		s.write(fmt.Sprintf(
+			`{"jsonrpc":"2.0","method":"thread/tokenUsage/updated","params":{"threadId":%q,"turnId":"turn_9",`+
+				`"tokenUsage":{"total":{"totalTokens":999999},"last":{"inputTokens":999999,"outputTokens":1},`+
+				`"modelContextWindow":1024}}}`, other))
 	}
 	s.write(fmt.Sprintf(
 		`{"jsonrpc":"2.0","method":"item/completed","params":{"threadId":%q,"item":{"text":"done"}}}`, threadID))

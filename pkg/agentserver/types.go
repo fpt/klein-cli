@@ -205,6 +205,44 @@ type Observer interface {
 	ReasoningSummary(text string)
 }
 
+// TokenUsage is what one model call cost and what the context can hold.
+//
+// LastInputTokens rather than a running total is the number that belongs against
+// ContextWindow. The backend reports both, and they answer different questions:
+// the total is a thread's cumulative spend, which grows without bound and sails
+// past the window mid-conversation, while the prompt of the most recent call is
+// what the context actually had to hold. A gauge drawn on the total reads over
+// 100% and means nothing.
+type TokenUsage struct {
+	// LastInputTokens is the prompt size of the most recent model call — the
+	// occupancy figure, and the one to draw against ContextWindow.
+	LastInputTokens int
+	// LastOutputTokens is what that call generated.
+	LastOutputTokens int
+	// TotalTokens is the thread's running spend across every call. A cost
+	// figure, not an occupancy one.
+	TotalTokens int
+	// ContextWindow is the window the backend says it is working against, or 0
+	// when it will not vouch for a number.
+	//
+	// Zero means *do not draw a gauge*. The protocol field is nullable and a
+	// backend sends null deliberately, so substituting a plausible constant
+	// would turn "unknown" into a percentage — a guess wearing the clothes of a
+	// measurement. Report the raw counts, or nothing.
+	ContextWindow int
+}
+
+// TokenUsageObserver is an optional extension an Observer may implement to
+// receive token accounting as a turn runs.
+//
+// Optional, and detected by type assertion, because Observer is implemented
+// outside this module: adding a method to it would break every existing
+// implementer to deliver something most of them do not want. An Observer that
+// does not implement this is simply not told.
+type TokenUsageObserver interface {
+	TokenUsageUpdated(TokenUsage)
+}
+
 // discardObserver is what a nil Observer becomes, so the render path can call
 // through unconditionally.
 type discardObserver struct{}

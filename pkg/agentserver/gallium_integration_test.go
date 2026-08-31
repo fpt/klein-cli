@@ -30,6 +30,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -819,4 +820,68 @@ func hasToolSearch(names []string) bool {
 		}
 	}
 	return false
+}
+
+// usageObserver records the token accounting a real backend reports.
+type usageObserver struct {
+	discardObserver
+	mu  sync.Mutex
+	got []TokenUsage
+}
+
+func (o *usageObserver) TokenUsageUpdated(u TokenUsage) {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	o.got = append(o.got, u)
+}
+
+func (o *usageObserver) snapshot() []TokenUsage {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	return append([]TokenUsage(nil), o.got...)
+}
+
+// The gauge klein draws is only as good as its reading of a real notification,
+// and the shape is the backend's to define. Asserted against a live gallium
+// because the two traps here are both invisible to a unit test with a payload
+// this test wrote itself: that `total` is a running sum rather than an occupancy
+// figure, and that the window may legitimately be absent.
+func TestGallium_RealAppServer_ReportsTokenUsage(t *testing.T) {
+	t.Parallel()
+	bin := galliumBin(t)
+
+	// Two model calls, so `total` has something to accumulate past `last`.
+	script := writeScript(t, `{
+	  "steps": [
+	    { "toolCalls": [{ "id": "c1", "name": "LS", "arguments": { "path": "." } }], "inputTokens": 100, "outputTokens": 10 },
+	    { "text": "done.", "inputTokens": 150, "outputTokens": 20 }
+	  ]
+	}`)
+	obs := &usageObserver{}
+	runner, _ := newGalliumRunner(t, bin, script, t.TempDir())
+
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	if _, _, err := runner.RunTurn(ctx, "", "count something", "", obs); err != nil {
+		t.Fatalf("running a turn: %v", err)
+	}
+
+	got := obs.snapshot()
+	if len(got) == 0 {
+		t.Fatal("gallium reported no token usage; klein's gauge would never move")
+	}
+
+	// The running total is a different number from the last call's prompt, and
+	// klein must be reading the one that belongs against a context window. If
+	// these are ever equal the test proves nothing, so say so rather than pass.
+	last := got[len(got)-1]
+	if last.TotalTokens == last.LastInputTokens {
+		t.Skip("this backend's total and last input coincide; the distinction is untested here")
+	}
+	if last.LastInputTokens <= 0 {
+		t.Errorf("no prompt size reported, so there is nothing to draw: %+v", last)
+	}
+	if last.TotalTokens < last.LastInputTokens {
+		t.Errorf("total should accumulate past one call's prompt: %+v", last)
+	}
 }

@@ -525,6 +525,13 @@ func (r *Runner) runTurn(
 			r.interruptTurn(ctx, threadID, turnID)
 			return "", fmt.Errorf("codex notification stream: %w", err)
 		}
+		// Accounting is handled here rather than in classifyNote: it reports a
+		// number and never changes what the turn does next, so it has no verdict
+		// for a function whose only job is producing one.
+		if note.Method == methodTokenUsage {
+			progress.reportTokenUsage(note.Raw)
+			continue
+		}
 		text, status := classifyNote(note, threadID, progress)
 		if text != "" {
 			final = text
@@ -682,6 +689,9 @@ func (r *Runner) interruptTurn(ctx context.Context, threadID, turnID string) {
 
 // methodError is codex's `error` server notification (v2 ErrorNotification).
 const methodError = "error"
+
+// methodTokenUsage is codex's per-model-call accounting notification.
+const methodTokenUsage = "thread/tokenUsage/updated"
 
 type noteStatus int
 
@@ -939,6 +949,57 @@ func (tp *turnProgress) reportRetry(msg string) {
 		"app-server hit a transient error and is retrying; the turn is still running",
 		"detail", strings.TrimSpace(msg),
 	)
+}
+
+// reportTokenUsage parses the accounting notification and hands it to an Observer
+// that asked for it.
+//
+// `last` rather than `total` is what reaches ContextWindow's side of the gauge.
+// The two are different questions and only one of them fits: the total is the
+// thread's cumulative spend across every call, so it climbs past the window
+// partway through any real conversation, while `last.inputTokens` is the prompt
+// the most recent call actually sent — what the context had to hold. Both are
+// carried, so a caller wanting the spend figure still has it, but the field
+// names say which is which.
+//
+// A missing or null modelContextWindow stays zero, meaning "no gauge". The
+// backend sends null deliberately when it cannot vouch for the number, and the
+// one thing not to do with that is substitute a plausible constant: the result
+// looks exactly like a measurement and is not one.
+func (tp *turnProgress) reportTokenUsage(raw json.RawMessage) {
+	obs, ok := tp.obs.(TokenUsageObserver)
+	if !ok {
+		return
+	}
+	var p struct {
+		TokenUsage struct {
+			// Nullable, and the nullability is the message: a backend that will
+			// not vouch for a window sends null rather than omitting the key.
+			ModelContextWindow *int `json:"modelContextWindow"`
+			Total              struct {
+				TotalTokens int `json:"totalTokens"`
+			} `json:"total"`
+			Last struct {
+				InputTokens  int `json:"inputTokens"`
+				OutputTokens int `json:"outputTokens"`
+			} `json:"last"`
+		} `json:"tokenUsage"`
+	}
+	if err := json.Unmarshal(raw, &p); err != nil {
+		if tp.logger != nil {
+			tp.logger.Warn("app-server sent token usage this client could not parse", "error", err)
+		}
+		return
+	}
+	usage := TokenUsage{
+		LastInputTokens:  p.TokenUsage.Last.InputTokens,
+		LastOutputTokens: p.TokenUsage.Last.OutputTokens,
+		TotalTokens:      p.TokenUsage.Total.TotalTokens,
+	}
+	if w := p.TokenUsage.ModelContextWindow; w != nil && *w > 0 {
+		usage.ContextWindow = *w
+	}
+	obs.TokenUsageUpdated(usage)
 }
 
 // render emits progress for one ThreadItem, dispatching by variant. completed

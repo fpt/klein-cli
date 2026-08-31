@@ -18,6 +18,11 @@ const (
 	EventTypeError         EventType = "error"
 	EventTypeSubAgentStart EventType = "sub_agent_start"
 	EventTypeSubAgentEnd   EventType = "sub_agent_end"
+	// EventTypeTokenUsage carries context accounting a whole-agent backend
+	// reported. The native ReAct loop does not emit it: there klein builds the
+	// prompt and can measure it directly, while a backend's prompt is built on
+	// the other side of a connection and only it knows the size.
+	EventTypeTokenUsage EventType = "token_usage"
 )
 
 // AgentEvent represents a structured event from the agent
@@ -60,6 +65,25 @@ type ToolResultData struct {
 	CallID   string `json:"call_id,omitempty"`
 	Content  string `json:"content"`
 	IsError  bool   `json:"is_error"`
+}
+
+// TokenUsageData is what a backend turn reported about context occupancy.
+//
+// InputTokens is the most recent model call's prompt, not a running total: it is
+// the number that belongs against ContextWindow, since the total keeps climbing
+// after the context has stopped growing.
+//
+// ContextWindow of 0 means the backend would not name one, and a display must
+// then show counts or nothing — never a percentage of an assumed window.
+//
+// among them would make any future marshaling of this stream mixed.
+//
+//nolint:tagliatelle // snake_case matches every sibling here; a camelCase type
+type TokenUsageData struct {
+	InputTokens   int `json:"input_tokens"`
+	OutputTokens  int `json:"output_tokens"`
+	TotalTokens   int `json:"total_tokens"`
+	ContextWindow int `json:"context_window"`
 }
 
 // ResponseData contains the final agent response

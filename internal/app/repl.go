@@ -384,8 +384,15 @@ func StartInteractiveMode(ctx context.Context, a *Agent, skillName string) {
 	for {
 		pb.Clear() // Clear the prompt buffer at the start of each loop
 
-		// Show task summary + context usage above the prompt.
-		line := contextDisplay.ShowStatusLine(a.GetMessageState(), a.GetLLMClient(), a.GetTaskSummary())
+		// Show task summary + context usage above the prompt. A whole-agent
+		// backend reports its own occupancy, which supersedes klein's estimate:
+		// that backend built the prompt, so only it knows how big it was.
+		var backendUsage *BackendUsage
+		if usage, ok := a.BackendTokenUsage(); ok {
+			backendUsage = &BackendUsage{InputTokens: usage.InputTokens, Window: usage.ContextWindow}
+		}
+		line := contextDisplay.ShowStatusLineWithBackend(
+			a.GetMessageState(), a.GetLLMClient(), a.GetTaskSummary(), backendUsage)
 		if line != "" {
 			fmt.Printf("%s\n", line)
 		}

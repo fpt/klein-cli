@@ -85,6 +85,17 @@ type Agent struct {
 	codexBackend  domain.BackendRunner
 	codexThreadID string
 
+	// backendUsage is the most recent context accounting a whole-agent backend
+	// reported, and backendUsageMu guards it: the events arrive on the turn's
+	// goroutine while the REPL reads this to draw its status line.
+	//
+	// It exists because the native path's estimate cannot be reused here. There
+	// klein builds the prompt and can measure what it sent; a backend builds its
+	// own, on the far side of a connection, from a history klein does not hold —
+	// so the only honest number is the one the backend reports.
+	backendUsage   events.TokenUsageData
+	backendUsageMu sync.Mutex
+
 	// Plugin registry. Commands and agents are stored under their scoped
 	// "<plugin>:<name>" identifier; bare-name entries are also populated when
 	// unambiguous. ambiguousCommands/ambiguousAgents track names that appear
@@ -1430,6 +1441,15 @@ func (a *Agent) GetLLMClient() domain.LLM {
 	return a.llmClient
 }
 
+// BackendTokenUsage returns the most recent accounting a whole-agent backend
+// reported, and whether there has been any. The native path never reports, so
+// false there means "measure it yourself", not "the context is empty".
+func (a *Agent) BackendTokenUsage() (events.TokenUsageData, bool) {
+	a.backendUsageMu.Lock()
+	defer a.backendUsageMu.Unlock()
+	return a.backendUsage, a.backendUsage.InputTokens > 0 || a.backendUsage.TotalTokens > 0
+}
+
 // GetTaskSummary returns a compact one-line task status string, or "" when
 // no tasks exist. Shown in the REPL status line above the prompt.
 func (a *Agent) GetTaskSummary() string {
@@ -1625,6 +1645,21 @@ func (a *Agent) saveCodexThreadID(id string) {
 }
 
 func (a *Agent) setupEventHandlers(emitter events.EventEmitter) {
+	// Recorded before the writer check below, and in a handler of its own: this
+	// is state the REPL reads later rather than something printed now, and a
+	// session with no console writer (the Connect server, the gateway) still has
+	// a caller that may want to know how full the context is.
+	emitter.AddHandler(func(event events.AgentEvent) {
+		if event.Type != events.EventTypeTokenUsage {
+			return
+		}
+		if data, ok := event.Data.(events.TokenUsageData); ok {
+			a.backendUsageMu.Lock()
+			a.backendUsage = data
+			a.backendUsageMu.Unlock()
+		}
+	})
+
 	emitter.AddHandler(func(event events.AgentEvent) {
 		writer := a.OutWriter()
 		if writer == nil {

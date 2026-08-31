@@ -208,6 +208,18 @@ func (o eventObserver) ReasoningSummary(text string) {
 	o.emit(events.EventTypeThinkingChunk, events.ThinkingChunkData{Content: text + "\n"})
 }
 
+// TokenUsageUpdated puts the backend's context accounting on klein's event
+// stream. Implementing agentserver.TokenUsageObserver is what asks for it — the
+// client only reports to an observer that says it wants to know.
+func (o eventObserver) TokenUsageUpdated(u agentserver.TokenUsage) {
+	o.emit(events.EventTypeTokenUsage, events.TokenUsageData{
+		InputTokens:   u.LastInputTokens,
+		OutputTokens:  u.LastOutputTokens,
+		TotalTokens:   u.TotalTokens,
+		ContextWindow: u.ContextWindow,
+	})
+}
+
 // turnRunner adapts a Runner to domain.BackendRunner, the interface the app layer
 // routes a whole-agent turn through.
 //

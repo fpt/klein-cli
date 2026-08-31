@@ -178,7 +178,7 @@ func (r *recordedHost) served() []string {
 func dialGalliumWithKleinsTools(t *testing.T, script, workDir string) (*agentserver.Runner, *recordedHost) {
 	t.Helper()
 
-	settings := dialedSettings()
+	settings := dialedSettings(t)
 	// Unset, on purpose: a dialed server is exactly the case where klein's tools
 	// are supposed to be on without anyone having said so.
 	if !wantsWorkspaceTools(settings) {

@@ -28,6 +28,7 @@ const (
 	methodTurnStart   = "turn/start"
 	firstThread       = "thread_1"
 	pingTool          = "KleinPing"
+	pingNoteArg       = "note"          // KleinPing's only parameter
 	testAddress       = "10.0.0.2:4711" // never dialed: only ever configured
 	spawnedBinary     = "gallium"       // never run: only ever configured
 	appServerArg      = "app-server"    // the conventional subcommand

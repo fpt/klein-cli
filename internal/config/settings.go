@@ -512,6 +512,26 @@ type AppServerSettings struct {
 	// A url server needs nothing here if the app-server host can reach the URL
 	// itself; naming it is still valid, and moves the connection to klein.
 	ProxyMCPServers []string `toml:"proxy_mcp_servers,omitempty"`
+	// DeferMCPTools registers the proxied MCP tools without advertising them:
+	// the app-server can route a call to any of them, but does not list them
+	// among the tools it offers the model until its own discovery tool surfaces
+	// one. klein's own tools are always advertised — they are few and used on
+	// nearly every turn.
+	//
+	// This is what makes ProxyMCPServers cheap enough to set to "*". A thread
+	// carries every advertised schema for its whole life, so today the list is a
+	// budget; deferred, a 24-tool server costs one line of catalog instead of
+	// twenty-four schemas, and connecting a server stops being a decision about
+	// context.
+	//
+	// Off by default, and it must stay a decision rather than a default. The
+	// flag is advisory: nothing acknowledges it, so klein cannot tell a backend
+	// that honors it from one that ignores it. Against a backend that ignores it
+	// the setting does nothing, which is harmless. Against one that honors it but
+	// offers no way to discover what was held back, every proxied tool becomes
+	// invisible — a working session quietly losing tools it used to have. Only
+	// the person who knows which server they are pointing at can rule that out.
+	DeferMCPTools bool `toml:"defer_mcp_tools,omitempty"`
 }
 
 // EnvSlice renders the env table as sorted "KEY=VAL" entries, the shape the

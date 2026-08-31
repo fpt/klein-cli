@@ -22,6 +22,7 @@ package agentserver
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"net"
 	"os"
@@ -161,7 +162,7 @@ func (c callbackTools) Specs() []ToolSpec {
 		Name:        pingTool,
 		Description: "Records a note on the caller's side. Call it with any text.",
 		Parameters: []Parameter{
-			{Name: "note", Type: jsonTypeString, Required: true, Description: "text to record"},
+			{Name: pingNoteArg, Type: jsonTypeString, Required: true, Description: "text to record"},
 		},
 	}}
 }
@@ -210,7 +211,7 @@ func TestGallium_RealAppServer_CallsBackForADynamicTool(t *testing.T) {
 	// The tool ran in this process, with the arguments the backend chose.
 	select {
 	case args := <-tools.called:
-		if args["note"] != "from the backend" {
+		if args[pingNoteArg] != "from the backend" {
 			t.Errorf("arguments did not survive the round trip: %+v", args)
 		}
 	default:
@@ -531,7 +532,7 @@ func TestGallium_OverTCP_RunsATurnAndCallsBackForATool(t *testing.T) {
 	// The tool ran in this process, with the arguments the remote agent chose.
 	select {
 	case args := <-tools.called:
-		if args["note"] != "over the wire" {
+		if args[pingNoteArg] != "over the wire" {
 			t.Errorf("arguments did not survive the round trip: %+v", args)
 		}
 	default:
@@ -608,4 +609,214 @@ func TestGallium_OverTCP_ReconnectsAfterBeingDisplaced(t *testing.T) {
 	if runner.link == link {
 		t.Error("the runner is still holding the connection gallium closed")
 	}
+}
+
+// hiddenTool is the name of the deferred tool in the deferral tests. Deliberately
+// unlike pingTool: gallium matches call names leniently (case and underscores are
+// normalized away), so two names that could collapse into one would prove nothing.
+const hiddenTool = "KleinHiddenSearch"
+
+// deferringTools offers one advertised tool and one deferred one, recording which
+// were called.
+type deferringTools struct {
+	called chan string
+}
+
+func (d deferringTools) Specs() []ToolSpec {
+	return []ToolSpec{
+		{
+			Name:        pingTool,
+			Description: "Records a note on the caller's side.",
+			Parameters: []Parameter{
+				{Name: pingNoteArg, Type: jsonTypeString, Required: true, Description: "text to record"},
+			},
+		},
+		{
+			Name:        hiddenTool,
+			Description: "Searches an imaginary corpus. Deferred: registered, not advertised.",
+			Deferred:    true,
+			Parameters: []Parameter{
+				{Name: "query", Type: jsonTypeString, Required: true, Description: "what to look for"},
+			},
+		},
+	}
+}
+
+func (d deferringTools) Call(_ context.Context, name string, _ map[string]any) (string, error) {
+	select {
+	case d.called <- name:
+	default:
+	}
+	return "ok", nil
+}
+
+// tracedTools spawns gallium with tracing on, so a test can read back the tool
+// list gallium actually put in front of the model.
+//
+// The trace is the only witness that matters here. Every other signal — the tool
+// running, the turn succeeding — is equally true of a backend that ignored the
+// flag and advertised everything, which is exactly the failure this has to be
+// able to see.
+func tracedGalliumRunner(
+	t *testing.T, bin, script, workDir string, tools DynamicTools,
+) (*Runner, string) {
+	t.Helper()
+	traceDir := t.TempDir()
+	logger, _ := driftLog()
+	runner, err := NewRunner(context.Background(), Config{
+		Command: bin,
+		Args:    appServerArgs(t),
+		Logger:  logger,
+		Env: []string{
+			"INFERENCE_ENGINE=scripted", "MODEL_PATH=" + script, "GALLIUM_AUTO_APPROVE=1",
+			"GALLIUM_TRACE=1", "GALLIUM_TRACE_DIR=" + traceDir,
+		},
+		Dialect:        DialectGeneric,
+		Cwd:            workDir,
+		ApprovalPolicy: ApprovalNever,
+		Tools:          tools,
+	})
+	if err != nil {
+		t.Fatalf("spawning gallium: %v", err)
+	}
+	t.Cleanup(func() { _ = runner.Close() })
+	return runner, traceDir
+}
+
+// tracedToolNames reads the tool list gallium recorded for the turn.
+func tracedToolNames(t *testing.T, traceDir string) []string {
+	t.Helper()
+	entries, err := os.ReadDir(traceDir)
+	if err != nil {
+		t.Fatalf("reading the trace dir: %v", err)
+	}
+	var names []string
+	found := false
+	for _, e := range entries {
+		if e.IsDir() || !strings.HasSuffix(e.Name(), ".json") {
+			continue
+		}
+		raw, readErr := os.ReadFile(filepath.Join(traceDir, e.Name())) //nolint:gosec // a temp dir this test made
+		if readErr != nil {
+			t.Fatalf("reading %s: %v", e.Name(), readErr)
+		}
+		var trace struct {
+			Tools []struct {
+				Name string `json:"name"`
+			} `json:"tools"`
+		}
+		if err := json.Unmarshal(raw, &trace); err != nil {
+			t.Fatalf("parsing %s: %v", e.Name(), err)
+		}
+		found = true
+		for _, tl := range trace.Tools {
+			names = append(names, tl.Name)
+		}
+	}
+	if !found {
+		t.Fatalf("gallium wrote no trace to %s; the test cannot tell what the model saw", traceDir)
+	}
+	slices.Sort(names)
+	return names
+}
+
+// The claim klein's `advertised: false` makes: the tool is registered, so the
+// backend can route a call to it, but its schema never reaches the model.
+//
+// Both halves are asserted from the backend's own trace, because only the trace
+// separates them. A turn that succeeds proves the tool was registered; nothing
+// but the recorded tool list proves it was not also advertised.
+func TestGallium_RealAppServer_DeferredToolIsRegisteredButNotAdvertised(t *testing.T) {
+	t.Parallel()
+	bin := galliumBin(t)
+
+	script := writeScript(t, `{
+	  "steps": [
+	    { "toolCalls": [{ "id": "c1", "name": "KleinHiddenSearch", "arguments": { "query": "anything" } }] },
+	    { "text": "I called the deferred tool." }
+	  ]
+	}`)
+	tools := deferringTools{called: make(chan string, 2)}
+	runner, traceDir := tracedGalliumRunner(t, bin, script, t.TempDir(), tools)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+
+	_, text, err := runner.RunTurn(ctx, "", "use the hidden tool", "", nil)
+	if err != nil {
+		t.Fatalf("running a turn: %v", err)
+	}
+	if !strings.Contains(text, "I called the deferred tool") {
+		t.Errorf("turn text: got %q", text)
+	}
+
+	// Registered: the backend routed a call to a tool it never advertised, and it
+	// ran here. Deferral is a context budget, never a permission boundary.
+	select {
+	case name := <-tools.called:
+		if name != hiddenTool {
+			t.Errorf("called %q, want %q", name, hiddenTool)
+		}
+	default:
+		t.Fatal("the deferred tool was never called; deferral must not make a tool unreachable")
+	}
+
+	// Not advertised: its schema stayed out of the prompt.
+	advertised := tracedToolNames(t, traceDir)
+	if slices.Contains(advertised, hiddenTool) {
+		t.Errorf("%q was advertised to the model; deferral did nothing. Tools: %v", hiddenTool, advertised)
+	}
+	if !slices.Contains(advertised, pingTool) {
+		t.Errorf("%q should still be advertised; got %v", pingTool, advertised)
+	}
+}
+
+// gallium registers its own ToolSearch when, and only when, something is
+// deferred — otherwise a thread that defers nothing would spend a schema
+// advertising a search over an empty set.
+//
+// klein does not send this tool; it is the backend's half of the bargain, and
+// the reason klein can defer a tool without stranding it. Asserted here because
+// klein's `defer_mcp_tools` is only safe against a backend that offers some way
+// back, and this is where the two halves actually meet.
+func TestGallium_RealAppServer_ToolSearchAppearsOnlyWhenSomethingIsDeferred(t *testing.T) {
+	t.Parallel()
+	bin := galliumBin(t)
+
+	script := writeScript(t, `{ "steps": [{ "text": "nothing to do." }] }`)
+
+	withDeferred, deferredTrace := tracedGalliumRunner(
+		t, bin, script, t.TempDir(), deferringTools{called: make(chan string, 2)})
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	if _, _, err := withDeferred.RunTurn(ctx, "", "hello", "", nil); err != nil {
+		t.Fatalf("turn with a deferred tool: %v", err)
+	}
+
+	script2 := writeScript(t, `{ "steps": [{ "text": "nothing to do." }] }`)
+	noDeferred, plainTrace := tracedGalliumRunner(
+		t, bin, script2, t.TempDir(), callbackTools{called: make(chan map[string]any, 1)})
+	if _, _, err := noDeferred.RunTurn(ctx, "", "hello", "", nil); err != nil {
+		t.Fatalf("turn with nothing deferred: %v", err)
+	}
+
+	deferred, plain := tracedToolNames(t, deferredTrace), tracedToolNames(t, plainTrace)
+	if !hasToolSearch(deferred) {
+		t.Errorf("a thread with a deferred tool got no discovery tool, stranding it: %v", deferred)
+	}
+	if hasToolSearch(plain) {
+		t.Errorf("a thread deferring nothing was charged for a search over an empty set: %v", plain)
+	}
+}
+
+// hasToolSearch reports whether the backend advertised a tool-discovery tool.
+// Matched loosely on purpose: the name is the backend's to choose, and klein
+// depends on such a tool existing, not on what it is called.
+func hasToolSearch(names []string) bool {
+	for _, n := range names {
+		if strings.Contains(strings.ToLower(strings.ReplaceAll(n, "_", "")), "toolsearch") {
+			return true
+		}
+	}
+	return false
 }

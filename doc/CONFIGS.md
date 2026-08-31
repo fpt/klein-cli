@@ -188,6 +188,8 @@ Two differences from codex worth knowing:
 | `env` | object | — | Environment variables `{ "KEY": "VAL" }` passed to the server. See below. |
 | `workspace_tools` | bool | *(on when dialing, off when spawning)* | Offer klein's own `Read`/`Write`/`Edit`/`MultiEdit`/`LS`/`Glob`/`Grep`/`Bash` to the server as dynamic tools, so they run **here**. See [Whose tools run](#whose-tools-run) |
 | `approval_policy` | string | *(mode-dependent)* | `never` / `on-request`. Same mode defaults as codex: the interactive repl prompts you (y/N) before the server writes a file or runs a command; headless surfaces auto-approve. Set explicitly to override. |
+| `proxy_mcp_servers` | string[] | `[]` | Names of `[mcp.<name>]` servers whose tools klein offers the app-server as dynamic tools, so the MCP server runs **here**. `["*"]` selects all. See [Reaching an MCP server from a remote app-server](#reaching-an-mcp-server-from-a-remote-app-server) |
+| `defer_mcp_tools` | bool | `false` | Register the proxied MCP tools without advertising them, so they cost no schema budget until the server's own discovery tool surfaces one. Requires server support — see the section below. |
 
 > `config` is **deprecated** and undocumented here — it still parses and still
 > works, and setting it logs a warning naming its replacement. Use `env`, or hand
@@ -370,6 +372,57 @@ Two behaviours are worth knowing:
   reconnect — they belong to the connection — so that turn starts a fresh thread
   on the server. Your conversation history is klein's and is unaffected; what is
   lost is the server-side context of the old thread.
+
+#### Reaching an MCP server from a remote app-server
+
+By default klein hands the app-server its MCP server definitions as config and
+the server launches them **itself**. Over `address` that means launching on *that*
+machine: the binary has to exist there, it runs as whoever started the server, and
+anything it reports about the filesystem is about the wrong host. A `tree_dir`
+that walks the GPU box while you read it as an answer about your laptop is the
+failure mode, and nothing errors.
+
+`proxy_mcp_servers` inverts it. Name a server — the bare `[mcp.<name>]` key — and
+klein connects to it locally and offers its tools to the app-server as dynamic
+tools, the same way `workspace_tools` offers `Read`/`Bash`:
+
+```toml
+[appserver]
+address           = "127.0.0.1:47821"
+proxy_mcp_servers = ["godevmcp"]      # or ["*"] for every connected server
+
+[mcp.godevmcp]
+type    = "stdio"
+command = "godevmcp"
+args    = ["serve"]
+```
+
+A proxied server is left out of the config klein sends, so it is not also started
+on the far side under the same tool names. An unrecognized name is logged with the
+list of connected servers and the session continues.
+
+Dialing with a stdio MCP server you have *not* proxied logs a warning naming the
+setting, because that is the case that starts cleanly and then answers about the
+wrong machine. It stays a warning: a remote host that genuinely has the server
+installed is a real setup, and klein cannot tell the two apart.
+
+**The cost, and `defer_mcp_tools`.** Every advertised tool's schema travels in
+`thread/start` and stays for the life of the thread — klein's own 20 tools are
+already ~13 KB (~3.2k tokens), and a 24-tool MCP server roughly doubles it. That
+is why `proxy_mcp_servers` is opt-in per server rather than on by default.
+
+`defer_mcp_tools = true` asks the server to *register* the proxied tools without
+*advertising* them, so they cost nothing until the server's own discovery tool
+surfaces one. klein's own tools stay advertised either way — they are used on
+nearly every turn.
+
+> **Requires server support.** The flag rides as `"advertised": false` on each
+> deferred entry in `dynamicTools`. A server that has never heard of the key
+> ignores it and advertises everything, so setting this is harmless there — it
+> simply saves nothing. A server that honours it but offers **no** way to discover
+> what was held back makes every proxied tool invisible. klein cannot detect
+> either case (nothing acknowledges the flag), which is why this defaults to off
+> and stays a deliberate choice.
 
 ### `agent` — Agent behaviour
 

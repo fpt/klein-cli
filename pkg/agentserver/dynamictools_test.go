@@ -157,3 +157,44 @@ func TestToInputSchema_ExplicitKeysWin(t *testing.T) {
 		t.Errorf("enum lost: %+v", mode)
 	}
 }
+
+// A deferred tool goes out with "advertised": false. The backend registers it
+// either way; the key is what tells it not to spend the model's attention.
+func TestBuildDynamicToolsMarksDeferred(t *testing.T) {
+	t.Parallel()
+	tools := stubTools{specs: []ToolSpec{
+		{Name: "Read", Description: "read a file"},
+		{Name: "tree_dir", Description: "walk a tree", Deferred: true},
+	}}
+
+	byName := map[string]map[string]any{}
+	for _, s := range buildDynamicTools(tools) {
+		byName[s["name"].(string)] = s
+	}
+
+	if got, ok := byName["tree_dir"]["advertised"]; !ok || got != false {
+		t.Errorf(`deferred tool: advertised = %v (present=%v), want false`, got, ok)
+	}
+	// The deferred tool is still registered — deferral is not omission.
+	if byName["tree_dir"]["inputSchema"] == nil {
+		t.Error("a deferred tool must still carry its schema; the backend has to call it")
+	}
+}
+
+// The payload for a caller that defers nothing must be byte-identical to what it
+// was before deferral existed. A backend that has never heard of "advertised"
+// then behaves exactly as it always did, which is what makes the flag safe to
+// send before the other end supports it.
+func TestBuildDynamicToolsOmitsAdvertisedWhenNothingIsDeferred(t *testing.T) {
+	t.Parallel()
+	tools := stubTools{specs: []ToolSpec{
+		{Name: "Read", Description: "read a file"},
+		{Name: "Bash", Description: "run a command"},
+	}}
+
+	for _, s := range buildDynamicTools(tools) {
+		if _, ok := s["advertised"]; ok {
+			t.Errorf("tool %v carried an advertised key when nothing was deferred", s["name"])
+		}
+	}
+}

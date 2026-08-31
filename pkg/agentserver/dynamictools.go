@@ -20,6 +20,10 @@ const (
 	keyType         = "type"
 	keyThreadID     = "threadId"
 	keyTurnID       = "turnId"
+	// keyAdvertised marks whether the backend should list a registered tool
+	// among those it offers the model. Written only when false; see
+	// buildDynamicTools.
+	keyAdvertised = "advertised"
 
 	decisionAccept  = "accept"  // approve a file-change request
 	decisionDecline = "decline" // deny it; codex continues the turn
@@ -125,18 +129,28 @@ func toolCallResult(success bool, text string) *protocol.DynamicToolCallResponse
 
 // buildDynamicTools renders the offered tools as codex FunctionDynamicTool specs
 // (type/name/description/inputSchema) for thread/start's dynamicTools field.
+//
+// A deferred tool carries "advertised": false. The key is written only when it
+// is false, so the payload for a caller that defers nothing is byte-identical to
+// what it always was, and a backend that has never heard of the field skips an
+// unknown key and advertises the tool — the degradation that makes deferral safe
+// to ask for before the other end supports it.
 func buildDynamicTools(tools DynamicTools) []map[string]any {
 	if tools == nil {
 		return nil
 	}
 	var out []map[string]any
 	for _, spec := range tools.Specs() {
-		out = append(out, map[string]any{
+		entry := map[string]any{
 			keyType:       "function",
 			"name":        spec.Name,
 			"description": spec.Description,
 			"inputSchema": toInputSchema(spec.Parameters),
-		})
+		}
+		if spec.Deferred {
+			entry[keyAdvertised] = false
+		}
+		out = append(out, entry)
 	}
 	return out
 }

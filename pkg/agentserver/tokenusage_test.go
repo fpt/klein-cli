@@ -1,8 +1,10 @@
 package agentserver
 
 import (
+	"context"
 	"encoding/json"
 	"testing"
+	"time"
 )
 
 // usageRecorder is an Observer that also wants token accounting.
@@ -108,5 +110,60 @@ func TestReportTokenUsage_MalformedPayloadIsIgnored(t *testing.T) {
 
 	if len(rec.got) != 0 {
 		t.Errorf("a malformed payload was reported as usage: %+v", rec.got)
+	}
+}
+
+// Another thread's accounting must not reach this turn's observer.
+//
+// The subscription is connection-wide — one app-server is shared across klein's
+// sessions, and each session is a thread on it — so a notification for a
+// different thread does arrive here. Reading it would put another session's
+// occupancy in this one's gauge, and because the display keeps the last value it
+// saw, the wrong number would then stay on screen.
+//
+// Run through the real turn loop rather than the parser, because the parser is
+// not where this can go wrong: reportTokenUsage is correct either way, and the
+// bug is entirely in whether the loop hands it a notification it should have
+// dropped.
+func TestRunner_OverTCP_IgnoresAnotherThreadsTokenUsage(t *testing.T) {
+	t.Parallel()
+
+	srv := newJSONLServer(t)
+	srv.strayUsageThread = "some_other_thread"
+	runner := runnerDialing(t, srv, nil)
+	obs := &usageRecorder{}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	if _, _, err := runner.RunTurn(ctx, "", "hello", "", obs); err != nil {
+		t.Fatalf("RunTurn: %v", err)
+	}
+	if len(obs.got) != 0 {
+		t.Errorf("another thread's accounting reached this turn: %+v", obs.got)
+	}
+}
+
+// The same turn's accounting still gets through, so the filter above is not
+// simply dropping everything.
+func TestRunner_OverTCP_DeliversItsOwnTokenUsage(t *testing.T) {
+	t.Parallel()
+
+	srv := newJSONLServer(t)
+	srv.strayUsageThread = firstThread // the thread this turn actually runs on
+	runner := runnerDialing(t, srv, nil)
+	obs := &usageRecorder{}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	if _, _, err := runner.RunTurn(ctx, "", "hello", "", obs); err != nil {
+		t.Fatalf("RunTurn: %v", err)
+	}
+	if len(obs.got) != 1 {
+		t.Fatalf("want this thread's accounting delivered once, got %+v", obs.got)
+	}
+	if obs.got[0].LastInputTokens != 999999 {
+		t.Errorf("wrong figure delivered: %+v", obs.got[0])
 	}
 }

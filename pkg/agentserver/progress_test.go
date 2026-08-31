@@ -88,7 +88,7 @@ func completed(item map[string]any) rpc.Notification {
 func feed(progress *turnProgress, notes ...rpc.Notification) string {
 	final := ""
 	for _, n := range notes {
-		if text, _ := classifyNote(n, testThread, progress); text != "" {
+		if text, _ := classifyNote(n, progress); text != "" {
 			final = text
 		}
 	}
@@ -330,15 +330,30 @@ func TestProgress_AgentMessage_IsReturnedNotRendered(t *testing.T) {
 	}
 }
 
-func TestProgress_OtherThreadIgnored(t *testing.T) {
+// The filter that keeps another thread's notifications out of this turn now
+// lives above the dispatch, in the read loop, so every kind of notification is
+// checked and not just the ones carrying a verdict. noteThreadID is what it asks.
+func TestNoteThreadID_NamesTheThreadOrNothing(t *testing.T) {
 	t.Parallel()
-	progress, got := newProgress()
 
 	n := noteFor("item/started", "other", cmd("x", "rm -rf /", stInProgress, 0, ""))
-	classifyNote(n, testThread, progress)
+	if got := noteThreadID(n.Raw); got != "other" {
+		t.Errorf("noteThreadID = %q, want %q", got, "other")
+	}
 
-	if len(*got) != 0 {
-		t.Errorf("notifications for other threads must be ignored: %+v", *got)
+	mine := noteFor("item/started", testThread, cmd("x", "ls", stInProgress, 0, ""))
+	if got := noteThreadID(mine.Raw); got != testThread {
+		t.Errorf("noteThreadID = %q, want %q", got, testThread)
+	}
+
+	// A notification naming no thread is not another thread's: the caller lets
+	// it through rather than dropping it, so this must not invent an id.
+	if got := noteThreadID(json.RawMessage(`{"method":"whatever"}`)); got != "" {
+		t.Errorf("noteThreadID = %q, want empty for a note naming no thread", got)
+	}
+	// Malformed input is "no thread named", not a panic.
+	if got := noteThreadID(json.RawMessage(`not json`)); got != "" {
+		t.Errorf("noteThreadID = %q, want empty for unparseable input", got)
 	}
 }
 
@@ -487,7 +502,7 @@ func TestClassify_TurnCompletedStatusDecidesTheOutcome(t *testing.T) {
 		{"", noteDone},
 	} {
 		progress, _ := newProgress()
-		if _, got := classifyNote(turnEnd(tc.status), testThread, progress); got != tc.want {
+		if _, got := classifyNote(turnEnd(tc.status), progress); got != tc.want {
 			t.Errorf("status %q: got %v, want %v", tc.status, got, tc.want)
 		}
 	}
@@ -513,7 +528,7 @@ func TestClassify_TransientErrorDoesNotEndTheTurn(t *testing.T) {
 	t.Parallel()
 	progress, buf := newProgressWithLogger()
 
-	if _, got := classifyNote(errNote("stream disconnected", true), testThread, progress); got != noteContinue {
+	if _, got := classifyNote(errNote("stream disconnected", true), progress); got != noteContinue {
 		t.Errorf("got %v, want noteContinue", got)
 	}
 	// A retry stalls the turn, so it must not stall silently.
@@ -527,7 +542,7 @@ func TestClassify_NonRetriedErrorFailsTheTurn(t *testing.T) {
 	t.Parallel()
 	progress, _ := newProgress()
 
-	if _, got := classifyNote(errNote("model refused", false), testThread, progress); got != noteFailed {
+	if _, got := classifyNote(errNote("model refused", false), progress); got != noteFailed {
 		t.Errorf("got %v, want noteFailed", got)
 	}
 }
@@ -547,7 +562,7 @@ func TestClassify_UnhandledMethod_IsReported(t *testing.T) {
 	t.Parallel()
 	progress, buf := newProgressWithLogger()
 
-	if _, got := classifyNote(unknownNote("turn/failed"), testThread, progress); got != noteContinue {
+	if _, got := classifyNote(unknownNote("turn/failed"), progress); got != noteContinue {
 		t.Errorf("an unhandled method must not decide the turn: got %v", got)
 	}
 	if !strings.Contains(buf.String(), "turn/failed") {
@@ -562,7 +577,7 @@ func TestClassify_UnhandledMethod_IsReportedOncePerTurn(t *testing.T) {
 	progress, buf := newProgressWithLogger()
 
 	for range 5 {
-		classifyNote(unknownNote("gallium/whatever"), testThread, progress)
+		classifyNote(unknownNote("gallium/whatever"), progress)
 	}
 
 	if n := strings.Count(buf.String(), "gallium/whatever"); n != 1 {
@@ -584,7 +599,7 @@ func TestClassify_ProtocolKnownMethod_IsNotReported(t *testing.T) {
 		Params: protocol.AgentMessageDeltaNotification{},
 		Raw:    raw,
 	}
-	if _, got := classifyNote(n, testThread, progress); got != noteContinue {
+	if _, got := classifyNote(n, progress); got != noteContinue {
 		t.Errorf("a known-but-unhandled method must not decide the turn: got %v", got)
 	}
 	if buf.Len() != 0 {
@@ -597,7 +612,7 @@ func TestClassify_HandledMethod_IsNotReported(t *testing.T) {
 	t.Parallel()
 	progress, buf := newProgressWithLogger()
 
-	classifyNote(turnEnd("completed"), testThread, progress)
+	classifyNote(turnEnd("completed"), progress)
 
 	if buf.Len() != 0 {
 		t.Errorf("a handled method should be silent, logged: %q", buf.String())
@@ -609,5 +624,5 @@ func TestClassify_UnhandledMethod_NilLoggerDoesNotPanic(t *testing.T) {
 	t.Parallel()
 	progress, _ := newProgress()
 
-	classifyNote(unknownNote("gallium/whatever"), testThread, progress)
+	classifyNote(unknownNote("gallium/whatever"), progress)
 }

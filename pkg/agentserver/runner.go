@@ -525,6 +525,13 @@ func (r *Runner) runTurn(
 			r.interruptTurn(ctx, threadID, turnID)
 			return "", fmt.Errorf("codex notification stream: %w", err)
 		}
+		// The subscription is connection-wide, so notifications for other
+		// threads arrive here too. Filtering once, before anything dispatches on
+		// them, is what keeps another session's activity out of this turn — its
+		// text, its verdict, and its token accounting alike.
+		if id := noteThreadID(note.Raw); id != "" && id != threadID {
+			continue
+		}
 		// Accounting is handled here rather than in classifyNote: it reports a
 		// number and never changes what the turn does next, so it has no verdict
 		// for a function whose only job is producing one.
@@ -532,7 +539,7 @@ func (r *Runner) runTurn(
 			progress.reportTokenUsage(note.Raw)
 			continue
 		}
-		text, status := classifyNote(note, threadID, progress)
+		text, status := classifyNote(note, progress)
 		if text != "" {
 			final = text
 		}
@@ -701,16 +708,30 @@ const (
 	noteFailed
 )
 
-// classifyNote returns any assistant text carried by the notification and
-// whether the turn is done/failed. Notifications for other threads are ignored
-// (the subscription is process-global). Along the way it forwards item activity
-// (item/started announces a command/tool call; item/completed carries its
-// result or a completed reasoning block) to the progress tracker for display.
-func classifyNote(note rpc.Notification, threadID string, progress *turnProgress) (string, noteStatus) {
+// noteThreadID reads the thread a notification names, or "" when it names none.
+//
+// Separate from classifyNote's own parse because the answer is needed before
+// dispatch: the subscription is connection-wide, and every kind of notification
+// — not only the ones that carry a verdict — has to be checked against the turn
+// being run.
+func noteThreadID(raw json.RawMessage) string {
 	var p struct {
-		ThreadID string          `json:"threadId"`
-		Item     json.RawMessage `json:"item"`
-		Turn     struct {
+		ThreadID string `json:"threadId"`
+	}
+	_ = json.Unmarshal(raw, &p)
+	return p.ThreadID
+}
+
+// classifyNote returns any assistant text carried by the notification and
+// whether the turn is done/failed. It is only ever handed notifications for its
+// own thread; the caller filters (see noteThreadID). Along the way it forwards
+// item activity (item/started announces a command/tool call; item/completed
+// carries its result or a completed reasoning block) to the progress tracker for
+// display.
+func classifyNote(note rpc.Notification, progress *turnProgress) (string, noteStatus) {
+	var p struct {
+		Item json.RawMessage `json:"item"`
+		Turn struct {
 			Status string `json:"status"`
 		} `json:"turn"`
 		// The `error` notification's payload (codex v2 ErrorNotification).
@@ -720,9 +741,6 @@ func classifyNote(note rpc.Notification, threadID string, progress *turnProgress
 		WillRetry bool `json:"willRetry"`
 	}
 	_ = json.Unmarshal(note.Raw, &p)
-	if p.ThreadID != "" && p.ThreadID != threadID {
-		return "", noteContinue
-	}
 	switch note.Method {
 	case "item/started":
 		progress.render(p.Item, false)

@@ -293,6 +293,23 @@ esac
 	}
 }
 
+// grepBranches are the two halves of handleGrep, as subtests: the one taken
+// where ripgrep is installed and the one taken where it is not. Every claim
+// about a result's shape has to hold on both, or the shape is host-dependent
+// again — so the tests that make one iterate this.
+func grepBranches() []struct {
+	setup func(*testing.T)
+	name  string
+} {
+	return []struct {
+		setup func(*testing.T)
+		name  string
+	}{
+		{standInRipgrep, "with ripgrep"},
+		{func(t *testing.T) { _ = searchPath(t, "grep") }, "without ripgrep"},
+	}
+}
+
 // The bug behind the broken test: output_mode decides the *shape* of the
 // result, the rg branch read it and the grep fallback ignored it, so the same
 // Grep call came back as a path list on one machine and as file bodies on
@@ -312,14 +329,7 @@ func TestSearchToolManager_GrepShapeSurvivesRipgrepsAbsence(t *testing.T) { //no
 		// `path:count`, and only for files that matched.
 		{outputModeCount, []string{"inside.txt:1"}, []string{"quiet.txt", needleAtHome}},
 	}
-	branches := []struct {
-		setup func(*testing.T)
-		name  string
-	}{
-		{standInRipgrep, "with ripgrep"},
-		{func(t *testing.T) { _ = searchPath(t, "grep") }, "without ripgrep"},
-	}
-	for _, branch := range branches { //nolint:paralleltest // PATH is process-wide
+	for _, branch := range grepBranches() { //nolint:paralleltest // PATH is process-wide
 		for _, tc := range modes {
 			t.Run(branch.name+"/"+tc.mode, func(t *testing.T) {
 				workingDir := t.TempDir()
@@ -527,14 +537,7 @@ func TestSearchToolManager_GrepKeepsMatchesFoundBesideAnUnreadableFile(t *testin
 // model makes to follow up a files_with_matches search — does not come back as
 // `1` on one host and `file:1` on the other.
 func TestSearchToolManager_GrepPrefixesASingleFileEitherWay(t *testing.T) { //nolint:paralleltest // t.Setenv
-	branches := []struct {
-		setup func(*testing.T)
-		name  string
-	}{
-		{standInRipgrep, "with ripgrep"},
-		{func(t *testing.T) { _ = searchPath(t, "grep") }, "without ripgrep"},
-	}
-	for _, branch := range branches { //nolint:paralleltest // PATH is process-wide
+	for _, branch := range grepBranches() { //nolint:paralleltest // PATH is process-wide
 		for _, mode := range []string{outputModeContent, outputModeCount} {
 			t.Run(branch.name+"/"+mode, func(t *testing.T) {
 				workingDir := t.TempDir()
@@ -588,5 +591,108 @@ func TestSearchToolManager_RipgrepBranchPassesType(t *testing.T) { //nolint:para
 	}
 	if strings.Contains(res.Text, "skip.txt") {
 		t.Errorf("type was dropped on the way to rg: %q", res.Text)
+	}
+}
+
+// A caller that asks to see lines gets lines. -A/-B/-C/-n only mean anything
+// alongside content mode, and both rg -l and grep -rl accept them and then
+// print nothing but paths — so leaving output_mode at its default used to turn
+// "show me this symbol's definition" into a bare path, on which "defined here"
+// and "mentioned here" are the same answer.
+//
+// Asserted on both branches: a fix that only lands where ripgrep is installed
+// leaves the shape host-dependent again.
+func TestSearchToolManager_GrepContextFlagsSelectContentMode(t *testing.T) { //nolint:paralleltest // t.Setenv
+	lineFlags := []struct {
+		args message.ToolArgumentValues
+		name string
+	}{
+		{message.ToolArgumentValues{"-A": float64(2)}, "-A"},
+		{message.ToolArgumentValues{"-B": float64(2)}, "-B"},
+		{message.ToolArgumentValues{"-C": float64(2)}, "-C"},
+		{message.ToolArgumentValues{"-n": true}, "-n"},
+	}
+	for _, branch := range grepBranches() { //nolint:paralleltest // PATH is process-wide
+		for _, flag := range lineFlags {
+			t.Run(branch.name+"/"+flag.name, func(t *testing.T) {
+				workingDir := t.TempDir()
+				body := "first line\n" + needleAtHome + "\nthird line\n"
+				if err := os.WriteFile(filepath.Join(workingDir, "inside.txt"), []byte(body), 0o600); err != nil {
+					t.Fatal(err)
+				}
+				m := searchIn(t, workingDir)
+				branch.setup(t)
+
+				args := message.ToolArgumentValues{argPattern: "needle"}
+				for k, v := range flag.args {
+					args[k] = v
+				}
+				res, err := m.CallTool(context.Background(), "Grep", args)
+				if err != nil || res.Error != "" {
+					t.Fatalf("Grep failed: err=%v result=%q", err, res.Error)
+				}
+				if !strings.Contains(res.Text, needleAtHome) {
+					t.Fatalf("%s came back as a path list rather than the matching line: %q", flag.name, res.Text)
+				}
+				// The line number the caller needs to cite the match or Read
+				// around it: pinned by content mode, since neither tool numbers
+				// lines into a pipe on its own.
+				if !strings.Contains(res.Text, ":2:") {
+					t.Errorf("the matching line is not numbered: %q", res.Text)
+				}
+			})
+		}
+	}
+}
+
+// Content mode numbers its lines whether or not the caller thought to ask.
+func TestSearchToolManager_GrepContentModeNumbersLines(t *testing.T) {
+	t.Parallel()
+
+	workingDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(workingDir, "inside.txt"), []byte("first\n"+needleAtHome+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	m := searchIn(t, workingDir)
+
+	res, err := m.CallTool(context.Background(), "Grep", message.ToolArgumentValues{
+		argPattern:    "needle",
+		argOutputMode: outputModeContent,
+	})
+	if err != nil || res.Error != "" {
+		t.Fatalf("Grep failed: err=%v result=%q", err, res.Error)
+	}
+	if !strings.Contains(res.Text, ":2:"+needleAtHome) {
+		t.Errorf("content mode did not number the matching line: %q", res.Text)
+	}
+}
+
+// A line flag next to an explicit shape that cannot carry it is refused, not
+// resolved in either direction. Selecting content would override the mode the
+// caller spelled out; ignoring the flag is the silent narrowing this whole file
+// exists to prevent. The refusal names the flag and the way out.
+func TestSearchToolManager_GrepRefusesLineFlagsAgainstAnExplicitShape(t *testing.T) {
+	t.Parallel()
+
+	for _, mode := range []string{outputModeFilesWithMatches, outputModeCount} {
+		t.Run(mode, func(t *testing.T) {
+			t.Parallel()
+
+			m := searchIn(t, t.TempDir())
+			res, err := m.CallTool(context.Background(), "Grep", message.ToolArgumentValues{
+				argPattern:    "needle",
+				argOutputMode: mode,
+				"-A":          float64(20),
+			})
+			if err != nil {
+				t.Fatalf("Grep returned a transport error rather than a result: %v", err)
+			}
+			if res.Error == "" {
+				t.Fatalf("-A was accepted against output_mode %s and quietly dropped: %q", mode, res.Text)
+			}
+			if !strings.Contains(res.Error, "-A") || !strings.Contains(res.Error, outputModeContent) {
+				t.Errorf("the refusal names neither the flag nor the mode that honors it: %q", res.Error)
+			}
+		})
 	}
 }

@@ -36,6 +36,25 @@ const (
 	argMultiline  = "multiline"
 )
 
+// lineArgs are the arguments that ask to see the matching lines themselves: a
+// context window around each match, or the line numbers to cite them by. They
+// only mean anything in content mode — rg and grep both accept them next to -l
+// and then print nothing but paths.
+//
+// So a caller that passes one and leaves output_mode at its default gets the
+// opposite of what it asked for, and gets it silently. In a bare path list
+// "the symbol is defined in this file" and "this file merely mentions it" are
+// the same answer, which is how a review run once concluded that a function
+// defined 253 lines above the call site did not exist: it asked six times for
+// `-A`/`-B` around the name, was handed the same lone path every time, and read
+// that as the call site it already knew about.
+//
+// Passing one therefore selects content mode when no mode was named, and is
+// refused when the named mode cannot carry it. Same doctrine as
+// grepCannotExpress: answering a narrower question than the one asked, without
+// saying so, is the failure mode this file exists to close.
+var lineArgs = []string{"-A", "-B", "-C", "-n"}
+
 // SearchToolManager provides Glob and Grep tools
 type SearchToolManager struct {
 	tools              map[message.ToolName]message.Tool
@@ -95,16 +114,16 @@ func (m *SearchToolManager) register() {
 		}, m.handleGlob)
 
 	// Grep tool: ripgrep-style content search
-	m.RegisterTool("Grep", "Search file contents using ripgrep-compatible flags",
+	m.RegisterTool("Grep", "Search file contents using ripgrep-compatible flags. Returns matching file paths only; to see the matching lines pass output_mode=content (implied by -A/-B/-C/-n), which numbers every line it prints",
 		[]message.ToolArgument{
 			{Name: argPattern, Description: "Regex pattern to search", Required: true, Type: "string"},
 			{Name: "path", Description: "File/dir to search (optional)", Required: false, Type: "string"},
 			{Name: argGlob, Description: "Glob filter (--glob); a basename without ripgrep", Required: false, Type: "string"},
-			{Name: argOutputMode, Description: "content|files_with_matches|count", Required: false, Type: "string"},
-			{Name: "-B", Description: "Lines before (content mode)", Required: false, Type: "number"},
-			{Name: "-A", Description: "Lines after (content mode)", Required: false, Type: "number"},
-			{Name: "-C", Description: "Lines before/after (content mode)", Required: false, Type: "number"},
-			{Name: "-n", Description: "Show line numbers (content mode)", Required: false, Type: "boolean"},
+			{Name: argOutputMode, Description: "content|files_with_matches|count (default: files_with_matches)", Required: false, Type: "string"},
+			{Name: "-B", Description: "Lines before; selects content mode", Required: false, Type: "number"},
+			{Name: "-A", Description: "Lines after; selects content mode", Required: false, Type: "number"},
+			{Name: "-C", Description: "Lines before/after; selects content mode", Required: false, Type: "number"},
+			{Name: "-n", Description: "Selects content mode, which always numbers lines", Required: false, Type: "boolean"},
 			{Name: "-i", Description: "Case-insensitive", Required: false, Type: "boolean"},
 			{Name: argType, Description: "File type (rg --type); requires ripgrep", Required: false, Type: "string"},
 			{Name: "head_limit", Description: "Limit lines/entries", Required: false, Type: "number"},
@@ -220,19 +239,9 @@ func (m *SearchToolManager) handleGrep(ctx context.Context, args message.ToolArg
 		base = rp
 	}
 
-	outputMode := outputModeFilesWithMatches
-	if om, ok := args[argOutputMode].(string); ok && om != "" {
-		outputMode = om
-	}
-	switch outputMode {
-	case outputModeContent, outputModeFilesWithMatches, outputModeCount:
-	default:
-		// Refused rather than quietly treated as the default: output_mode
-		// decides the *shape* of the result, so a caller that asked for one
-		// shape and silently got another has no way to notice.
-		return message.NewToolResultError(fmt.Sprintf(
-			"unknown output_mode %q: expected %s, %s or %s",
-			outputMode, outputModeContent, outputModeFilesWithMatches, outputModeCount)), nil
+	outputMode, err := resolveOutputMode(args)
+	if err != nil {
+		return message.NewToolResultError(err.Error()), nil
 	}
 
 	req := grepRequest{args: args, pattern: pattern, base: base, outputMode: outputMode}
@@ -240,6 +249,67 @@ func (m *SearchToolManager) handleGrep(ctx context.Context, args message.ToolArg
 		return runRipgrep(ctx, req)
 	}
 	return runGrep(ctx, req)
+}
+
+// resolveOutputMode decides which of the three shapes a Grep call asked for,
+// from the mode it named and the flags it passed.
+func resolveOutputMode(args message.ToolArgumentValues) (string, error) {
+	outputMode := outputModeFilesWithMatches
+	named := false
+	if om, ok := args[argOutputMode].(string); ok && om != "" {
+		outputMode, named = om, true
+	}
+	switch outputMode {
+	case outputModeContent, outputModeFilesWithMatches, outputModeCount:
+	default:
+		// Refused rather than quietly treated as the default: output_mode
+		// decides the *shape* of the result, so a caller that asked for one
+		// shape and silently got another has no way to notice.
+		return "", fmt.Errorf(
+			"unknown output_mode %q: expected %s, %s or %s",
+			outputMode, outputModeContent, outputModeFilesWithMatches, outputModeCount)
+	}
+
+	// A caller asking to see lines has named the shape it wants, whether or not
+	// it also spelled out output_mode. Honor that where the mode was left to the
+	// default; refuse where it contradicts an explicit one — silently choosing
+	// either side of that contradiction is how the caller ends up reading an
+	// answer to a question it did not ask.
+	if flag, ok := lineArg(args); ok && outputMode != outputModeContent {
+		if named {
+			return "", fmt.Errorf(
+				"%s prints matching lines and output_mode %s returns %s: ask for output_mode %s, or drop %s",
+				flag, outputMode, shapeOf(outputMode), outputModeContent, flag)
+		}
+		outputMode = outputModeContent
+	}
+	return outputMode, nil
+}
+
+// lineArg names the first of lineArgs the caller passed, if any. A context
+// window arrives as a number and -n as a bool; anything else is the argument
+// not being passed at all, which is what sharedFlags reads too.
+func lineArg(args message.ToolArgumentValues) (string, bool) {
+	for _, name := range lineArgs {
+		switch v := args[name].(type) {
+		case float64:
+			return name, true
+		case bool:
+			if v {
+				return name, true
+			}
+		}
+	}
+	return "", false
+}
+
+// shapeOf says what a mode comes back as, for an error that has to explain why
+// the caller's flag has nowhere to go.
+func shapeOf(outputMode string) string {
+	if outputMode == outputModeCount {
+		return "per-file match counts"
+	}
+	return "file paths"
 }
 
 // grepRequest is one validated Grep call: the caller's arguments, the pattern,
@@ -329,6 +399,11 @@ func runSearch(ctx context.Context, name string, cmdArgs ...string) (string, err
 // it always. Without it, `Grep` on a single file comes back as `1` on one host
 // and `file:1` on the other — exactly the call a model makes to follow up a
 // files_with_matches search. dropZeroCounts reads that prefix too.
+//
+// -n is pinned for the same reason and one more: neither tool numbers lines
+// when its output is a pipe, and a matching line with no line number is a fact
+// the caller cannot cite, follow up with a ranged Read, or hang a review
+// comment on. It is the cheapest half of a content result.
 func outputModeFlags(outputMode string) []string {
 	switch outputMode {
 	case outputModeFilesWithMatches:
@@ -338,10 +413,13 @@ func outputModeFlags(outputMode string) []string {
 		return []string{"-c", "-H"}
 	}
 	// content: both tools print the matching lines by default.
-	return []string{"-H"}
+	return []string{"-H", "-n"}
 }
 
 // sharedFlags are the arguments rg and grep spell identically.
+//
+// -n is absent on purpose: content mode pins it, and the other two shapes have
+// no line to number. It survives as an argument only to select content mode.
 func sharedFlags(args message.ToolArgumentValues) []string {
 	var flags []string
 	for _, name := range []string{"-B", "-A", "-C"} {
@@ -349,10 +427,8 @@ func sharedFlags(args message.ToolArgumentValues) []string {
 			flags = append(flags, name, strconv.Itoa(int(v)))
 		}
 	}
-	for _, name := range []string{"-n", "-i"} {
-		if v, ok := args[name].(bool); ok && v {
-			flags = append(flags, name)
-		}
+	if v, ok := args["-i"].(bool); ok && v {
+		flags = append(flags, "-i")
 	}
 	return flags
 }

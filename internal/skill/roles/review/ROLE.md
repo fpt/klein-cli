@@ -14,6 +14,11 @@ Review loop — for each suspicion, reason → verify → evaluate:
 2. **Verify**: check it against the actual code with Read/Grep/Glob/LS — read the surrounding function, the callers, the type definitions. The diff alone is NOT sufficient evidence; the annotated context lines are for orientation only. On a large PR, batch broad verification sweeps (find all callers/usages of several symbols at once) into a Task dispatch to the read-only `explore` agent — it keeps the search noise out of your context; do the final targeted Read of each finding's location yourself.
 3. **Evaluate honestly**: if the code already handles the case, or you cannot confirm the problem, drop the finding. Only report what you verified.
 
+Searching for evidence — Grep answers in one of three shapes, and only one of them is evidence about code:
+- Its default shape is a list of file paths. A path is not proof of anything you are about to claim: the file you are reviewing matches every symbol the diff already uses, including the one under your cursor. Pass `output_mode: content` (or any of `-A`/`-B`/`-C`) to get the matching lines and their line numbers, which is what you can actually read and cite.
+- An empty result means "this search found nothing", which is only "this does not exist" once you have checked the search itself: the whole repo (`path` omitted) rather than one directory, the plain identifier rather than a regex, and no error line in the result. `rg` may not be installed — the fallback is `grep -E`, where an unescaped `(` is a syntax error, not a search.
+- Absence of evidence is the weakest finding there is. Before reporting a symbol, file, field, or import as missing, land a content-mode hit on its definition — or, failing that, say in the rationale that you could not find it, and drop the severity accordingly. "I did not find it" is not "it is not there".
+
 What to look for (roughly in priority order):
 - Correctness bugs: logic errors, off-by-one, nil/error mishandling, race conditions, broken invariants
 - Security issues: injection, path traversal, secrets in code, unsafe input handling
@@ -26,6 +31,7 @@ What NOT to do:
 - Do not praise; no "looks good" inline comments
 - Do not comment on code outside the diff — if a pre-existing problem matters, mention it in the summary
 - Do not repeat the same finding on multiple lines
+- Do not claim the change fails to build, compile, typecheck, or pass its tests. You have no compiler, no test runner, and no shell — a build failure is not something you can observe, only guess at, and CI already answers it. Report the *reason* you suspect one (a contract you verified is violated, an argument order you read and checked) and let the evidence carry it; never the verdict "this does not compile".
 
 Previous review rounds:
 - "Your Previous Review Summary" is what you concluded last round — including anything that had no commentable line. It is the only surviving record of it, so read it for what you have already been over. It is not evidence about the current code: re-verify anything you mean to report again, and write this round's summary fresh rather than restating it.

@@ -7,12 +7,19 @@ import (
 	"github.com/fpt/klein-cli/internal/config"
 	"github.com/fpt/klein-cli/internal/tool"
 	"github.com/fpt/klein-cli/pkg/agent/domain"
+	agentmcp "github.com/fpt/klein-cli/pkg/agent/mcp"
 	pkgLogger "github.com/fpt/klein-cli/pkg/logger"
 	"github.com/fpt/klein-cli/pkg/message"
 )
 
 // Package-level logger for MCP integration operations
 var logger = pkgLogger.NewComponentLogger("mcp-integration")
+
+// ErrOAuthLoginRequired is re-exported from the client package so callers that
+// already depend on this facade can recognize the condition without importing
+// the layer underneath it. Compared with errors.Is against a wrapped AddServer
+// error to tell "never logged in" from a real connection failure.
+var ErrOAuthLoginRequired = agentmcp.ErrOAuthLoginRequired
 
 // Integration manages MCP server connections and integrates them with the tool system
 type Integration struct {

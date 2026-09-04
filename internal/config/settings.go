@@ -107,6 +107,38 @@ func (s *Settings) MemoryDBFile() string {
 	return filepath.Join(s.MemoryDir(), "memory.sqlite")
 }
 
+// MCPAuthDir is <base>/mcp-auth — one file per OAuth-authenticated MCP server,
+// holding its token and client registration.
+//
+// Derived from the base dir like every other piece of state, so `klein mcp
+// login`, an interactive session and a `klein claw` run all read the same
+// credentials. A second instance started with its own --settings gets its own
+// base dir, and so its own logins — which is the isolation that flag is for.
+func (s *Settings) MCPAuthDir() string {
+	return filepath.Join(s.ResolvedBaseDir(), "mcp-auth")
+}
+
+// MCPServersWithAuthDir returns the configured servers with the OAuth store
+// directory filled in.
+//
+// The path cannot come from the [mcp.<name>] table itself — it is derived from
+// the top-level base dir, which the per-server decoder never sees — so it is
+// attached here, at the one place that has both. Callers should use this rather
+// than Settings.MCP.Servers whenever the servers are about to be connected.
+func (s *Settings) MCPServersWithAuthDir() []domain.MCPServerConfig {
+	dir := s.MCPAuthDir()
+	out := make([]domain.MCPServerConfig, 0, len(s.MCP.Servers))
+	for _, srv := range s.MCP.Servers {
+		if srv.OAuth != nil {
+			oauth := *srv.OAuth // copy: the caller must not mutate shared settings
+			oauth.StoreDir = dir
+			srv.OAuth = &oauth
+		}
+		out = append(out, srv)
+	}
+	return out
+}
+
 // LLMSettings contains LLM client configuration.
 type LLMSettings struct {
 	Backend   string `toml:"backend"`              // "openai", "anthropic", "gemini", "codex", or "appserver"
@@ -154,6 +186,7 @@ type MCPSettings struct {
 // a pointer so an omitted value defaults to true; env is a map like Claude Code.
 type mcpServerSpec struct {
 	Enabled            *bool                `toml:"enabled,omitempty"`
+	OAuth              *mcpOAuthSpec        `toml:"oauth,omitempty"`
 	Type               domain.MCPServerType `toml:"type,omitempty"`
 	Command            string               `toml:"command,omitempty"`
 	Args               []string             `toml:"args,omitempty"`
@@ -162,6 +195,54 @@ type mcpServerSpec struct {
 	AuthorizationToken string               `toml:"authorization_token,omitempty"`
 	Headers            map[string]string    `toml:"headers,omitempty"`
 	AllowedTools       []string             `toml:"allowed_tools,omitempty"`
+}
+
+// mcpOAuthSpec is the on-disk [mcp.<name>.oauth] table.
+//
+// Writing the table is what turns the flow on, so enabled is a pointer that
+// defaults to true — the same shape the server's own `enabled` uses. Nobody adds
+// this table meaning "off", but keeping an explicit false available lets a server
+// carry a configured-but-disabled block instead of having it deleted and retyped.
+type mcpOAuthSpec struct {
+	Enabled      *bool    `toml:"enabled,omitempty"`
+	ClientID     string   `toml:"client_id,omitempty"`
+	ClientSecret string   `toml:"client_secret,omitempty"`
+	Scopes       []string `toml:"scopes,omitempty"`
+	RedirectPort int      `toml:"redirect_port,omitempty"`
+}
+
+func (s *mcpOAuthSpec) toConfig() *domain.MCPOAuthConfig {
+	if s == nil {
+		return nil
+	}
+	enabled := true
+	if s.Enabled != nil {
+		enabled = *s.Enabled
+	}
+	return &domain.MCPOAuthConfig{
+		Enabled:      enabled,
+		ClientID:     s.ClientID,
+		ClientSecret: s.ClientSecret,
+		Scopes:       s.Scopes,
+		RedirectPort: s.RedirectPort,
+	}
+}
+
+func oauthSpecFromConfig(c *domain.MCPOAuthConfig) *mcpOAuthSpec {
+	if c == nil {
+		return nil
+	}
+	spec := &mcpOAuthSpec{
+		ClientID:     c.ClientID,
+		ClientSecret: c.ClientSecret,
+		Scopes:       c.Scopes,
+		RedirectPort: c.RedirectPort,
+	}
+	if !c.Enabled { // omit when true (the default); emit only an explicit disable
+		disabled := false
+		spec.Enabled = &disabled
+	}
+	return spec
 }
 
 func (s mcpServerSpec) toConfig(name string) domain.MCPServerConfig {
@@ -188,6 +269,7 @@ func (s mcpServerSpec) toConfig(name string) domain.MCPServerConfig {
 		URL:                s.URL,
 		AuthorizationToken: s.AuthorizationToken,
 		Headers:            s.Headers,
+		OAuth:              s.OAuth.toConfig(),
 		AllowedTools:       s.AllowedTools,
 	}
 }
@@ -234,6 +316,7 @@ func specFromConfig(c domain.MCPServerConfig) mcpServerSpec {
 		URL:                c.URL,
 		AuthorizationToken: c.AuthorizationToken,
 		Headers:            c.Headers,
+		OAuth:              oauthSpecFromConfig(c.OAuth),
 		AllowedTools:       c.AllowedTools,
 	}
 	if !c.Enabled { // omit when true (the default); emit only explicit disable
@@ -867,6 +950,13 @@ func ValidateMCPServerConfig(config domain.MCPServerConfig) error {
 		}
 	default:
 		return fmt.Errorf("unsupported server type: %s", config.Type)
+	}
+
+	// OAuth is an HTTP-transport feature. On a stdio server the block would be
+	// silently inert, and a silently inert credential setting is worse than a
+	// rejected one — it looks configured.
+	if config.OAuth != nil && config.OAuth.Enabled && config.Type == domain.MCPServerTypeStdio {
+		return errors.New("oauth is only supported for http and sse servers, not stdio")
 	}
 
 	return nil

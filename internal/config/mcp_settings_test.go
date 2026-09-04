@@ -12,6 +12,9 @@ import (
 	"github.com/fpt/klein-cli/pkg/agent/domain"
 )
 
+// exampleMCPURL is the stand-in URL these tests point url-transport servers at.
+const exampleMCPURL = "https://example.com/mcp"
+
 // decodeMCP parses a settings fragment and returns just its mcp block.
 func decodeMCP(t *testing.T, text string) MCPSettings {
 	t.Helper()
@@ -51,7 +54,7 @@ enabled = false
 	if bs := byName["browser-sandbox"]; bs.Command != "docker" || string(bs.Type) != "stdio" || !bs.Enabled {
 		t.Errorf("browser-sandbox wrong: %+v", bs)
 	}
-	if docs := byName["docs"]; docs.URL != "https://example.com/mcp" || string(docs.Type) != "sse" || !docs.Enabled {
+	if docs := byName["docs"]; docs.URL != exampleMCPURL || string(docs.Type) != "sse" || !docs.Enabled {
 		t.Errorf("docs wrong: %+v", docs)
 	}
 	if byName["off"].Enabled {
@@ -185,7 +188,165 @@ url = "https://example.com/mcp"
 	if got := byName["godoc"]; got.Command != "godevmcp" || string(got.Type) != "stdio" {
 		t.Errorf("godoc: %+v", got)
 	}
-	if got := byName["docs"]; got.URL != "https://example.com/mcp" || string(got.Type) != "sse" {
+	if got := byName["docs"]; got.URL != exampleMCPURL || string(got.Type) != "sse" {
 		t.Errorf("docs: %+v", got)
+	}
+}
+
+// The [mcp.<name>.oauth] table is what a user actually types, so decoding it is
+// worth pinning: enabled defaults to true (writing the table is the opt-in), and
+// the scopes/port come through for the login flow to use.
+func TestMCPSettings_OAuthBlock(t *testing.T) {
+	t.Parallel()
+
+	mcp := decodeMCP(t, `
+[mcp.datadog]
+type = "http"
+url  = "https://mcp.datadoghq.com/api/unstable/mcp-server/mcp"
+
+[mcp.datadog.oauth]
+scopes        = ["mcp_all"]
+redirect_port = 33418
+`)
+	if len(mcp.Servers) != 1 {
+		t.Fatalf("got %d servers, want 1", len(mcp.Servers))
+	}
+	oauth := mcp.Servers[0].OAuth
+	if oauth == nil {
+		t.Fatal("the oauth table was dropped")
+	}
+	if !oauth.Enabled {
+		t.Error("writing the table is the opt-in; enabled should default to true")
+	}
+	if len(oauth.Scopes) != 1 || oauth.Scopes[0] != "mcp_all" {
+		t.Errorf("scopes = %v", oauth.Scopes)
+	}
+	if oauth.RedirectPort != 33418 {
+		t.Errorf("redirect_port = %d", oauth.RedirectPort)
+	}
+}
+
+// A server with no oauth table keeps the static-credential path — nil, not an
+// empty-but-enabled block that would send every existing http server into a
+// login flow it never asked for.
+func TestMCPSettings_NoOAuthBlockLeavesItOff(t *testing.T) {
+	t.Parallel()
+
+	mcp := decodeMCP(t, `
+[mcp.docs]
+url = "https://example.com/mcp"
+`)
+	if mcp.Servers[0].OAuth != nil {
+		t.Error("a server without an oauth table should not get one")
+	}
+}
+
+// An explicit disable has to survive, so a configured block can be turned off
+// without deleting it.
+func TestMCPSettings_OAuthCanBeDisabledInPlace(t *testing.T) {
+	t.Parallel()
+
+	mcp := decodeMCP(t, `
+[mcp.datadog]
+type = "http"
+url  = "https://example.com/mcp"
+
+[mcp.datadog.oauth]
+enabled = false
+scopes  = ["mcp_all"]
+`)
+	if oauth := mcp.Servers[0].OAuth; oauth == nil || oauth.Enabled {
+		t.Errorf("enabled = false was not honored: %+v", oauth)
+	}
+}
+
+// The store directory is derived from the base dir, not the server table, so the
+// CLI, the gateway and `klein mcp login` all reach the same credentials.
+func TestMCPServersWithAuthDir_FillsTheStoreDir(t *testing.T) {
+	t.Parallel()
+
+	var s Settings
+	if _, err := toml.Decode(`
+base_dir = "/tmp/klein-test-base"
+
+[mcp.datadog]
+type = "http"
+url  = "https://example.com/mcp"
+
+[mcp.datadog.oauth]
+scopes = ["mcp_all"]
+
+[mcp.plain]
+command = "godevmcp"
+`, &s); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+
+	servers := s.MCPServersWithAuthDir()
+	byName := map[string]domain.MCPServerConfig{}
+	for _, srv := range servers {
+		byName[srv.Name] = srv
+	}
+
+	got := byName["datadog"].OAuth
+	if got == nil || got.StoreDir != filepath.Join(s.ResolvedBaseDir(), "mcp-auth") {
+		t.Errorf("store dir = %+v, want <base>/mcp-auth", got)
+	}
+	if byName["plain"].OAuth != nil {
+		t.Error("a non-oauth server should be untouched")
+	}
+	// The copy matters: filling the shared settings in place would leak one
+	// caller's base dir into another's view of the same slice.
+	if s.MCP.Servers[0].OAuth != nil && s.MCP.Servers[0].OAuth.StoreDir != "" {
+		t.Error("the original settings were mutated")
+	}
+}
+
+// OAuth on a stdio server is inert, and an inert credential setting looks
+// configured. Reject it instead.
+func TestValidateMCPServerConfig_RejectsOAuthOnStdio(t *testing.T) {
+	t.Parallel()
+
+	err := ValidateMCPServerConfig(domain.MCPServerConfig{
+		Name:    "x",
+		Type:    domain.MCPServerTypeStdio,
+		Command: "godevmcp",
+		OAuth:   &domain.MCPOAuthConfig{Enabled: true},
+	})
+	if err == nil {
+		t.Fatal("oauth on a stdio server should be rejected")
+	}
+}
+
+// MCPServerTOML renders the oauth block under the server, not at the top level.
+//
+// The same hazard the env map has: a spec encoded on its own emits a bare
+// [oauth] header, which spliced under the server table would read as a
+// *top-level* [oauth] and move the block out of the server it configures.
+func TestMCPServerTOML_NestsTheOAuthTable(t *testing.T) {
+	t.Parallel()
+
+	body, err := MCPServerTOML(domain.MCPServerConfig{
+		Name:    "datadog",
+		Enabled: true,
+		Type:    domain.MCPServerTypeHTTP,
+		URL:     exampleMCPURL,
+		OAuth:   &domain.MCPOAuthConfig{Enabled: true, Scopes: []string{"mcp_all"}},
+	})
+	if err != nil {
+		t.Fatalf("MCPServerTOML: %v", err)
+	}
+	if !strings.Contains(string(body), "[mcp.datadog.oauth]") {
+		t.Fatalf("the oauth table was not nested under the server:\n%s", body)
+	}
+
+	// And it survives a round trip back through the decoder.
+	doc, err := tomledit.SetTable(nil, "mcp.datadog", body)
+	if err != nil {
+		t.Fatalf("SetTable: %v", err)
+	}
+	mcp := decodeMCP(t, string(doc))
+	if oauth := mcp.Servers[0].OAuth; oauth == nil || !oauth.Enabled || len(oauth.Scopes) != 1 {
+		t.Errorf("round trip lost the oauth block: %+v", oauth)
 	}
 }

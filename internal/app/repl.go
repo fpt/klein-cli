@@ -84,6 +84,14 @@ func getSlashCommands() []SlashCommand {
 			},
 		},
 		{
+			Name:        cmdMCP,
+			Description: "Manage MCP servers (list, login <server> [--paste])",
+			Handler: func(a *Agent) bool {
+				handleMCPCommand(a, "")
+				return false
+			},
+		},
+		{
 			Name:        "quit",
 			Description: "Exit the interactive session",
 			Handler: func(a *Agent) bool {
@@ -122,6 +130,14 @@ func handleSlashCommand(input string, a *Agent) bool {
 	if commandName == cmdMemory {
 		_, args := SplitSlashCommand(input)
 		handleMemoryCommand(a, args)
+		return false
+	}
+
+	// Same reason as /memory: this one takes subcommands and flags, which the
+	// argument-less dispatch below would drop.
+	if commandName == cmdMCP {
+		_, args := SplitSlashCommand(input)
+		handleMCPCommand(a, args)
 		return false
 	}
 

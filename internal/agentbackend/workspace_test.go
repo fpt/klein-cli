@@ -790,17 +790,34 @@ func TestDeferMCPTools_OffByDefault(t *testing.T) {
 	}
 }
 
-// The setting is appserver-only: codex brings its own tools and its own ideas
-// about them, and this flag is not part of the protocol it speaks.
-func TestDeferMCPTools_IgnoredForCodexBackend(t *testing.T) {
+// The setting applies to codex too. It used to be gated on BackendAppServer,
+// which made it do nothing for exactly the session that needed it: a codex
+// backend that had proxied a 28-tool server and was paying for every schema on
+// every thread. The gate bought no safety — buildDynamicTools omits the
+// "advertised" key unless deferring, so a backend that ignores it advertises the
+// tool as before — so asking a backend that ignores deferral costs nothing.
+func TestDeferMCPTools_AppliesToCodexBackend(t *testing.T) {
 	t.Parallel()
 
 	s := isolatedSettings(t)
 	s.LLM.Backend = config.BackendCodex
 	s.AppServer.DeferMCPTools = true
 
+	if !defersMCPTools(s) {
+		t.Error("defer_mcp_tools should apply to the codex backend")
+	}
+}
+
+// Still a setting, not a default: a codex backend that has not asked for
+// deferral advertises everything, which is what every existing deployment has.
+func TestDeferMCPTools_OffByDefaultForCodexBackend(t *testing.T) {
+	t.Parallel()
+
+	s := isolatedSettings(t)
+	s.LLM.Backend = config.BackendCodex
+
 	if defersMCPTools(s) {
-		t.Error("defer_mcp_tools should not apply to the codex backend")
+		t.Error("defer_mcp_tools must stay off unless asked for")
 	}
 }
 

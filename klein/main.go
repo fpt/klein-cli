@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"os"
@@ -289,7 +290,7 @@ func main() {
 	var mcpIntegration *mcp.Integration
 	if hasEnabledMCPServers(settings.MCP.Servers) {
 		fmt.Println("Initializing MCP Integration...")
-		mcpIntegration = initializeMCP(ctx, settings.MCP, logger)
+		mcpIntegration = initializeMCP(ctx, settings, logger)
 		if mcpIntegration != nil {
 			defer mcpIntegration.Close()
 		}
@@ -725,20 +726,31 @@ func hasEnabledMCPServers(servers []domain.MCPServerConfig) bool {
 }
 
 // initializeMCP initializes MCP integration with enabled servers from settings
-func initializeMCP(ctx context.Context, mcpSettings config.MCPSettings, logger *pkgLogger.Logger) *mcp.Integration {
+func initializeMCP(ctx context.Context, settings *config.Settings, logger *pkgLogger.Logger) *mcp.Integration {
 	integration := mcp.NewIntegration()
 
 	var connectedServers []string
 	var failedServers []string
 
-	for _, serverConfig := range mcpSettings.Servers {
+	// WithAuthDir, not MCP.Servers: an OAuth server needs the credential-store
+	// path, which is derived from the base dir and so is not in its own table.
+	for _, serverConfig := range settings.MCPServersWithAuthDir() {
 		if !serverConfig.Enabled {
 			continue
 		}
 
 		if err := integration.AddServer(ctx, serverConfig); err != nil {
-			logger.Warn("Failed to connect to MCP server",
-				"server", serverConfig.Name, "error", err)
+			// A server that has simply never been logged in is not a
+			// misconfiguration, and saying "failed to connect" sends the user to
+			// the settings file instead of to the one command that fixes it.
+			if errors.Is(err, mcp.ErrOAuthLoginRequired) {
+				logger.Warn("MCP server needs an interactive login",
+					"server", serverConfig.Name,
+					"run", "klein mcp login "+serverConfig.Name)
+			} else {
+				logger.Warn("Failed to connect to MCP server",
+					"server", serverConfig.Name, "error", err)
+			}
 			failedServers = append(failedServers, serverConfig.Name)
 		} else {
 			connectedServers = append(connectedServers, serverConfig.Name)

@@ -11,6 +11,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -19,6 +20,9 @@ import (
 
 	"github.com/fpt/klein-cli/pkg/agent/domain"
 )
+
+// staticToken is the pasted-credential stand-in these tests configure.
+const staticToken = "static-token"
 
 // oauthServer configures a server with OAuth on, pointed at url.
 func oauthServer(t *testing.T, serverURL string) domain.MCPServerConfig {
@@ -121,7 +125,7 @@ func TestBuildAuthHeaders_OAuthDropsTheStaticToken(t *testing.T) {
 	t.Parallel()
 
 	cfg := domain.MCPServerConfig{
-		AuthorizationToken: "static-token",
+		AuthorizationToken: staticToken,
 		Headers:            map[string]string{"DD_API_KEY": "k"},
 		OAuth:              &domain.MCPOAuthConfig{Enabled: true},
 	}
@@ -139,8 +143,8 @@ func TestBuildAuthHeaders_OAuthDropsTheStaticToken(t *testing.T) {
 func TestBuildAuthHeaders_WithoutOAuthKeepsTheStaticToken(t *testing.T) {
 	t.Parallel()
 
-	headers := buildAuthHeaders(domain.MCPServerConfig{AuthorizationToken: "static-token"})
-	if headers["Authorization"] != "Bearer static-token" {
+	headers := buildAuthHeaders(domain.MCPServerConfig{AuthorizationToken: staticToken})
+	if headers["Authorization"] != "Bearer "+staticToken {
 		t.Errorf("Authorization = %q, want the static bearer token", headers["Authorization"])
 	}
 }
@@ -512,5 +516,104 @@ func writeJSON(t *testing.T, w http.ResponseWriter, body map[string]any) {
 	w.Header().Set("Content-Type", "application/json")
 	if err := json.NewEncoder(w).Encode(body); err != nil {
 		t.Errorf("encoding the stub response: %v", err)
+	}
+}
+
+// The redirect_uri says "localhost", and which loopback family that resolves to
+// is the browser's decision. An IPv4-only listener loses the callback outright
+// on a host that prefers ::1, so both families have to answer.
+func TestStartCallbackServer_AnswersOnBothLoopbackFamilies(t *testing.T) {
+	t.Parallel()
+
+	port := freePort(t)
+	cb, err := startCallbackServer(port)
+	if err != nil {
+		t.Fatalf("startCallbackServer: %v", err)
+	}
+	defer cb.close()
+
+	for _, host := range loopbackHosts {
+		if !loopbackUsable(host) {
+			t.Logf("%s is not available on this host; skipping it", host)
+			continue
+		}
+		url := fmt.Sprintf("http://%s/callback?code=c&state=s", net.JoinHostPort(host, strconv.Itoa(port)))
+		//nolint:noctx,gosec // G107: a loopback GET in a test, to a port this test bound
+		resp, err := http.Get(url)
+		if err != nil {
+			t.Errorf("%s: the callback listener did not answer: %v", host, err)
+			continue
+		}
+		_ = resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			t.Errorf("%s: status = %d, want 200", host, resp.StatusCode)
+		}
+	}
+}
+
+// A port already taken is a real failure, not something to bind around: the
+// browser is going to be sent to exactly that port.
+func TestStartCallbackServer_ReportsAPortAlreadyInUse(t *testing.T) {
+	t.Parallel()
+
+	port := freePort(t)
+	held, err := net.Listen("tcp", net.JoinHostPort("127.0.0.1", strconv.Itoa(port)))
+	if err != nil {
+		t.Fatalf("holding the port: %v", err)
+	}
+	defer func() { _ = held.Close() }()
+
+	cb, err := startCallbackServer(port)
+	if err == nil {
+		cb.close()
+		t.Fatal("a port already in use should fail the login, not start a half-bound listener")
+	}
+}
+
+// The SSE transport used to send no headers at all, so an sse server with an
+// authorization_token was documented as authenticating and quietly did not.
+// Under OAuth the same omission would drop the API-gateway headers that
+// buildAuthHeaders goes out of its way to keep.
+func TestNewSSEClient_SendsTheConfiguredHeaders(t *testing.T) {
+	t.Parallel()
+
+	seen := make(chan http.Header, 1)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		select {
+		case seen <- r.Header.Clone():
+		default:
+		}
+		// Not a real SSE handshake: the point is what arrived on the request,
+		// and Start is expected to fail after this.
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer srv.Close()
+
+	c, err := newSSEClient(domain.MCPServerConfig{
+		Name:               "docs",
+		Type:               domain.MCPServerTypeSSE,
+		URL:                srv.URL,
+		AuthorizationToken: staticToken,
+		Headers:            map[string]string{"DD_API_KEY": "k"},
+	})
+	if err != nil {
+		t.Fatalf("newSSEClient: %v", err)
+	}
+	defer func() { _ = c.Close() }()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	_ = c.Start(ctx) // expected to fail; the assertion is on the request it made
+
+	select {
+	case headers := <-seen:
+		if got := headers.Get("Authorization"); got != "Bearer "+staticToken {
+			t.Errorf("Authorization = %q, want the static bearer token", got)
+		}
+		if got := headers.Get("DD_API_KEY"); got != "k" {
+			t.Errorf("DD_API_KEY = %q, want it forwarded verbatim", got)
+		}
+	case <-ctx.Done():
+		t.Fatal("the SSE transport never reached the server")
 	}
 }

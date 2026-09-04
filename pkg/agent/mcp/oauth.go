@@ -12,6 +12,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -202,6 +203,11 @@ func (s *CredentialStore) SaveClient(clientID, clientSecret string) error {
 }
 
 // OAuthRedirectURI is the loopback callback the login flow listens on.
+//
+// "localhost" rather than 127.0.0.1 because that is the spelling authorization
+// servers are likeliest to accept in a registered redirect_uri — some reject an
+// IP literal outright. The cost is that the name may resolve to ::1, which is
+// why startCallbackServer binds both loopback families rather than only IPv4.
 func OAuthRedirectURI(port int) string {
 	if port == 0 {
 		port = DefaultOAuthRedirectPort
@@ -465,18 +471,26 @@ type callbackServer struct {
 	once   sync.Once
 }
 
+// loopbackHosts are the addresses the callback listener binds, in the order it
+// tries them. Both families, because the redirect_uri says "localhost" and which
+// of the two that resolves to is the browser's decision, not klein's: an
+// IPv4-only listener silently loses the callback on a host that prefers ::1.
+//
+// Loopback only, never a wildcard bind: the code in that redirect is a bearer
+// credential for the length of the exchange, and nothing off this machine has
+// any business delivering — or intercepting — it.
+var loopbackHosts = []string{"127.0.0.1", "::1"}
+
 // startCallbackServer listens on loopback for the authorization redirect.
 //
-// Bound to 127.0.0.1 rather than every interface: the code in that URL is a
-// bearer credential for the length of the exchange, and there is no reason for
-// anything off this machine to be able to deliver — or intercept — it.
+// A family this host does not have is skipped; a family it has but whose port is
+// taken fails the login. Those two have to be told apart rather than collapsed
+// into "at least one bind worked": binding only IPv4 while something else holds
+// IPv6 would leave the browser free to resolve localhost to ::1 and deliver the
+// authorization code — a bearer credential — to that other process.
 func startCallbackServer(port int) (*callbackServer, error) {
 	if port == 0 {
 		port = DefaultOAuthRedirectPort
-	}
-	listener, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", port))
-	if err != nil {
-		return nil, fmt.Errorf("listening on the OAuth callback port %d: %w", port, err)
 	}
 
 	cb := &callbackServer{
@@ -487,8 +501,48 @@ func startCallbackServer(port int) (*callbackServer, error) {
 	mux.HandleFunc("/callback", cb.handle)
 	cb.server = &http.Server{Handler: mux, ReadHeaderTimeout: 10 * time.Second}
 
-	go func() { _ = cb.server.Serve(listener) }()
+	var listeners []net.Listener
+	for _, host := range loopbackHosts {
+		listener, err := net.Listen("tcp", net.JoinHostPort(host, strconv.Itoa(port)))
+		if err == nil {
+			listeners = append(listeners, listener)
+			continue
+		}
+		// Probing an ephemeral port on the same address separates the two
+		// cases without reading errnos, which differ across platforms: if the
+		// family works at all, the failure was about this port.
+		if loopbackUsable(host) {
+			closeListeners(listeners)
+			return nil, fmt.Errorf("listening on the OAuth callback port %d (%s): %w", port, host, err)
+		}
+	}
+	if len(listeners) == 0 {
+		return nil, fmt.Errorf("no loopback address available for the OAuth callback port %d", port)
+	}
+
+	// One http.Server across every listener, so a single Shutdown closes them
+	// all and the handler state is shared however the callback arrives.
+	for _, listener := range listeners {
+		go func(l net.Listener) { _ = cb.server.Serve(l) }(listener)
+	}
 	return cb, nil
+}
+
+// loopbackUsable reports whether this host can bind the given loopback address
+// at all, on a port of the kernel's choosing.
+func loopbackUsable(host string) bool {
+	listener, err := net.Listen("tcp", net.JoinHostPort(host, "0"))
+	if err != nil {
+		return false
+	}
+	_ = listener.Close()
+	return true
+}
+
+func closeListeners(listeners []net.Listener) {
+	for _, l := range listeners {
+		_ = l.Close()
+	}
 }
 
 func (c *callbackServer) handle(w http.ResponseWriter, r *http.Request) {

@@ -2,14 +2,14 @@ package mcp
 
 import (
 	"context"
-	"errors"
 	"fmt"
 
-	"github.com/fpt/klein-cli/pkg/agent/domain"
-	pkgLogger "github.com/fpt/klein-cli/pkg/logger"
 	"github.com/mark3labs/mcp-go/client"
 	"github.com/mark3labs/mcp-go/client/transport"
 	mcpapi "github.com/mark3labs/mcp-go/mcp"
+
+	"github.com/fpt/klein-cli/pkg/agent/domain"
+	pkgLogger "github.com/fpt/klein-cli/pkg/logger"
 )
 
 // Package-level logger for MCP client operations
@@ -137,43 +137,43 @@ func (w *MCPClientWrapper) GetConfig() domain.MCPServerConfig {
 }
 
 // newSSEClient builds the SSE transport, with OAuth when the server asks for it.
+//
+// Headers reach both branches. This transport used to send none at all, so an
+// sse server with an authorization_token was documented as authenticating and
+// quietly did not — and under OAuth the same omission would have dropped the
+// API-gateway headers that buildAuthHeaders goes out of its way to keep.
 func newSSEClient(config domain.MCPServerConfig) (*client.Client, error) {
-	if config.URL == "" {
-		return nil, errors.New("URL is required for SSE MCP server")
-	}
-
-	var (
-		mcpClient *client.Client
-		err       error
-	)
-	if usesOAuth(config) {
-		oauthCfg, _, cfgErr := oauthConfig(config)
-		if cfgErr != nil {
-			return nil, cfgErr
-		}
-		mcpClient, err = client.NewOAuthSSEClient(config.URL, oauthCfg)
-	} else {
-		mcpClient, err = client.NewSSEMCPClient(config.URL)
-	}
-	if err != nil {
-		return nil, fmt.Errorf("failed to create SSE MCP client: %w", err)
-	}
-	return mcpClient, nil
+	return buildClient(config, "SSE",
+		transport.WithHeaders, client.NewOAuthSSEClient, client.NewSSEMCPClient)
 }
 
 // newHTTPClient builds the streamable-HTTP transport.
-//
-// The header option is assembled either way: OAuth replaces the Authorization
-// header but not the rest, and a server can want both an API-gateway header and
-// an OAuth token.
 func newHTTPClient(config domain.MCPServerConfig) (*client.Client, error) {
+	return buildClient(config, "HTTP",
+		transport.WithHTTPHeaders, client.NewOAuthStreamableHttpClient, client.NewStreamableHttpClient)
+}
+
+// buildClient is the shape both transports share: require a URL, assemble the
+// headers, then pick the OAuth or the plain constructor.
+//
+// Generic over the option type only because mcp-go gives SSE and streamable
+// HTTP separate ones; nothing about the decision differs between them, and
+// writing it twice is how the SSE branch silently lost its headers to begin
+// with.
+func buildClient[O any](
+	config domain.MCPServerConfig,
+	kind string,
+	withHeaders func(map[string]string) O,
+	newOAuth func(string, client.OAuthConfig, ...O) (*client.Client, error),
+	newPlain func(string, ...O) (*client.Client, error),
+) (*client.Client, error) {
 	if config.URL == "" {
-		return nil, errors.New("URL is required for HTTP MCP server")
+		return nil, fmt.Errorf("URL is required for %s MCP server", kind)
 	}
 
-	var opts []transport.StreamableHTTPCOption
+	var opts []O
 	if headers := buildAuthHeaders(config); len(headers) > 0 {
-		opts = append(opts, transport.WithHTTPHeaders(headers))
+		opts = append(opts, withHeaders(headers))
 	}
 
 	var (
@@ -185,12 +185,12 @@ func newHTTPClient(config domain.MCPServerConfig) (*client.Client, error) {
 		if cfgErr != nil {
 			return nil, cfgErr
 		}
-		mcpClient, err = client.NewOAuthStreamableHttpClient(config.URL, oauthCfg, opts...)
+		mcpClient, err = newOAuth(config.URL, oauthCfg, opts...)
 	} else {
-		mcpClient, err = client.NewStreamableHttpClient(config.URL, opts...)
+		mcpClient, err = newPlain(config.URL, opts...)
 	}
 	if err != nil {
-		return nil, fmt.Errorf("failed to create HTTP MCP client: %w", err)
+		return nil, fmt.Errorf("failed to create %s MCP client: %w", kind, err)
 	}
 	return mcpClient, nil
 }

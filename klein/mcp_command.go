@@ -1,14 +1,17 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 
+	"github.com/fpt/klein-cli/internal/app"
 	"github.com/fpt/klein-cli/internal/config"
 	"github.com/fpt/klein-cli/internal/config/tomledit"
 	"github.com/fpt/klein-cli/pkg/agent/domain"
+	"github.com/fpt/klein-cli/pkg/agent/mcp"
 )
 
 // editSettings applies edit to the settings file's text and writes it back.
@@ -81,6 +84,10 @@ func runMCPCommand(args []string) int {
 		return mcpList(settingsPath)
 	case "remove", "rm", "delete":
 		return mcpRemove(settingsPath, args[1:])
+	case "login":
+		return mcpLogin(settingsPath, args[1:])
+	case "logout":
+		return mcpLogout(settingsPath, args[1:])
 	default:
 		fmt.Printf("Unknown mcp subcommand %q.\n\n%s\n", args[0], mcpUsage)
 		return 1
@@ -91,13 +98,25 @@ const mcpUsage = `Usage:
   klein mcp add <name> [-e KEY=VAL ...] [--url <url>] [-t stdio|sse] -- <command> [args...]
   klein mcp list
   klein mcp remove <name>
+  klein mcp login <name> [--paste] [--no-browser]
+  klein mcp logout <name>
 
 Examples:
   klein mcp add browser-sandbox -- docker run -i --rm --init --shm-size 1g chromedp-container-mcp:latest
   klein mcp add docs --url https://example.com/mcp
+  klein mcp login datadog
 
 Edits the [mcp.*] tables in ~/.klein/settings.toml, or in the file named by
---settings. Comments and formatting elsewhere in the file are left alone.`
+--settings. Comments and formatting elsewhere in the file are left alone.
+
+login runs the OAuth authorization-code flow for a server whose table has an
+[mcp.<name>.oauth] block, and stores the token under <base_dir>/mcp-auth. It is
+a one-time step: after it, refresh happens on its own.
+
+--no-browser prints the URL instead of opening one. --paste skips the loopback
+listener entirely and asks you to type back the code the server showed you --
+use it for a server that displays a one-time code rather than redirecting, or
+when the browser is on a different machine than klein.`
 
 func defaultSettingsPath() string {
 	home, err := os.UserHomeDir()
@@ -269,5 +288,89 @@ func mcpRemove(settingsPath string, args []string) int {
 		return 1
 	}
 	fmt.Printf("Removed MCP server %q from %s\n", name, settingsPath)
+	return 0
+}
+
+// findOAuthServer locates a server by name and checks it is one login can act
+// on, returning the config with its credential-store directory filled in.
+func findOAuthServer(settingsPath, name string) (domain.MCPServerConfig, error) {
+	settings, err := config.LoadSettings(settingsPath)
+	if err != nil {
+		return domain.MCPServerConfig{}, fmt.Errorf("failed to load settings %s: %w", settingsPath, err)
+	}
+	for _, s := range settings.MCPServersWithAuthDir() {
+		if s.Name != name {
+			continue
+		}
+		if s.OAuth == nil || !s.OAuth.Enabled {
+			return domain.MCPServerConfig{}, fmt.Errorf(
+				"MCP server %q has no [mcp.%s.oauth] block; add one to use OAuth", name, name)
+		}
+		return s, nil
+	}
+	return domain.MCPServerConfig{}, fmt.Errorf("no MCP server named %q in %s", name, settingsPath)
+}
+
+func mcpLogin(settingsPath string, args []string) int {
+	var name string
+	noBrowser, paste := false, false
+	for _, a := range args {
+		switch {
+		case a == "--no-browser":
+			noBrowser = true
+		case a == "--paste", a == "--manual":
+			paste = true
+		case strings.HasPrefix(a, "-"):
+			// Unknown flag; ignore, matching the other mcp subcommands.
+		case name == "":
+			name = a
+		}
+	}
+	if name == "" {
+		fmt.Println("Usage: klein mcp login <name> [--paste] [--no-browser]")
+		return 1
+	}
+
+	srv, err := findOAuthServer(settingsPath, name)
+	if err != nil {
+		fmt.Printf("%v\n", err)
+		return 1
+	}
+	if err := app.RunMCPLogin(context.Background(), srv, app.MCPLoginOptions{
+		Paste: paste, NoBrowser: noBrowser, In: os.Stdin, Out: os.Stdout,
+	}); err != nil {
+		fmt.Printf("Login failed: %v\n", err)
+		return 1
+	}
+	return 0
+}
+
+func mcpLogout(settingsPath string, args []string) int {
+	if len(args) == 0 {
+		fmt.Println("Usage: klein mcp logout <name>")
+		return 1
+	}
+	name := args[0]
+
+	srv, err := findOAuthServer(settingsPath, name)
+	if err != nil {
+		fmt.Printf("%v\n", err)
+		return 1
+	}
+
+	// The whole file goes, client registration included. A logout that kept the
+	// registration would leave klein re-authorizing as a client whose consent
+	// the user just withdrew.
+	path := mcp.NewCredentialStore(srv.OAuth.StoreDir, name).Path()
+	//nolint:gosec // G703: the path is <base>/mcp-auth/<sanitized name>.json, built by the store
+	if err := os.Remove(path); err != nil {
+		if os.IsNotExist(err) {
+			fmt.Printf("MCP server %q was not logged in\n", name)
+			return 0
+		}
+		fmt.Printf("Failed to remove %s: %v\n", path, err)
+		return 1
+	}
+	fmt.Printf("Logged out of MCP server %q (removed %s)\n", name, path)
 	return 0
 }

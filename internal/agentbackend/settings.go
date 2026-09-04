@@ -225,8 +225,18 @@ func splitOfferedManagers(
 // invisible and the session quietly loses them. klein cannot detect that from
 // here — the flag is advisory and nothing acknowledges it — so the judgment
 // stays with whoever knows which server they are pointing at.
+//
+// It applies to every backend on this path, codex included, and is not gated on
+// BackendAppServer the way it once was. That gate made the setting silently do
+// nothing for a codex session that had proxied a large server — the case the
+// flag exists for — while ProxyMCPServers, the setting it exists to make
+// affordable, was never gated at all. Nothing about the wire format needed the
+// gate either: buildDynamicTools writes "advertised": false only when deferring,
+// so a backend that has never heard of the key skips it and advertises the tool.
+// The downside of asking a backend that ignores it is therefore exactly today's
+// behavior, which is what makes extending it safe.
 func defersMCPTools(settings *config.Settings) bool {
-	return settings.LLM.Backend == config.BackendAppServer && settings.AppServer.DeferMCPTools
+	return settings.AppServer.DeferMCPTools
 }
 
 // wantsWorkspaceTools reports whether klein should supply the workspace tools.

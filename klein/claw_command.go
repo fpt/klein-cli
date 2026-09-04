@@ -181,7 +181,7 @@ func buildClawToolManagers(ctx context.Context, settings *config.Settings, cfg *
 
 	var integration *mcp.Integration
 	if hasEnabledMCPServers(settings.MCP.Servers) {
-		if integration = initializeMCP(ctx, settings.MCP, logger); integration != nil {
+		if integration = initializeMCP(ctx, settings, logger); integration != nil {
 			toolManager := integration.GetToolManager()
 			for _, name := range integration.ListServers() {
 				mcpToolManagers[name] = toolManager

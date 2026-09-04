@@ -2,6 +2,7 @@ package mcp
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"github.com/fpt/klein-cli/pkg/agent/domain"
@@ -33,26 +34,13 @@ func NewMCPClient(config domain.MCPServerConfig) (*MCPClientWrapper, error) {
 		}
 
 	case domain.MCPServerTypeSSE:
-		if config.URL == "" {
-			return nil, fmt.Errorf("URL is required for SSE MCP server")
-		}
-		mcpClient, err = client.NewSSEMCPClient(config.URL)
-		if err != nil {
-			return nil, fmt.Errorf("failed to create SSE MCP client: %w", err)
+		if mcpClient, err = newSSEClient(config); err != nil {
+			return nil, err
 		}
 
 	case domain.MCPServerTypeHTTP:
-		if config.URL == "" {
-			return nil, fmt.Errorf("URL is required for HTTP MCP server")
-		}
-		headers := buildAuthHeaders(config)
-		var opts []transport.StreamableHTTPCOption
-		if len(headers) > 0 {
-			opts = append(opts, transport.WithHTTPHeaders(headers))
-		}
-		mcpClient, err = client.NewStreamableHttpClient(config.URL, opts...)
-		if err != nil {
-			return nil, fmt.Errorf("failed to create HTTP MCP client: %w", err)
+		if mcpClient, err = newHTTPClient(config); err != nil {
+			return nil, err
 		}
 
 	default:
@@ -67,6 +55,14 @@ func NewMCPClient(config domain.MCPServerConfig) (*MCPClientWrapper, error) {
 
 // Start initializes the MCP client connection
 func (w *MCPClientWrapper) Start(ctx context.Context) error {
+	// Checked before dialing: an OAuth server with nothing stored fails deep in
+	// the transport with "authorization required", which reads like a rejected
+	// credential rather than a missing one. The action is different — log in
+	// once, rather than fix the settings — so it is worth saying plainly.
+	if usesOAuth(w.config) && !HasOAuthCredentials(ctx, w.config) {
+		return fmt.Errorf("MCP server %q: %w", w.config.Name, ErrOAuthLoginRequired)
+	}
+
 	// Start the client connection
 	if err := w.client.Start(ctx); err != nil {
 		return fmt.Errorf("failed to start MCP client: %w", err)
@@ -140,19 +136,94 @@ func (w *MCPClientWrapper) GetConfig() domain.MCPServerConfig {
 	return w.config
 }
 
+// newSSEClient builds the SSE transport, with OAuth when the server asks for it.
+func newSSEClient(config domain.MCPServerConfig) (*client.Client, error) {
+	if config.URL == "" {
+		return nil, errors.New("URL is required for SSE MCP server")
+	}
+
+	var (
+		mcpClient *client.Client
+		err       error
+	)
+	if usesOAuth(config) {
+		oauthCfg, _, cfgErr := oauthConfig(config)
+		if cfgErr != nil {
+			return nil, cfgErr
+		}
+		mcpClient, err = client.NewOAuthSSEClient(config.URL, oauthCfg)
+	} else {
+		mcpClient, err = client.NewSSEMCPClient(config.URL)
+	}
+	if err != nil {
+		return nil, fmt.Errorf("failed to create SSE MCP client: %w", err)
+	}
+	return mcpClient, nil
+}
+
+// newHTTPClient builds the streamable-HTTP transport.
+//
+// The header option is assembled either way: OAuth replaces the Authorization
+// header but not the rest, and a server can want both an API-gateway header and
+// an OAuth token.
+func newHTTPClient(config domain.MCPServerConfig) (*client.Client, error) {
+	if config.URL == "" {
+		return nil, errors.New("URL is required for HTTP MCP server")
+	}
+
+	var opts []transport.StreamableHTTPCOption
+	if headers := buildAuthHeaders(config); len(headers) > 0 {
+		opts = append(opts, transport.WithHTTPHeaders(headers))
+	}
+
+	var (
+		mcpClient *client.Client
+		err       error
+	)
+	if usesOAuth(config) {
+		oauthCfg, _, cfgErr := oauthConfig(config)
+		if cfgErr != nil {
+			return nil, cfgErr
+		}
+		mcpClient, err = client.NewOAuthStreamableHttpClient(config.URL, oauthCfg, opts...)
+	} else {
+		mcpClient, err = client.NewStreamableHttpClient(config.URL, opts...)
+	}
+	if err != nil {
+		return nil, fmt.Errorf("failed to create HTTP MCP client: %w", err)
+	}
+	return mcpClient, nil
+}
+
+// usesOAuth reports whether a server should authenticate with the OAuth flow
+// rather than with the static credentials.
+func usesOAuth(config domain.MCPServerConfig) bool {
+	return config.OAuth != nil && config.OAuth.Enabled
+}
+
 // buildAuthHeaders composes the HTTP header map from the server config:
 // AuthorizationToken is sent as a Bearer token; Headers entries are added verbatim.
 // Returns nil when nothing is set.
+//
+// Under OAuth the static token is dropped rather than merged: the OAuth handler
+// sets Authorization from the token it manages, and a second, stale value for
+// the same header is the kind of conflict that produces a 401 nobody can
+// explain. Other headers are kept — a server can want both an API-gateway header
+// and an OAuth token.
 func buildAuthHeaders(config domain.MCPServerConfig) map[string]string {
-	if config.AuthorizationToken == "" && len(config.Headers) == 0 {
+	token := config.AuthorizationToken
+	if usesOAuth(config) {
+		token = ""
+	}
+	if token == "" && len(config.Headers) == 0 {
 		return nil
 	}
 	headers := make(map[string]string, len(config.Headers)+1)
 	for k, v := range config.Headers {
 		headers[k] = v
 	}
-	if config.AuthorizationToken != "" {
-		headers["Authorization"] = "Bearer " + config.AuthorizationToken
+	if token != "" {
+		headers["Authorization"] = "Bearer " + token
 	}
 	return headers
 }

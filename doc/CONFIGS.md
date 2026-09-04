@@ -189,7 +189,7 @@ Two differences from codex worth knowing:
 | `workspace_tools` | bool | *(on when dialing, off when spawning)* | Offer klein's own `Read`/`Write`/`Edit`/`MultiEdit`/`LS`/`Glob`/`Grep`/`Bash` to the server as dynamic tools, so they run **here**. See [Whose tools run](#whose-tools-run) |
 | `approval_policy` | string | *(mode-dependent)* | `never` / `on-request`. Same mode defaults as codex: the interactive repl prompts you (y/N) before the server writes a file or runs a command; headless surfaces auto-approve. Set explicitly to override. |
 | `proxy_mcp_servers` | string[] | `[]` | Names of `[mcp.<name>]` servers whose tools klein offers the app-server as dynamic tools, so the MCP server runs **here**. `["*"]` selects all. See [Reaching an MCP server from a remote app-server](#reaching-an-mcp-server-from-a-remote-app-server) |
-| `defer_mcp_tools` | bool | `false` | Register the proxied MCP tools without advertising them, so they cost no schema budget until the server's own discovery tool surfaces one. Requires server support — see the section below. |
+| `defer_mcp_tools` | bool | `false` | Register the proxied MCP tools without advertising them, so they cost no schema budget until the server's own discovery tool surfaces one. Applies to the `codex` backend too — like `proxy_mcp_servers`, it is read from this block whichever of the two backends is in use. Requires server support — see the section below. |
 
 > `config` is **deprecated** and undocumented here — it still parses and still
 > works, and setting it logs a warning naming its replacement. Use `env`, or hand
@@ -488,6 +488,9 @@ A Claude Code `mcpServers` entry translates key-for-key: the JSON object
 | `type` | string | — | `stdio`, `sse`, or `http`. Inferred from `command`/`url` when omitted — note a bare `url` infers **`sse`**, so a streamable-HTTP server needs `"type": "http"` written out |
 | `enabled` | bool | — | Defaults to **true**; set `false` to keep but disable |
 | `allowed_tools` | array | — | Whitelist of tool names from this server |
+| `authorization_token` | string | — | Sent as `Authorization: Bearer <token>` (http/sse only) |
+| `headers` | object | — | Extra HTTP headers `{ "KEY": "VAL" }`, added verbatim (http/sse only) |
+| `oauth` | table | — | Sub-table turning on the OAuth flow instead of a static token — see [OAuth servers](#oauth-servers) (http/sse only) |
 
 The server name is the map key (also the tool-name prefix). Add/list/remove
 servers by hand or with the **`klein mcp`** subcommand (Claude-Code-style):
@@ -498,6 +501,8 @@ klein mcp add docs --url https://example.com/mcp
 klein mcp add x -e API_KEY=secret -- my-mcp-server
 klein mcp list
 klein mcp remove browser-sandbox
+klein mcp login datadog                 # OAuth servers only — see below
+klein mcp logout datadog
 klein mcp --settings ./team-settings.toml add docs --url https://example.com/mcp
 ```
 
@@ -505,6 +510,68 @@ klein mcp --settings ./team-settings.toml add docs --url https://example.com/mcp
 splicing just that server's table, so comments, key order and spacing everywhere
 else in the file survive it. Everything after `--` is the stdio command and its
 args; `--url` makes an sse server; `-e KEY=VAL` adds env vars.
+
+#### OAuth servers
+
+A server that speaks OAuth 2.1 instead of taking a pasted token gets an
+`[mcp.<name>.oauth]` sub-table. Writing the table is the opt-in — `enabled`
+defaults to true, and is only worth writing out to keep a configured block while
+turning it off:
+
+```toml
+[mcp.datadog]
+type = "http"
+url  = "https://mcp.datadoghq.com/api/unstable/mcp-server/mcp"
+
+[mcp.datadog.oauth]
+scopes        = ["mcp_all"]
+redirect_port = 33418
+```
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `enabled` | bool | `true` | Writing the table turns the flow on; set `false` to keep the block but disable it |
+| `scopes` | string[] | — | Scopes requested at authorization. Empty sends no `scope` parameter and lets the server apply its default |
+| `redirect_port` | int | `33418` | Loopback port the login callback listens on. Keep it stable: a dynamically registered client is bound to the exact `redirect_uri` it registered with |
+| `client_id` | string | — | A client registered ahead of time. Empty asks for dynamic client registration (RFC 7591) at login, which is what a public CLI client normally wants |
+| `client_secret` | string | — | For the rare confidential client. A server advertising `token_endpoint_auth_methods_supported: ["none"]` wants this empty |
+
+OAuth replaces `authorization_token` rather than merging with it — the flow owns
+the `Authorization` header — but `headers` entries are still sent, so a server
+behind an API gateway can have both. `oauth` on a **stdio** server is rejected at
+load rather than silently ignored: an inert credential setting looks configured.
+
+**Logging in is a deliberate, one-time step.** A session that finds no stored
+credentials says so and stops; it never opens a browser on its own. Anything else
+would have a scheduled `klein claw` run launch a browser on a machine nobody is
+watching and block the turn until it timed out.
+
+```bash
+klein mcp login datadog                 # opens a browser, waits on the loopback callback
+klein mcp login datadog --no-browser    # prints the URL instead of launching one
+klein mcp login datadog --paste         # skip the listener; type the code back by hand
+klein mcp logout datadog                # forget the token *and* the client registration
+```
+
+The same flow is reachable from inside a session as `/mcp login <server>` (and
+`/mcp list`), so a session that hit the "needs an interactive login" warning does
+not have to be abandoned to fix it. What neither can do is retrofit the tools onto
+the **running** session — MCP servers are connected once at startup, so a freshly
+authorized server is reachable from the next run.
+
+Use `--paste` when the loopback listener cannot work: a server that finishes on a
+page showing a one-time code rather than redirecting, or a browser running on a
+different machine than klein (the redirect would land on *that* machine's
+loopback). It accepts the bare code, the whole URL you landed on, or just the
+query string.
+
+Credentials live in `<base_dir>/mcp-auth/<server>.json`, one file per server,
+mode `0600`, holding the token and the client registration together — dynamic
+registration mints a *new* client each time it runs, so the registration is
+persisted rather than redone. Because the path derives from `base_dir`, an
+interactive session, `klein claw` and `klein mcp login` all share one login; a
+second instance started with its own `--settings` gets its own. After the first
+login, refresh happens on its own and needs no browser.
 
 **CAD servers for the `cad` role.** The `cad` role does not hard-code any MCP
 tool names — it discovers whatever is connected via `ToolSearch`, so it works
@@ -739,6 +806,7 @@ persists:
 | Sessions | `<base_dir>/sessions/` |
 | Memory (`MEMORY.md`, `daily/`, `runs/`) | `<base_dir>/memory/` |
 | Schedule store | `<base_dir>/schedules.json` |
+| MCP OAuth credentials | `<base_dir>/mcp-auth/<server>.json` |
 
 **Multiple instances:** give each a settings file with its own `base_dir` and
 Discord token — everything else isolates automatically (the embedded server's
@@ -921,6 +989,8 @@ $HOME/.klein/
 │       │   └── YYYYMMDDTHHMMSS.ffffff.json
 │       └── history.txt                 # Readline command history
 ├── sessions/                            # Per-session Connect-gRPC state (serve mode / gateway)
+├── mcp-auth/                            # OAuth credentials, one file per MCP server (mode 0600)
+│   └── {server}.json                   # Token + client registration; `klein mcp login` writes it
 └── memory/
     ├── MEMORY.md                        # Long-term memory
     ├── daily/
@@ -970,3 +1040,4 @@ sessions is migrated into `sessions/` on first use, keeping it resumable.
 | Add a safe bash command | `bash.whitelisted_commands` in settings TOML |
 | Increase iteration limit | `agent.max_iterations` in settings TOML |
 | Use an OpenAI-compatible endpoint | `llm.base_url` in settings TOML |
+| Authorize an OAuth MCP server | `[mcp.<name>.oauth]` in settings TOML, then `klein mcp login <name>` |

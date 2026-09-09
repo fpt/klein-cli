@@ -62,6 +62,7 @@ type SearchToolManager struct {
 	allowedDirectories []string
 }
 
+// SearchConfig configures a SearchToolManager.
 type SearchConfig struct {
 	WorkingDir string
 	// AllowedDirectories bounds where a search may look, exactly as the
@@ -72,6 +73,7 @@ type SearchConfig struct {
 	AllowedDirectories []string
 }
 
+// NewSearchToolManager creates a search tool manager rooted at cfg.WorkingDir.
 func NewSearchToolManager(cfg SearchConfig) domain.ToolManager {
 	absWorkingDir, err := filepath.Abs(cfg.WorkingDir)
 	if err != nil {
@@ -90,13 +92,20 @@ func NewSearchToolManager(cfg SearchConfig) domain.ToolManager {
 	return m
 }
 
+// GetTool returns a registered search tool by name.
 func (m *SearchToolManager) GetTool(name message.ToolName) (message.Tool, bool) {
 	return m.tools[name], m.tools[name] != nil
 }
+
+// GetTools returns all registered search tools.
 func (m *SearchToolManager) GetTools() map[message.ToolName]message.Tool { return m.tools }
+
+// RegisterTool registers a search tool.
 func (m *SearchToolManager) RegisterTool(name message.ToolName, desc message.ToolDescription, args []message.ToolArgument, handler func(ctx context.Context, args message.ToolArgumentValues) (message.ToolResult, error)) {
 	m.tools[name] = &searchTool{name: name, description: desc, arguments: args, handler: handler}
 }
+
+// CallTool executes a registered search tool.
 func (m *SearchToolManager) CallTool(ctx context.Context, name message.ToolName, args message.ToolArgumentValues) (message.ToolResult, error) {
 	t, ok := m.tools[name]
 	if !ok {
@@ -123,11 +132,11 @@ func (m *SearchToolManager) register() {
 			{Name: "-B", Description: "Lines before; selects content mode", Required: false, Type: "number"},
 			{Name: "-A", Description: "Lines after; selects content mode", Required: false, Type: "number"},
 			{Name: "-C", Description: "Lines before/after; selects content mode", Required: false, Type: "number"},
-			{Name: "-n", Description: "Selects content mode, which always numbers lines", Required: false, Type: "boolean"},
-			{Name: "-i", Description: "Case-insensitive", Required: false, Type: "boolean"},
+			{Name: "-n", Description: "Selects content mode, which always numbers lines", Required: false, Type: argTypeBoolean},
+			{Name: "-i", Description: "Case-insensitive", Required: false, Type: argTypeBoolean},
 			{Name: argType, Description: "File type (rg --type); requires ripgrep", Required: false, Type: "string"},
 			{Name: "head_limit", Description: "Limit lines/entries", Required: false, Type: "number"},
-			{Name: argMultiline, Description: "Dot matches newlines; requires ripgrep", Required: false, Type: "boolean"},
+			{Name: argMultiline, Description: "Dot matches newlines; requires ripgrep", Required: false, Type: argTypeBoolean},
 		}, m.handleGrep)
 }
 
@@ -192,30 +201,42 @@ func (m *SearchToolManager) handleGlob(ctx context.Context, args message.ToolArg
 		base = rp
 	}
 
-	if _, err := exec.LookPath("rg"); err == nil {
-		// rg --files --glob <pattern>
-		cmd := exec.CommandContext(ctx, "rg", "--files", "--glob", pattern)
-		cmd.Dir = base
-		out, err := cmd.CombinedOutput()
-		if err == nil {
-			files := strings.Split(strings.TrimSpace(string(out)), "\n")
-			// Portable: alphabetic sort
-			sort.Strings(files)
-			var b strings.Builder
-			for _, f := range files {
-				if f == "" {
-					continue
-				}
-				b.WriteString(f)
-				b.WriteString("\n")
-			}
-			return message.NewToolResultText(strings.TrimSuffix(b.String(), "\n")), nil
-		}
-		// fall through to find on error
+	if files, ok := globWithRipgrep(ctx, pattern, base); ok {
+		return message.NewToolResultText(files), nil
+	}
+	return globWithFind(ctx, pattern, base)
+}
+
+// globWithRipgrep lists the files under base matching pattern. ok is false when
+// rg is absent or fails, which is the caller's signal to fall back to find.
+func globWithRipgrep(ctx context.Context, pattern, base string) (string, bool) {
+	if _, err := exec.LookPath("rg"); err != nil {
+		return "", false
+	}
+	cmd := exec.CommandContext(ctx, "rg", "--files", "--glob", pattern)
+	cmd.Dir = base
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return "", false
 	}
 
-	// Fallback: find by -name when pattern has a basename; otherwise list all
-	// Note: this is a best-effort portable fallback and may not match ** semantics fully.
+	files := strings.Split(strings.TrimSpace(string(out)), "\n")
+	// Portable: alphabetic sort
+	sort.Strings(files)
+	var b strings.Builder
+	for _, f := range files {
+		if f == "" {
+			continue
+		}
+		b.WriteString(f)
+		b.WriteString("\n")
+	}
+	return strings.TrimSuffix(b.String(), "\n"), true
+}
+
+// globWithFind is the portable fallback: find by -name when the pattern has a
+// basename. Best-effort — it does not match ** semantics fully.
+func globWithFind(ctx context.Context, pattern, base string) (message.ToolResult, error) {
 	findArgs := []string{"-type", "f"}
 	if strings.Contains(pattern, "/") {
 		// find supports -name on basename; use -name with last segment

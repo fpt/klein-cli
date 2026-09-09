@@ -74,6 +74,11 @@ func (c *CompositeToolManager) CallTool(ctx context.Context, name message.ToolNa
 		return message.NewToolResultError(fmt.Sprintf("tool %s not found", name)), nil
 	}
 
+	// Some models intermittently nest the arguments under a "parameters"
+	// envelope. Unwrapping here covers every caller of a composed tool — the
+	// ReAct loop, subagents, and the app-server backends alike.
+	args = message.UnwrapToolArgs(args, tool.Arguments())
+
 	handler := tool.Handler()
 	return handler(ctx, args)
 }

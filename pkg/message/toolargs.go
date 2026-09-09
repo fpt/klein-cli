@@ -82,3 +82,72 @@ func truncateForDisplay(s string) string {
 	}
 	return string([]rune(s)[:summaryMaxStringLen-1]) + "…"
 }
+
+// Argument envelopes a model sometimes wraps real arguments in, instead of
+// passing them at the top level as the tool's schema declares.
+const (
+	argEnvelopeParameters = "parameters"
+	argEnvelopeArguments  = "arguments"
+	argEnvelopeArgs       = "args"
+	argEnvelopeInput      = "input"
+)
+
+var wrapperArgNames = map[ToolName]bool{
+	argEnvelopeParameters: true,
+	argEnvelopeArguments:  true,
+	argEnvelopeArgs:       true,
+	argEnvelopeInput:      true,
+}
+
+// maxUnwrapDepth bounds UnwrapToolArgs; a model that wrapped once has been seen
+// to wrap twice, but the nesting is never deep.
+const maxUnwrapDepth = 3
+
+// UnwrapToolArgs flattens tool arguments a model nested inside a single
+// envelope key — {"parameters":{"pattern":"x"}} for a tool whose schema says
+// {"pattern":"x"}. Models emit this intermittently, and mid-conversation: the
+// call then fails on a missing required argument, which reads to the model like
+// a legitimate empty result rather than a malformed call.
+//
+// declared is the tool's own argument list. An envelope name the tool actually
+// declares is left alone, so a tool with a real "input" object parameter keeps
+// working; only an undeclared envelope is stripped.
+func UnwrapToolArgs(args ToolArgumentValues, declared []ToolArgument) ToolArgumentValues {
+	for range maxUnwrapDepth {
+		if len(args) != 1 {
+			return args
+		}
+		inner, ok := soleEnvelope(args, declared)
+		if !ok {
+			return args
+		}
+		args = inner
+	}
+	return args
+}
+
+// soleEnvelope reports the map held by args' single envelope key, if that is
+// what args is. args is expected to hold exactly one entry.
+func soleEnvelope(args ToolArgumentValues, declared []ToolArgument) (ToolArgumentValues, bool) {
+	for k, v := range args {
+		if !wrapperArgNames[ToolName(k)] || isDeclaredArg(ToolName(k), declared) {
+			return nil, false
+		}
+		switch t := v.(type) {
+		case ToolArgumentValues:
+			return t, true
+		case map[string]any:
+			return ToolArgumentValues(t), true
+		}
+	}
+	return nil, false
+}
+
+func isDeclaredArg(name ToolName, declared []ToolArgument) bool {
+	for _, a := range declared {
+		if a.Name == name {
+			return true
+		}
+	}
+	return false
+}

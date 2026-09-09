@@ -1,6 +1,7 @@
 package message
 
 import (
+	"reflect"
 	"strings"
 	"testing"
 	"unicode/utf8"
@@ -98,5 +99,87 @@ func TestSummarizeToolArgs_DoesNotMutateInput(t *testing.T) {
 	SummarizeToolArgs(in)
 	if in["content"] != long {
 		t.Fatal("SummarizeToolArgs must not mutate the caller's arguments")
+	}
+}
+
+// unwrapCase is field-ordered pointer-first to keep fieldalignment quiet.
+type unwrapCase struct {
+	args     ToolArgumentValues
+	want     ToolArgumentValues
+	name     string
+	declared []ToolArgument
+}
+
+func unwrapToolArgsCases() []unwrapCase {
+	const (
+		argPattern = "pattern"
+		argPath    = "path"
+		dir        = "src"
+	)
+	declared := []ToolArgument{{Name: argPattern}, {Name: argPath}}
+	inner := map[string]any{argPattern: "clear_all_selection", argPath: dir}
+
+	return []unwrapCase{
+		{
+			name:     "top-level args pass through",
+			args:     ToolArgumentValues{argPattern: "x"},
+			want:     ToolArgumentValues{argPattern: "x"},
+			declared: declared,
+		},
+		{
+			name:     "parameters envelope is stripped",
+			args:     ToolArgumentValues{argEnvelopeParameters: inner},
+			want:     ToolArgumentValues(inner),
+			declared: declared,
+		},
+		{
+			name:     "arguments envelope is stripped",
+			args:     ToolArgumentValues{argEnvelopeArguments: ToolArgumentValues{argPattern: "x"}},
+			want:     ToolArgumentValues{argPattern: "x"},
+			declared: declared,
+		},
+		{
+			name:     "double envelope is stripped",
+			args:     ToolArgumentValues{argEnvelopeInput: map[string]any{argEnvelopeParameters: inner}},
+			want:     ToolArgumentValues(inner),
+			declared: declared,
+		},
+		{
+			name:     "declared envelope name is left alone",
+			args:     ToolArgumentValues{argEnvelopeInput: map[string]any{argPattern: "x"}},
+			want:     ToolArgumentValues{argEnvelopeInput: map[string]any{argPattern: "x"}},
+			declared: []ToolArgument{{Name: argEnvelopeInput}},
+		},
+		{
+			name:     "non-map envelope value is left alone",
+			args:     ToolArgumentValues{argEnvelopeInput: "some text"},
+			want:     ToolArgumentValues{argEnvelopeInput: "some text"},
+			declared: declared,
+		},
+		{
+			name:     "envelope alongside a real argument is left alone",
+			args:     ToolArgumentValues{argEnvelopeParameters: inner, argPath: dir},
+			want:     ToolArgumentValues{argEnvelopeParameters: inner, argPath: dir},
+			declared: declared,
+		},
+		{
+			name:     "empty args pass through",
+			args:     ToolArgumentValues{},
+			want:     ToolArgumentValues{},
+			declared: declared,
+		},
+	}
+}
+
+func TestUnwrapToolArgs(t *testing.T) {
+	t.Parallel()
+	for _, tt := range unwrapToolArgsCases() {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			got := UnwrapToolArgs(tt.args, tt.declared)
+			if !reflect.DeepEqual(map[string]any(got), map[string]any(tt.want)) {
+				t.Errorf("UnwrapToolArgs() = %v, want %v", got, tt.want)
+			}
+		})
 	}
 }

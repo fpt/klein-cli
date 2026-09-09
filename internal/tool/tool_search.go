@@ -102,7 +102,7 @@ func (d *DeferredToolManager) GetTool(name message.ToolName) (message.Tool, bool
 
 func (d *DeferredToolManager) CallTool(ctx context.Context, name message.ToolName, args message.ToolArgumentValues) (message.ToolResult, error) {
 	if name == ToolSearchName {
-		return d.handleSearch(args), nil
+		return d.handleSearch(message.UnwrapToolArgs(args, d.searchTool.Arguments())), nil
 	}
 	return d.source.CallTool(ctx, name, args)
 }

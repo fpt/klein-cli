@@ -167,11 +167,21 @@ func (m *SearchToolManager) resolvePath(p string) (string, error) {
 	return resolveSymlinks(resolved), nil
 }
 
+// A missing pattern spells out that nothing was searched. A bare "required"
+// reads to a model like a search that found nothing, which is how a malformed
+// call turns into a confident claim that a symbol does not exist.
+const (
+	errGlobPatternRequired = "pattern parameter is required: the call was malformed and no files were listed. " +
+		"This is not a result of zero matches -- retry with pattern as a top-level argument."
+	errGrepPatternRequired = "pattern parameter is required: the call was malformed and no search ran. " +
+		"This is not a result of zero matches -- retry with pattern as a top-level argument."
+)
+
 // handleGlob tries rg --files with --glob when available; falls back to find
 func (m *SearchToolManager) handleGlob(ctx context.Context, args message.ToolArgumentValues) (message.ToolResult, error) {
 	pattern, ok := args[argPattern].(string)
 	if !ok {
-		return message.NewToolResultError("pattern parameter is required"), nil
+		return message.NewToolResultError(errGlobPatternRequired), nil
 	}
 	base := m.workingDir
 	if p, ok := args["path"].(string); ok && p != "" {
@@ -227,7 +237,7 @@ func (m *SearchToolManager) handleGlob(ctx context.Context, args message.ToolArg
 func (m *SearchToolManager) handleGrep(ctx context.Context, args message.ToolArgumentValues) (message.ToolResult, error) {
 	pattern, ok := args[argPattern].(string)
 	if !ok {
-		return message.NewToolResultError("pattern parameter is required"), nil
+		return message.NewToolResultError(errGrepPatternRequired), nil
 	}
 
 	base := m.workingDir

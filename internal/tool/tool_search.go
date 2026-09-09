@@ -78,6 +78,8 @@ func (d *DeferredToolManager) isExposed(name message.ToolName) bool {
 	return d.active[name]
 }
 
+// GetTools returns the exposed catalog: the core set, whatever ToolSearch has
+// loaded so far, and ToolSearch itself.
 func (d *DeferredToolManager) GetTools() map[message.ToolName]message.Tool {
 	out := make(map[message.ToolName]message.Tool)
 	for name, t := range d.source.GetTools() {
@@ -92,6 +94,8 @@ func (d *DeferredToolManager) GetTools() map[message.ToolName]message.Tool {
 	return out
 }
 
+// GetTool looks a tool up by name in the full source catalog, exposed or not,
+// so a deferred tool stays callable once the model knows its name.
 func (d *DeferredToolManager) GetTool(name message.ToolName) (message.Tool, bool) {
 	if name == ToolSearchName {
 		return d.searchTool, true
@@ -100,11 +104,19 @@ func (d *DeferredToolManager) GetTool(name message.ToolName) (message.Tool, bool
 	return t, ok
 }
 
-func (d *DeferredToolManager) CallTool(ctx context.Context, name message.ToolName, args message.ToolArgumentValues) (message.ToolResult, error) {
+// CallTool serves ToolSearch itself and delegates everything else to the source
+// manager.
+func (d *DeferredToolManager) CallTool(
+	ctx context.Context, name message.ToolName, args message.ToolArgumentValues,
+) (message.ToolResult, error) {
 	if name == ToolSearchName {
 		return d.handleSearch(message.UnwrapToolArgs(args, d.searchTool.Arguments())), nil
 	}
-	return d.source.CallTool(ctx, name, args)
+	res, err := d.source.CallTool(ctx, name, args)
+	if err != nil {
+		return res, fmt.Errorf("calling %s: %w", name, err)
+	}
+	return res, nil
 }
 
 // RegisterTool is not supported; register on the underlying manager.

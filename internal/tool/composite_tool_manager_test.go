@@ -45,7 +45,7 @@ func (m *mockToolManager) CallTool(ctx context.Context, name message.ToolName, a
 	}
 	return t.Handler()(ctx, args)
 }
-func (m *mockToolManager) RegisterTool(name message.ToolName, desc message.ToolDescription, args []message.ToolArgument, handler func(ctx context.Context, args message.ToolArgumentValues) (message.ToolResult, error)) {
+func (m *mockToolManager) RegisterTool(name message.ToolName, desc message.ToolDescription, _ []message.ToolArgument, handler func(ctx context.Context, args message.ToolArgumentValues) (message.ToolResult, error)) {
 	m.tools[name] = &webTool{name: name, description: desc, handler: handler}
 }
 
@@ -60,6 +60,7 @@ var _ domain.ToolManager = (*mockStatefulToolManager)(nil)
 var _ domain.ToolStateProvider = (*mockStatefulToolManager)(nil)
 
 func TestCompositeToolManager_NoStateProviders(t *testing.T) {
+	t.Parallel()
 	mgr := newMockToolManager("Read", "Write")
 	composite := NewCompositeToolManager(mgr)
 
@@ -82,6 +83,7 @@ func TestCompositeToolManager_NoStateProviders(t *testing.T) {
 }
 
 func TestCompositeToolManager_WithStateProvider(t *testing.T) {
+	t.Parallel()
 	mgr := &mockStatefulToolManager{
 		mockToolManager:   newMockToolManager("WebFetch", "WebFetchBlock", "Read"),
 		mockStateProvider: &mockStateProvider{state: "Web cache: https://example.com (30s ago)"},
@@ -111,6 +113,7 @@ func TestCompositeToolManager_WithStateProvider(t *testing.T) {
 }
 
 func TestCompositeToolManager_StateProviderDynamic(t *testing.T) {
+	t.Parallel()
 	sp := &mockStateProvider{state: ""}
 	mgr := &mockStatefulToolManager{
 		mockToolManager:   newMockToolManager("WebFetch"),
@@ -145,6 +148,7 @@ func TestCompositeToolManager_StateProviderDynamic(t *testing.T) {
 }
 
 func TestCompositeToolManager_MultipleStateProviders(t *testing.T) {
+	t.Parallel()
 	mgr1 := &mockStatefulToolManager{
 		mockToolManager:   newMockToolManager("WebFetch"),
 		mockStateProvider: &mockStateProvider{state: "Web cache: https://example.com (5s ago)"},
@@ -166,6 +170,7 @@ func TestCompositeToolManager_MultipleStateProviders(t *testing.T) {
 }
 
 func TestCompositeToolManager_CallToolUnaffectedByState(t *testing.T) {
+	t.Parallel()
 	mgr := &mockStatefulToolManager{
 		mockToolManager:   newMockToolManager("WebFetch"),
 		mockStateProvider: &mockStateProvider{state: "Web cache: https://test.com (10s ago)"},

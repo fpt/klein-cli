@@ -12,9 +12,9 @@ import (
 // CompositeToolManager combines multiple tool managers into one.
 // It also implements domain.ToolStateProvider by aggregating state from child managers.
 type CompositeToolManager struct {
+	toolsMap       map[message.ToolName]message.Tool
 	managers       []domain.ToolManager
 	stateProviders []domain.ToolStateProvider
-	toolsMap       map[message.ToolName]message.Tool
 }
 
 // NewCompositeToolManager creates a new composite tool manager from multiple managers
@@ -68,7 +68,9 @@ func (c *CompositeToolManager) GetTools() map[message.ToolName]message.Tool {
 }
 
 // CallTool executes a tool from any of the managed tool managers
-func (c *CompositeToolManager) CallTool(ctx context.Context, name message.ToolName, args message.ToolArgumentValues) (message.ToolResult, error) {
+func (c *CompositeToolManager) CallTool(
+	ctx context.Context, name message.ToolName, args message.ToolArgumentValues,
+) (message.ToolResult, error) {
 	tool, exists := c.toolsMap[name]
 	if !exists {
 		return message.NewToolResultError(fmt.Sprintf("tool %s not found", name)), nil
@@ -84,6 +86,9 @@ func (c *CompositeToolManager) CallTool(ctx context.Context, name message.ToolNa
 }
 
 // RegisterTool is not supported on composite managers since tools should be registered on the underlying managers
-func (c *CompositeToolManager) RegisterTool(name message.ToolName, description message.ToolDescription, args []message.ToolArgument, handler func(ctx context.Context, args message.ToolArgumentValues) (message.ToolResult, error)) {
+func (c *CompositeToolManager) RegisterTool(
+	_ message.ToolName, _ message.ToolDescription, _ []message.ToolArgument,
+	_ func(ctx context.Context, args message.ToolArgumentValues) (message.ToolResult, error),
+) {
 	panic("RegisterTool not supported on CompositeToolManager - register on underlying managers instead")
 }

@@ -182,3 +182,31 @@ func TestCompositeToolManager_CallToolUnaffectedByState(t *testing.T) {
 		t.Errorf("expected 'ok', got: %s", result.Text)
 	}
 }
+
+// A model that nests its arguments under a "parameters" envelope should still
+// reach the handler with usable arguments — a malformed call that fails on a
+// missing required argument reads to the model like an empty result.
+func TestCompositeToolManager_UnwrapsParametersEnvelope(t *testing.T) {
+	t.Parallel()
+	var got message.ToolArgumentValues
+	mgr := newMockToolManager()
+	mgr.tools[catToolGrep] = &webTool{
+		name:      catToolGrep,
+		arguments: []message.ToolArgument{{Name: "pattern", Required: true}},
+		handler: func(_ context.Context, args message.ToolArgumentValues) (message.ToolResult, error) {
+			got = args
+			return message.NewToolResultText("ok"), nil
+		},
+	}
+
+	composite := NewCompositeToolManager(mgr)
+	wrapped := message.ToolArgumentValues{
+		"parameters": map[string]any{"pattern": "clear_all_selection"},
+	}
+	if _, err := composite.CallTool(context.Background(), catToolGrep, wrapped); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got["pattern"] != "clear_all_selection" {
+		t.Errorf("handler got %v, want pattern at the top level", got)
+	}
+}

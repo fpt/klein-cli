@@ -289,7 +289,7 @@ func (m *BashToolManager) executeCommand(ctx context.Context, command, descripti
 func (m *BashToolManager) handleRunGrep(ctx context.Context, args message.ToolArgumentValues) (message.ToolResult, error) {
 	pattern, ok := args["pattern"].(string)
 	if !ok {
-		return message.NewToolResultError("pattern parameter is required"), nil
+		return message.NewToolResultError(errGrepPatternRequired), nil
 	}
 
 	// Get path (default to current directory)

@@ -1,7 +1,7 @@
 ---
 name: claw
 description: Personal AI assistant for messaging platforms with memory
-allowed-tools: Read, Write, Edit, LS, Glob, Grep, Bash, TodoWrite, WebFetch, WebSearch, MarketQuote, MarketHistory, MarketNews, MemorySearch, MemoryGet, MemoryWrite, ScheduleCreate, ScheduleList, ScheduleDelete, PDFInfo, PDFRead, PDFExtractImages
+allowed-tools: Read, Write, Edit, LS, Glob, Grep, Bash, TodoWrite, WebFetch, WebSearch, MarketQuote, MarketHistory, MarketNews, MemorySearch, MemoryGet, MemoryWrite, ScheduleCreate, ScheduleList, ScheduleDelete
 argument-hint: "Chat message"
 user-invocable: false
 modes: [startup, subagent]

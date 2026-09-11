@@ -646,7 +646,7 @@ Test different skills to evaluate the skill-based system:
 1. **CODE Skill (Default)**: `go run klein/main.go "Create a new Go HTTP server with health check endpoint"`
 2. **CODE Skill (Tools)**: `go run klein/main.go "List all Go files and analyze their purposes in this project"`
 3. **cad role**: `go run klein/main.go -r cad "What does kicad-cli export gerbers need?"`
-4. **Role validation**: `go run klein/main.go -r pdf "x"` must fail — `pdf` is a skill, not a role
+4. **Role validation**: `go run klein/main.go -r report "x"` must fail — `report` is a skill, not a role
 
 ### Security Testing
 

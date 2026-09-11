@@ -71,7 +71,7 @@ func TestRolesAndSkillsAreDisjoint(t *testing.T) {
 		}
 	}
 	// The skills that stayed skills are reached per-turn, never with -r.
-	for _, want := range []string{"pdf", "github", "report", "market-narratives"} {
+	for _, want := range []string{"web", "github", "report", "market-narratives"} {
 		if _, ok := skills[want]; !ok {
 			t.Errorf("expected %q to remain a skill", want)
 		}
@@ -140,8 +140,8 @@ func TestLoadRolesAndSkills_HoldsBoth(t *testing.T) {
 	if r := defs[roleCAD]; r == nil || !r.IsRole() {
 		t.Error("expected the cad role in the combined registry")
 	}
-	if s := defs["pdf"]; s == nil || s.IsRole() {
-		t.Error("expected the pdf skill in the combined registry, not marked as a role")
+	if s := defs["web"]; s == nil || s.IsRole() {
+		t.Error("expected the web skill in the combined registry, not marked as a role")
 	}
 }
 
@@ -162,8 +162,8 @@ func TestBuildSkillCatalog_ExcludesRoles(t *testing.T) {
 			t.Errorf("catalog should not list the %q role:\n%s", role, catalog)
 		}
 	}
-	if !containsEntry(catalog, "pdf") {
-		t.Errorf("catalog should list the pdf skill:\n%s", catalog)
+	if !containsEntry(catalog, "web") {
+		t.Errorf("catalog should list the web skill:\n%s", catalog)
 	}
 }
 

@@ -136,7 +136,7 @@ is_backend_available() {
 # Tools that only exist inside klein's own ReAct loop: plan mode and sub-agent
 # spawning. A whole-agent backend (codex/appserver) runs its own loop and is never
 # handed these, so a testcase that requires one cannot pass there — it is not
-# applicable rather than a failure. (Web/PDF/etc. tools are intentionally NOT
+# applicable rather than a failure. (Web/market/etc. tools are intentionally NOT
 # listed: those testcases can still succeed via the backend's own capabilities.)
 KLEIN_LOOP_ONLY_TOOLS="EnterPlanMode ExitPlanMode spawn_agent Task"
 

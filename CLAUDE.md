@@ -860,7 +860,7 @@ Instructions:
 - `review` - AI code review (used by `klein review`)
 
 **Built-in Embedded Skills** (`internal/skill/skills/*/SKILL.md`) — task capabilities:
-`pdf`, `github`, `web`, `report`, `research-stock`, `market-narratives`, `create-skill`
+`github`, `web`, `report`, `research-stock`, `market-narratives`, `create-skill`
 
 **Built-in Embedded Agents** (`internal/plugin/agents/*.md`) — delegation targets:
 - `explore` - Read-only fan-out search; reports `file:line` references, cannot mutate

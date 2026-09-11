@@ -433,7 +433,7 @@ func (t *ehIngestURLTool) Name() message.ToolName    { return "ResearcherIngestU
 func (t *ehIngestURLTool) Description() message.ToolDescription {
 	return "Fetch a primary-source URL (HTML page OR PDF) and store it as a single event in the Researcher JSONL store. " +
 		"For HTML pages the title and a short summary are extracted automatically (og:title / meta description / main text); " +
-		"for PDFs only a pointer (URL + filename) is recorded — use PDFRead to extract the body on demand. " +
+		"for PDFs only a pointer (URL + filename) is recorded, not the body. " +
 		"Pass intake/role/trust_tier matching the source policy (e.g. corporate IR PDF → intake='corporate', role='signal', trust_tier='corporate'). " +
 		"Idempotent: re-ingesting the same URL is a no-op."
 }

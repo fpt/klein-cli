@@ -61,7 +61,7 @@ programs. That is not a stylistic preference — it is arithmetic. Every depende
 a shared package has, it imposes on everyone who imports it. Before the
 extraction, the app-server client lived beside klein's tool managers and pulled
 **151** non-stdlib packages, so a program wanting to spawn an agent process and
-run a turn also compiled pdfcpu, goquery, mcp-go and modernc sqlite. It now pulls
+run a turn also compiled goquery, mcp-go and modernc sqlite. It now pulls
 **4**. `TestPackageImportsNothingOfKleins` keeps it that way, because a boundary
 nothing checks is a boundary that drifts.
 
@@ -257,7 +257,7 @@ Every agent is built with **all** tool managers composed into one
 `CompositeToolManager`, then wrapped in a `DeferredToolManager`:
 
 - **Universal tools** (always present): filesystem (`Read`/`Write`/`Edit`/`LS`),
-  `Bash`, `Grep`/`Glob`, `TodoWrite`, task tools, web, PDF, market, skill.
+  `Bash`, `Grep`/`Glob`, `TodoWrite`, task tools, web, market, skill.
 - **claw specialized tools** (registered by the gateway/REPL/serve paths):
   `MemorySearch`/`MemoryGet`/`MemoryWrite`, `ScheduleCreate`/`List`/`Delete`,
   and any configured **MCP** servers.

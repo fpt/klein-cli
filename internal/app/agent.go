@@ -688,7 +688,7 @@ func buildAgentTools(opts AgentOptions, skills skill.DefinitionMap, memoryDir, t
 			WorkingDir:         workingDir,
 			AllowedDirectories: fsConfig.AllowedDirectories,
 		}),
-		tool.NewWebToolManager(), tool.NewPDFToolManager(workingDir), tool.NewMarketToolManager(),
+		tool.NewWebToolManager(), tool.NewMarketToolManager(),
 		tool.NewSkillToolManager(skills, workingDir), askQuestionManager, planToolManager,
 		taskAgentManager, agentRunManager, tool.NewResearcherToolManager(),
 	}

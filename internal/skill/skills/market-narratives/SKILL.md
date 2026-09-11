@@ -13,8 +13,6 @@ allowed-tools:
   - Write
   - WebFetch
   - WebSearch
-  - PDFRead
-  - PDFInfo
 argument-hint: "what the user wants to know about current market narratives"
 ---
 
@@ -67,9 +65,8 @@ filings, regulator PDFs. Two tools complement `ResearcherFetch` for these:
 
 - `ResearcherIngestURL(url, intake, role, trust_tier, title?, published_at?)`
   records ONE primary-source URL (HTML or PDF) as a single event. For PDFs
-  only a pointer is stored — use `PDFRead` later to extract the body if
-  needed. Use this for one-off filings like a JPX ETF document or a single
-  earnings PDF.
+  only a pointer (URL + filename) is stored, not the body. Use this for
+  one-off filings like a JPX ETF document or a single earnings PDF.
 - `ResearcherCrawlListing(url, source_name, intake, role, trust_tier, max_items?)`
   scans an HTML index page for dated anchor links and ingests each as an
   event. Use this for IR landing pages (Kioxia, JPX news index, etc.).

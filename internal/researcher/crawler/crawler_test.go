@@ -213,8 +213,8 @@ func TestFetchSingle_PDFRecordsPointerOnly(t *testing.T) {
 	if r.Title != "200A-j.pdf" {
 		t.Errorf("PDF title should default to basename, got %q", r.Title)
 	}
-	if !strings.Contains(r.Summary, "PDFRead") {
-		t.Errorf("summary should hint at PDFRead, got %q", r.Summary)
+	if !strings.Contains(r.Summary, "pointer only") {
+		t.Errorf("summary should say the body was not extracted, got %q", r.Summary)
 	}
 }
 

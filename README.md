@@ -4,7 +4,7 @@ A CLI-based AI coding agent supporting multiple LLM backends, using the ReAct (R
 
 A session opens in a **role** — the startup prompt that gives it its identity
 (`code` by default; also `cad`, `claw`, `review`). Within a session the agent
-reaches **skills**: task capabilities like `pdf`, `github` or `report`. The
+reaches **skills**: task capabilities like `web`, `github` or `report`. The
 default `code` role focuses on coding tasks with todo management, built-in
 tools, and user-configured tools via MCP client functionality.
 

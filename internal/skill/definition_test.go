@@ -138,7 +138,7 @@ func TestBuildSkillCatalog_ExcludesRolesAndAgents(t *testing.T) {
 	t.Parallel()
 
 	catalog := BuildSkillCatalog(DefinitionMap{
-		nameSkill: {Name: nameSkill, Description: "read pdfs", Kind: KindSkill},
+		nameSkill: {Name: nameSkill, Description: "fetch web pages", Kind: KindSkill},
 		nameRole:  {Name: nameRole, Description: "coding role", Kind: KindRole},
 		nameAgent: {Name: nameAgent, Description: "search agent", Kind: KindAgent},
 	})

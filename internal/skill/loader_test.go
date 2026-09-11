@@ -100,8 +100,8 @@ Project content.
 	}
 
 	// Should have built-in skills + project skill
-	if _, ok := skills["pdf"]; !ok {
-		t.Error("expected built-in 'pdf' skill")
+	if _, ok := skills["web"]; !ok {
+		t.Error("expected built-in 'web' skill")
 	}
 	if s, ok := skills["my-skill"]; !ok {
 		t.Error("expected project 'my-skill' skill")
@@ -120,8 +120,8 @@ func TestLoadSkills_EmptyDir(t *testing.T) {
 		t.Fatalf("failed to load skills: %v", err)
 	}
 	// Should still have built-in skills
-	if _, ok := skills["pdf"]; !ok {
-		t.Error("expected built-in 'pdf' skill even with empty dir")
+	if _, ok := skills["web"]; !ok {
+		t.Error("expected built-in 'web' skill even with empty dir")
 	}
 }
 

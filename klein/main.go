@@ -40,7 +40,7 @@ const defaultAgent = "code"
 // (LLM client, MCP servers) happens.
 //
 // Naming a skill is the mistake worth catching: skills and roles share a
-// registry and a prompt format, so "klein -r pdf" would otherwise start
+// registry and a prompt format, so "klein -r report" would otherwise start
 // perfectly happily on a prompt that was never meant to open a session.
 func validateRole(name, workingDir string) error {
 	defs, err := loadAllDefinitions(workingDir)

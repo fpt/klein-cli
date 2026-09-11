@@ -62,6 +62,6 @@ note that the new skill loads on the next session (in the gateway: after
 Filesystem: `Read`, `Write`, `Edit`, `LS`, `Glob`, `Grep` · Shell: `Bash` ·
 Todos: `TodoWrite` · Web: `WebFetch`, `WebSearch` · Market: `MarketQuote`,
 `MarketHistory`, `MarketNews` · Memory: `MemorySearch`, `MemoryGet`,
-`MemoryWrite` · PDF: `PDFInfo`, `PDFRead` · plus any MCP tools in use.
+`MemoryWrite` · plus any MCP tools in use.
 
 $ARGUMENTS

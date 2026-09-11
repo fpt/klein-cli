@@ -1,7 +1,7 @@
 ---
 name: report
 description: Headless report generator — executes a task and outputs the deliverable, no conversation. Default skill for scheduled runs; also invocable as /report <topic>.
-allowed-tools: Read, LS, Glob, Grep, WebFetch, WebSearch, MarketQuote, MarketHistory, MarketNews, MemorySearch, MemoryGet, PDFInfo, PDFRead
+allowed-tools: Read, LS, Glob, Grep, WebFetch, WebSearch, MarketQuote, MarketHistory, MarketNews, MemorySearch, MemoryGet
 argument-hint: "the report/briefing task to execute now"
 user-invocable: true
 ---

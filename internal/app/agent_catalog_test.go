@@ -22,7 +22,7 @@ const (
 	catToolGrep  = "Grep"
 	catToolGlob  = "Glob"
 	catNameRole  = "code"
-	catNameSkill = "pdf"
+	catNameSkill = "web"
 	catNameAgent = nameExplore
 	nameWidened  = "widened-role"
 )
@@ -335,7 +335,7 @@ func TestAgentCatalog_ExcludesRolesAndSkills(t *testing.T) {
 			Modes: []skill.Mode{skill.ModeStartup},
 		},
 		catNameSkill: {
-			Name: catNameSkill, Description: "pdf skill", Kind: skill.KindSkill,
+			Name: catNameSkill, Description: "web skill", Kind: skill.KindSkill,
 			Modes: []skill.Mode{skill.ModeInline},
 		},
 		catNameAgent: {

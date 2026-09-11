@@ -722,7 +722,7 @@ message with `/<skill>`, and `schedules[].skill` picks one for a scheduled turn.
 | | Role | Skill |
 |---|---|---|
 | File | `roles/{name}/ROLE.md` | `skills/{name}/SKILL.md` |
-| Built-in | `code`, `cad`, `claw`, `review` | `pdf`, `github`, `web`, `report`, `research-stock`, `market-narratives`, `create-skill` |
+| Built-in | `code`, `cad`, `claw`, `review` | `github`, `web`, `report`, `research-stock`, `market-narratives`, `create-skill` |
 | Chosen | Once, at startup | Any time, per turn |
 | Selected by | `-r`, `klein claw`, `klein review` | `ReadSkill`, `/<skill>`, `schedules[].skill` |
 | Listed in `/list` | No | Yes |
@@ -731,8 +731,8 @@ Passing a skill to `-r` is an error, since a skill was never written to open a
 session:
 
 ```
-$ klein -r pdf
-Error: "pdf" is a skill, not a role — roles start a session, skills are used
+$ klein -r report
+Error: "report" is a skill, not a role — roles start a session, skills are used
 within one (roles: cad, claw, code, review)
 ```
 

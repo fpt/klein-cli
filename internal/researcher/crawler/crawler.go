@@ -4,8 +4,8 @@
 //
 //   - Single documents (a press release PDF, an IR PDF, a regulator filing)
 //     via FetchSingle. The crawler stores only a pointer (URL + title +
-//     short summary) into the event store; full PDF body extraction stays
-//     out-of-band and is handled by klein's existing PDFRead tool when an
+//     short summary) into the event store; full PDF body extraction is not
+//     performed — only the URL is recorded, to be opened out-of-band when an
 //     agent decides to dig in.
 //
 //   - Index/listing pages (corporate IR landing pages, regulator news
@@ -63,7 +63,7 @@ type ListingItem struct {
 
 // FetchSingle GETs the URL, sniffs the content type, and returns a Result
 // suitable for wrapping as a model.Event. For PDFs only metadata + URL are
-// captured — the agent uses PDFRead to read the body.
+// captured; the body is not extracted.
 func FetchSingle(ctx context.Context, target string) (*Result, error) {
 	body, ct, finalURL, err := fetch(ctx, target)
 	if err != nil {
@@ -86,10 +86,10 @@ func FetchSingle(ctx context.Context, target string) (*Result, error) {
 		}
 	case "pdf":
 		// We deliberately do not extract PDF text here — it bloats the
-		// event store and klein's PDFRead/PDFInfo tools already cover
-		// on-demand inspection. The Title is derived from the filename.
+		// event store. Only the pointer is recorded, leaving the document
+		// for on-demand inspection. The Title is derived from the filename.
 		out.Title = pdfTitleFromURL(finalURL)
-		out.Summary = fmt.Sprintf("PDF document at %s — use PDFRead to extract text.", finalURL)
+		out.Summary = fmt.Sprintf("PDF document at %s — pointer only; body not extracted.", finalURL)
 	default:
 		out.Title = finalURL
 		out.Summary = strings.TrimSpace(string(body))

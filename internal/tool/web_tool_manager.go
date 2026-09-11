@@ -12,8 +12,6 @@ import (
 	"io"
 	"net/http"
 	"net/url"
-	"os"
-	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -132,7 +130,8 @@ func (m *WebToolManager) fetchAndParse(ctx context.Context, urlStr string) (*goq
 	// Reject non-text content types (images are handled separately in handleFetchWeb)
 	ct := resp.Header.Get("Content-Type")
 	if ct != "" && !strings.HasPrefix(ct, "text/") && !strings.Contains(ct, "html") && !strings.Contains(ct, "xml") && !strings.Contains(ct, "json") {
-		return nil, nil, fmt.Errorf("unsupported content type %q — WebFetch only handles HTML/text pages directly; binary content (PDF, images) is handled automatically by URL or content type detection", ct)
+		return nil, nil, fmt.Errorf("unsupported content type %q — WebFetch only handles HTML/text pages "+
+			"directly; images are handled automatically by URL or content type detection", ct)
 	}
 
 	doc, err := goquery.NewDocumentFromReader(resp.Body)
@@ -253,70 +252,6 @@ func isImageURL(urlStr string) bool {
 	return false
 }
 
-// isPDFURL checks if a URL likely points to a PDF based on file extension.
-func isPDFURL(urlStr string) bool {
-	lower := strings.ToLower(urlStr)
-	if idx := strings.Index(lower, "?"); idx > 0 {
-		return strings.HasSuffix(lower[:idx], ".pdf")
-	}
-	return strings.HasSuffix(lower, ".pdf")
-}
-
-// fetchPDF downloads a PDF from a URL and saves it to a temporary file.
-// Returns the local file path where the PDF was saved.
-func (m *WebToolManager) fetchPDF(ctx context.Context, urlStr string) (string, int, error) {
-	client := &http.Client{Timeout: 60 * time.Second}
-	req, err := http.NewRequestWithContext(ctx, "GET", urlStr, nil)
-	if err != nil {
-		return "", 0, fmt.Errorf("failed to create request: %v", err)
-	}
-	req.Header.Set("User-Agent", "Mozilla/5.0 (Compatible Web Fetcher Bot)")
-
-	resp, err := client.Do(req)
-	if err != nil {
-		return "", 0, fmt.Errorf("failed to fetch PDF: %v", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		return "", 0, fmt.Errorf("HTTP error %d: %s", resp.StatusCode, resp.Status)
-	}
-
-	const maxPDFBytes = 50 * 1024 * 1024 // 50MB limit
-	data, err := io.ReadAll(io.LimitReader(resp.Body, maxPDFBytes+1))
-	if err != nil {
-		return "", 0, fmt.Errorf("failed to read PDF: %v", err)
-	}
-	if len(data) > maxPDFBytes {
-		return "", 0, fmt.Errorf("PDF exceeds %dMB size limit", maxPDFBytes/1024/1024)
-	}
-
-	// Extract filename from URL for a meaningful temp file name
-	parsedURL, _ := url.Parse(urlStr)
-	baseName := "download.pdf"
-	if parsedURL != nil {
-		if name := filepath.Base(parsedURL.Path); name != "" && name != "." && name != "/" {
-			baseName = name
-		}
-		if !strings.HasSuffix(strings.ToLower(baseName), ".pdf") {
-			baseName += ".pdf"
-		}
-	}
-
-	tmpFile, err := os.CreateTemp("", "klein-pdf-*-"+baseName)
-	if err != nil {
-		return "", 0, fmt.Errorf("failed to create temp file: %v", err)
-	}
-	defer tmpFile.Close()
-
-	if _, err := tmpFile.Write(data); err != nil {
-		os.Remove(tmpFile.Name())
-		return "", 0, fmt.Errorf("failed to write temp file: %v", err)
-	}
-
-	return tmpFile.Name(), len(data), nil
-}
-
 // handleFetchWeb fetches a webpage. Default mode returns dense block summaries.
 // If the URL points to an image, downloads it and returns as base64 for vision analysis.
 func (m *WebToolManager) handleFetchWeb(ctx context.Context, args message.ToolArgumentValues) (message.ToolResult, error) {
@@ -328,16 +263,6 @@ func (m *WebToolManager) handleFetchWeb(ctx context.Context, args message.ToolAr
 	mode, _ := args["mode"].(string)
 	if mode == "" {
 		mode = "blocks"
-	}
-
-	// If URL looks like a PDF, download to temp file for PDFRead/PDFInfo tools
-	if isPDFURL(urlStr) {
-		filePath, size, err := m.fetchPDF(ctx, urlStr)
-		if err != nil {
-			return message.NewToolResultError(fmt.Sprintf("failed to download PDF: %v", err)), nil
-		}
-		desc := fmt.Sprintf("PDF downloaded from %s (%dKB) and saved to: %s\nUse PDFInfo and PDFRead tools with this file path to extract content.", urlStr, size/1024, filePath)
-		return message.NewToolResultText(desc), nil
 	}
 
 	// If URL looks like an image, try to download it for vision analysis
@@ -355,15 +280,6 @@ func (m *WebToolManager) handleFetchWeb(ctx context.Context, args message.ToolAr
 		errMsg := err.Error()
 		// If fetchAndParse failed due to content type, check what kind
 		if strings.Contains(errMsg, "unsupported content type") {
-			// PDF content type — download to temp file
-			if strings.Contains(errMsg, "application/pdf") {
-				filePath, size, pdfErr := m.fetchPDF(ctx, urlStr)
-				if pdfErr != nil {
-					return message.NewToolResultError(fmt.Sprintf("failed to download PDF: %v", pdfErr)), nil
-				}
-				desc := fmt.Sprintf("PDF downloaded from %s (%dKB) and saved to: %s\nUse PDFInfo and PDFRead tools with this file path to extract content.", urlStr, size/1024, filePath)
-				return message.NewToolResultText(desc), nil
-			}
 			// Image content type — download for vision analysis
 			if strings.Contains(errMsg, "image/") {
 				b64, ct, size, imgErr := m.fetchImage(ctx, urlStr)

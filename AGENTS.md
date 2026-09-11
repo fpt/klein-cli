@@ -482,7 +482,7 @@ the gateway's `/<skill>`, or `schedules[].skill`. Passing a skill to `-r` is an 
 - `review` - AI code review (used by `klein review`)
 
 **Built-in Embedded Skills** (`internal/skill/skills/*/SKILL.md`):
-`pdf`, `github`, `web`, `report`, `research-stock`, `market-narratives`, `create-skill`
+`github`, `web`, `report`, `research-stock`, `market-narratives`, `create-skill`
 
 **Custom Roles and Skills:**
 Both extend or override the built-ins from well-known directories:

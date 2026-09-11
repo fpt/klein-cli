@@ -11,7 +11,6 @@ import (
 var (
 	reHTTPURL = regexp.MustCompile(`https?://\S+`)
 	reGitHub  = regexp.MustCompile(`https?://github\.com/\S+`)
-	rePDFExt  = regexp.MustCompile(`(?i)\b\S+\.pdf\b`)
 )
 
 // routerRule maps a prompt-matching predicate to a tool usage hint.
@@ -56,16 +55,6 @@ func defaultRules() []routerRule {
 			hint: "The prompt contains a URL. " +
 				"Use WebFetch to retrieve the page as markdown text. " +
 				"If the intent is to search rather than fetch a specific page, use WebSearch instead.",
-		},
-		{
-			// PDF file reference: steer away from Read
-			match: func(p string) bool {
-				lower := strings.ToLower(p)
-				return rePDFExt.MatchString(p) || strings.Contains(lower, "pdf file") || strings.Contains(lower, "pdf document")
-			},
-			hint: "The prompt references a PDF. " +
-				"Use PDFInfo to inspect metadata and PDFRead to extract text content. " +
-				"Do not use Read on PDF files — it returns binary data.",
 		},
 	}
 }

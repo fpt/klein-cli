@@ -44,8 +44,8 @@ const defaultRole = "code"
 // Naming a skill is the mistake worth catching: skills and roles share a
 // registry and a prompt format, so "klein -r report" would otherwise start
 // perfectly happily on a prompt that was never meant to open a session.
-func validateRole(name, workingDir string) error {
-	defs, err := loadAllDefinitions(workingDir)
+func validateRole(name, workingDir string, skillDirs []string) error {
+	defs, err := loadAllDefinitions(workingDir, skillDirs)
 	if err != nil {
 		return err
 	}
@@ -65,8 +65,8 @@ func validateRole(name, workingDir string) error {
 // loadAllDefinitions loads roles, skills, and agents into one map, matching
 // what the running agent resolves against. Validation has to see all three now
 // that any of them may declare startup mode.
-func loadAllDefinitions(workingDir string) (skill.DefinitionMap, error) {
-	defs, err := skill.LoadRolesAndSkills(workingDir)
+func loadAllDefinitions(workingDir string, skillDirs []string) (skill.DefinitionMap, error) {
+	defs, err := skill.LoadRolesAndSkills(workingDir, skillDirs...)
 	if err != nil {
 		return nil, fmt.Errorf("failed to load roles/skills: %w", err)
 	}
@@ -124,6 +124,8 @@ func printUsage() {
 	fmt.Println("  klein -l                                 # Show conversation history")
 	fmt.Println("  klein --json-schema '{\"type\":\"object\",...}' \"...\"  # Structured output (inline schema)")
 	fmt.Println("  klein --json-schema schema.json \"...\"               # Structured output (schema file)")
+	fmt.Println("  klein --skills ./myskills                # Load extra SKILL.md definitions")
+	fmt.Println("  klein --no-agents-md                     # Ignore the repo's AGENTS.md / CLAUDE.md")
 	fmt.Println()
 }
 
@@ -172,6 +174,11 @@ func main() {
 	var schedulesFile = flag.String("schedules-file", "", "JSON file backing the ScheduleCreate/List/Delete tools (serve mode; defaults to <base_dir>/schedules.json)")
 	var help = flag.Bool("h", false, "Show this help message")
 	var helpLong = flag.Bool("help", false, "Show this help message")
+	noAgentsMD := flag.Bool("no-agents-md", false,
+		"Do not inject AGENTS.md or CLAUDE.md from the working directory as project context")
+	var skillDirs stringSliceFlag
+	flag.Var(&skillDirs, "skills",
+		"Directory of <name>/SKILL.md definitions to load, above the built-in and .claude/.agents ladder (repeatable).")
 	var pluginPaths stringSliceFlag
 	flag.Var(&pluginPaths, "plugin", "Path to a Claude Code plugin directory (repeatable). Loads commands/, agents/, skills/, and .mcp.json from that plugin.")
 	var pluginMarketplace = flag.String("plugin-marketplace", "", "Path to a directory containing .claude-plugin/marketplace.json — every plugin listed there is loaded.")
@@ -273,10 +280,20 @@ func main() {
 		workingDirectory = "."
 	}
 
+	// A --skills path is explicit user intent, so a typo is an error rather than
+	// a directory that silently contributes nothing. The conventional ladder
+	// keeps skipping its own missing entries, which is what makes it a ladder.
+	for _, d := range skillDirs {
+		if info, statErr := os.Stat(d); statErr != nil || !info.IsDir() {
+			fmt.Fprintf(os.Stderr, "Error: --skills %s is not a directory\n", d)
+			os.Exit(1)
+		}
+	}
+
 	// Roles are resolved against the working directory, so this has to wait for
 	// it — but it still runs before the LLM client and MCP servers are built, so
 	// a typo costs nothing.
-	if roleErr := validateRole(resolvedRole, workingDirectory); roleErr != nil {
+	if roleErr := validateRole(resolvedRole, workingDirectory, skillDirs); roleErr != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", roleErr)
 		os.Exit(1)
 	}
@@ -432,6 +449,8 @@ func main() {
 		ContinueSession:    resolvedContinue,
 		LLMClient:          llmClient,
 		AgentBackend:       agentbackend.Select(settings, logger, backendOpts),
+		SkipContextFile:    *noAgentsMD,
+		SkillDirs:          skillDirs,
 	})
 	if err != nil {
 		logger.Error("Failed to create agent", "error", err)

@@ -65,6 +65,7 @@ type Agent struct {
 	// connection having dropped. It sits with the other bools, rather than
 	// beside the field it qualifies, so it packs into their word.
 	codexThreadIsOurs    bool
+	skipContextFile      bool                // --no-agents-md: never inject AGENTS.md/CLAUDE.md
 	sessionRules         *permission.RuleSet // in-memory allow/deny rules created during this session
 	permRules            *permission.RuleSet // persistent allow/deny rules from JSON files
 	allowedToolsOverride []string            // CLI override for skill's allowed-tools (guarded by sandboxMu)
@@ -474,6 +475,11 @@ type AgentOptions struct {
 
 	WorkingDir string
 
+	// SkillDirs are extra directories scanned for <name>/SKILL.md, above the
+	// conventional ladder (`klein --skills <dir>`). Skills only — see
+	// skill.LoadRolesAndSkills.
+	SkillDirs []string
+
 	SkipSessionRestore bool
 	IsInteractiveMode  bool
 
@@ -481,6 +487,11 @@ type AgentOptions struct {
 	// starting a fresh one (`klein --continue`). Interactive mode only; a fresh
 	// session is the default so a plain `klein` never inherits stale context.
 	ContinueSession bool
+
+	// SkipContextFile suppresses the AGENTS.md / CLAUDE.md injection a fresh
+	// interactive session normally performs (`klein --no-agents-md`), for when
+	// the repo's own instructions are not wanted in the conversation.
+	SkipContextFile bool
 }
 
 // resolveLLMClient returns opts.LLMClient when set, otherwise builds one from the
@@ -763,7 +774,7 @@ func NewAgentWithOptions(ctx context.Context, opts AgentOptions) (*Agent, func()
 	// Load roles and skills (embedded + filesystem) before creating tool
 	// managers. Both land in one registry: Invoke resolves a name without caring
 	// whether it is the session's startup role or a skill reached mid-session.
-	skills, err := skill.LoadRolesAndSkills(workingDir)
+	skills, err := skill.LoadRolesAndSkills(workingDir, opts.SkillDirs...)
 	if err != nil {
 		logger.Warn("Failed to load roles/skills, using empty fallback", "error", err)
 		skills = make(skill.DefinitionMap)
@@ -817,6 +828,7 @@ func NewAgentWithOptions(ctx context.Context, opts AgentOptions) (*Agent, func()
 		memoryDir:          memoryDir,
 		toolResultsDir:     toolResultsDir,
 		memoryManager:      findMemoryManager(opts.MCPToolManagers),
+		skipContextFile:    opts.SkipContextFile,
 	}
 
 	cleanup, err = a.wireToolsAndBackend(ctx, tools, opts.AgentBackend)
@@ -1501,8 +1513,12 @@ func (a *Agent) ImportClaudeHistory(jsonlPath string) (int, error) {
 }
 
 // InjectContextFile reads AGENTS.md or CLAUDE.md from the working directory
-// and prepends it as a system message. Does nothing when neither file exists.
+// and prepends it as a system message. Does nothing when neither file exists,
+// or when the session was opened with --no-agents-md.
 func (a *Agent) InjectContextFile() {
+	if a.skipContextFile {
+		return
+	}
 	content, err := claude.FindContextFile(a.workingDir)
 	if err != nil || content == "" {
 		return

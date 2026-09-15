@@ -30,6 +30,8 @@ go run klein/main.go [flags] [prompt]
 | `--workdir` | string | `"."` | Working directory for all file operations |
 | `--settings` | string | `""` | Path to a settings file (see [§2](#2-settings-toml)). Parsed as TOML whatever the file is named — the extension carries no meaning, and a `.json` passed here fails to parse rather than falling back. |
 | `--allowed-tools` | string | `""` | Comma-separated tool names, overrides skill's `allowed-tools` |
+| `--skills` | string | — | Directory of `<name>/SKILL.md` definitions to load, above every entry in the ladder of [§4](#4-roles-and-skills). Repeatable; later flags win. Skills only — a role cannot be introduced this way. A path that is not a directory is an error, not a silent no-op |
+| `--no-agents-md` | bool | `false` | Do not inject the working directory's `AGENTS.md` (or `CLAUDE.md`) as project context. Interactive mode only — one-shot mode never injects it |
 | `-f` | string | `""` | File of multi-turn prompts separated by `---` |
 | `-v`, `--verbose` | bool | `false` | Enable debug-level logging |
 | `-c`, `--continue` | bool | `false` | Resume this project's most recently used session. Without it, interactive mode starts a **fresh** session (see [§7](#7-user-data-directories)) |
@@ -744,6 +746,12 @@ Both kinds are searched in the same priority order (last wins), with `roles` or
 3. `.claude/{roles,skills}/` → `.agents/…` (project — highest)
 
 So a project `.claude/roles/code/ROLE.md` replaces the built-in `code` role.
+
+`--skills <dir>` appends to this ladder above rung 3, so a definition from an
+explicitly named directory beats every convention-based one. It is repeatable,
+and later flags win over earlier ones. It carries **skills only**: a role gives a
+session its identity, which a directory named in passing on the command line
+should not be able to supply.
 
 ### Frontmatter fields
 

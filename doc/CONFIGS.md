@@ -26,10 +26,12 @@ go run klein/main.go [flags] [prompt]
 |------|------|---------|-------------|
 | `-b`, `--backend` | string | `""` | LLM backend: `openai`, `anthropic`, `gemini`, `codex`, `appserver` |
 | `-m`, `--model` | string | `""` | Model name (overrides settings file) |
-| `-r`, `--role` | string | `"code"` | Role (startup prompt) to open the session with: `code`, `cad`, `claw`, `review`. Naming a *skill* is rejected — see [§4](#4-roles-and-skills) |
+| `-r`, `--role` | string | `"code"` | Role (startup prompt) to open the session with: `code`, `cad`, `claw`, `review`, or any startup-capable agent (`explore`, `plan`, `general-purpose`). Naming a *skill* is rejected — see [§4](#4-roles-and-skills) |
 | `--workdir` | string | `"."` | Working directory for all file operations |
 | `--settings` | string | `""` | Path to a settings file (see [§2](#2-settings-toml)). Parsed as TOML whatever the file is named — the extension carries no meaning, and a `.json` passed here fails to parse rather than falling back. |
 | `--allowed-tools` | string | `""` | Comma-separated tool names, overrides skill's `allowed-tools` |
+| `--skills` | string | — | Directory of `<name>/SKILL.md` definitions to load, above every entry in the ladder of [§4](#4-roles-and-skills). Repeatable; later flags win. Skills only — a role cannot be introduced this way. A path that is not a directory is an error, not a silent no-op |
+| `--no-context` | bool | `false` | Open the session with no inherited context: no `AGENTS.md`/`CLAUDE.md` from the working directory, no Claude Code history import from `.claude`, no project `MEMORY.md` from `~/.klein`. Session restore is separate — that is `--continue`, already off by default |
 | `-f` | string | `""` | File of multi-turn prompts separated by `---` |
 | `-v`, `--verbose` | bool | `false` | Enable debug-level logging |
 | `-c`, `--continue` | bool | `false` | Resume this project's most recently used session. Without it, interactive mode starts a **fresh** session (see [§7](#7-user-data-directories)) |
@@ -744,6 +746,12 @@ Both kinds are searched in the same priority order (last wins), with `roles` or
 3. `.claude/{roles,skills}/` → `.agents/…` (project — highest)
 
 So a project `.claude/roles/code/ROLE.md` replaces the built-in `code` role.
+
+`--skills <dir>` appends to this ladder above rung 3, so a definition from an
+explicitly named directory beats every convention-based one. It is repeatable,
+and later flags win over earlier ones. It carries **skills only**: a role gives a
+session its identity, which a directory named in passing on the command line
+should not be able to supply.
 
 ### Frontmatter fields
 

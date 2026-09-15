@@ -31,8 +31,12 @@ const (
 // In other words, project-local skills override personal skills, which override
 // the embedded built-ins. ~/.klein/skills/ is klein's own personal-skill
 // directory (where the create-skill skill writes new skills).
-func LoadSkills(workingDir string) (DefinitionMap, error) {
-	return loadDefinitions(workingDir, skillsDirName, skillFileName, false)
+// extraDirs are additional skill directories named on the command line
+// (`--skills`). They sit above every entry in the ladder because an explicit
+// path is a stronger statement of intent than any convention, and later flags
+// beat earlier ones so `--skills a --skills b` reads left-to-right.
+func LoadSkills(workingDir string, extraDirs ...string) (DefinitionMap, error) {
+	return loadDefinitions(workingDir, skillsDirName, skillFileName, false, extraDirs)
 }
 
 // LoadRoles loads all roles — the startup prompts a session can open with —
@@ -40,15 +44,19 @@ func LoadSkills(workingDir string) (DefinitionMap, error) {
 // "skills", so a project or personal ROLE.md overrides a built-in of the same
 // name exactly as it would for a skill.
 func LoadRoles(workingDir string) (DefinitionMap, error) {
-	return loadDefinitions(workingDir, rolesDirName, roleFileName, true)
+	return loadDefinitions(workingDir, rolesDirName, roleFileName, true, nil)
 }
 
 // LoadRolesAndSkills returns one registry holding both, which is what the agent
 // resolves names against. Roles win a name collision: a role has to be
 // selectable by its own name, and shadowing it with a same-named skill would
 // make that startup prompt unreachable.
-func LoadRolesAndSkills(workingDir string) (DefinitionMap, error) {
-	skills, err := LoadSkills(workingDir)
+// extraSkillDirs are passed through to LoadSkills. They carry skills only:
+// `--skills` names a directory of SKILL.md definitions, and a role — which
+// gives a session its identity — is not something a stray directory on the
+// command line should be able to introduce.
+func LoadRolesAndSkills(workingDir string, extraSkillDirs ...string) (DefinitionMap, error) {
+	skills, err := LoadSkills(workingDir, extraSkillDirs...)
 	if err != nil {
 		return nil, err
 	}
@@ -73,13 +81,18 @@ func kindFor(isRole bool) Kind {
 
 // loadDefinitions walks the embedded built-ins and then the five filesystem
 // directories, highest priority winning.
-func loadDefinitions(workingDir, dirName, fileName string, isRole bool) (DefinitionMap, error) {
+func loadDefinitions(workingDir, dirName, fileName string, isRole bool, extraDirs []string) (DefinitionMap, error) {
 	result, err := loadBuiltins(dirName, fileName, isRole)
 	if err != nil {
 		return nil, fmt.Errorf("failed to load built-in %s: %w", dirName, err)
 	}
 
-	for _, d := range searchDirs(workingDir, dirName) {
+	dirs := searchDirs(workingDir, dirName)
+	for i, extra := range extraDirs {
+		dirs = append(dirs, searchDir{extra, extraDirPriority + i})
+	}
+
+	for _, d := range dirs {
 		if info, err := os.Stat(d.path); err != nil || !info.IsDir() {
 			continue
 		}
@@ -96,6 +109,10 @@ func loadDefinitions(workingDir, dirName, fileName string, isRole bool) (Definit
 
 	return result, nil
 }
+
+// extraDirPriority is where command-line `--skills` directories start, above
+// the highest convention-based entry in searchDirs (5).
+const extraDirPriority = 6
 
 // searchDir is one directory in the priority ladder; a larger priority wins a
 // name collision.

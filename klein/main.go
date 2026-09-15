@@ -33,17 +33,19 @@ type stringSliceFlag []string
 func (s *stringSliceFlag) String() string     { return strings.Join(*s, ", ") }
 func (s *stringSliceFlag) Set(v string) error { *s = append(*s, v); return nil }
 
-// defaultAgent is the definition a session opens with when none is named.
-const defaultAgent = "code"
+// defaultRole is the definition a session opens with when none is named.
+const defaultRole = "code"
 
-// validateRole rejects a -r that is not a role, before any expensive setup
-// (LLM client, MCP servers) happens.
+// validateRole rejects a -r that cannot open a session, before any expensive
+// setup (LLM client, MCP servers) happens. Membership is by declared mode, not
+// by file kind, so an agent that permits startup — explore, plan — passes here
+// too; "role" is the name the flag goes by, not a restriction to ROLE.md.
 //
 // Naming a skill is the mistake worth catching: skills and roles share a
 // registry and a prompt format, so "klein -r report" would otherwise start
 // perfectly happily on a prompt that was never meant to open a session.
-func validateRole(name, workingDir string) error {
-	defs, err := loadAllDefinitions(workingDir)
+func validateRole(name, workingDir string, skillDirs []string) error {
+	defs, err := loadAllDefinitions(workingDir, skillDirs)
 	if err != nil {
 		return err
 	}
@@ -56,15 +58,15 @@ func validateRole(name, workingDir string) error {
 			name, strings.Join(d.ModeNames(), ", "),
 			strings.Join(skill.NamesPermitting(defs, skill.ModeStartup), ", "))
 	}
-	return fmt.Errorf("unknown agent %q (startup: %s)",
+	return fmt.Errorf("unknown role %q (startup: %s)",
 		name, strings.Join(skill.NamesPermitting(defs, skill.ModeStartup), ", "))
 }
 
 // loadAllDefinitions loads roles, skills, and agents into one map, matching
 // what the running agent resolves against. Validation has to see all three now
 // that any of them may declare startup mode.
-func loadAllDefinitions(workingDir string) (skill.DefinitionMap, error) {
-	defs, err := skill.LoadRolesAndSkills(workingDir)
+func loadAllDefinitions(workingDir string, skillDirs []string) (skill.DefinitionMap, error) {
+	defs, err := skill.LoadRolesAndSkills(workingDir, skillDirs...)
 	if err != nil {
 		return nil, fmt.Errorf("failed to load roles/skills: %w", err)
 	}
@@ -103,6 +105,9 @@ func printUsage() {
 	fmt.Println("  claw                    Messaging assistant (used by `klein claw`)")
 	fmt.Println("  review                  AI code review (used by `klein review`)")
 	fmt.Println()
+	fmt.Println("-r also accepts an agent that permits startup mode (explore, plan,")
+	fmt.Println("general-purpose), which opens the session on that agent's prompt.")
+	fmt.Println()
 	fmt.Println("Roles and skills are loaded from:")
 	fmt.Println("  Built-in (embedded)     Bundled with the binary")
 	fmt.Println("  .claude/roles|skills/   Project-specific")
@@ -119,6 +124,8 @@ func printUsage() {
 	fmt.Println("  klein -l                                 # Show conversation history")
 	fmt.Println("  klein --json-schema '{\"type\":\"object\",...}' \"...\"  # Structured output (inline schema)")
 	fmt.Println("  klein --json-schema schema.json \"...\"               # Structured output (schema file)")
+	fmt.Println("  klein --skills ./myskills                # Load extra SKILL.md definitions")
+	fmt.Println("  klein --no-context                       # Start with no inherited context at all")
 	fmt.Println()
 }
 
@@ -144,17 +151,16 @@ func main() {
 	var effort = flag.String("effort", "", "Reasoning effort for reasoning-capable models (none|minimal|low|medium|high|xhigh; primarily OpenAI)")
 	var workdir = flag.String("workdir", "", "Working directory")
 	var settingsPath = flag.String("settings", "", "Path to settings file")
-	// Empty defaults, not defaultAgent: with a default on every alias every one
-	// of them is always "set", so the first-non-empty rule below could never see
-	// which the user actually passed. That is why --role was silently ignored
-	// whenever -r carried its default. defaultAgent is applied after resolution.
-	var agentFlag = flag.String("agent", "", "Agent to open the session with (its startup prompt)")
-	var roleFlag = flag.String("r", "", "Alias for --agent")
-	var roleFlagLong = flag.String("role", "", "Alias for --agent")
-	var showLog = flag.Bool("l", false, "Print conversation message history and exit")
-	var showLogLong = flag.Bool("log", false, "Print conversation message history and exit")
-	var continueSession = flag.Bool("c", false, "Resume this project's most recent session (default: start fresh)")
-	var continueSessionLong = flag.Bool("continue", false,
+	// Empty defaults, not defaultRole: with a default on both spellings each one
+	// is always "set", so the first-non-empty rule below could never see which
+	// the user actually passed — the bug that used to make --role a no-op
+	// whenever -r carried its default. defaultRole is applied after resolution.
+	roleFlag := flag.String("r", "", "Role to open the session with (its startup prompt)")
+	roleFlagLong := flag.String("role", "", "Alias for -r")
+	showLog := flag.Bool("l", false, "Print conversation message history and exit")
+	showLogLong := flag.Bool("log", false, "Print conversation message history and exit")
+	continueSession := flag.Bool("c", false, "Resume this project's most recent session (default: start fresh)")
+	continueSessionLong := flag.Bool("continue", false,
 		"Resume this project's most recent session (default: start fresh)")
 	var promptFile = flag.String("f", "", "File containing multi-turn prompts separated by '----' (no memory between turns)")
 	var verbose = flag.Bool("v", false, "Enable verbose logging (debug level)")
@@ -168,6 +174,11 @@ func main() {
 	var schedulesFile = flag.String("schedules-file", "", "JSON file backing the ScheduleCreate/List/Delete tools (serve mode; defaults to <base_dir>/schedules.json)")
 	var help = flag.Bool("h", false, "Show this help message")
 	var helpLong = flag.Bool("help", false, "Show this help message")
+	noContext := flag.Bool("no-context", false,
+		"Open the session with no inherited context: no AGENTS.md/CLAUDE.md, no .claude history import, no .klein memory")
+	var skillDirs stringSliceFlag
+	flag.Var(&skillDirs, "skills",
+		"Directory of <name>/SKILL.md definitions to load, above the built-in and .claude/.agents ladder (repeatable).")
 	var pluginPaths stringSliceFlag
 	flag.Var(&pluginPaths, "plugin", "Path to a Claude Code plugin directory (repeatable). Loads commands/, agents/, skills/, and .mcp.json from that plugin.")
 	var pluginMarketplace = flag.String("plugin-marketplace", "", "Path to a directory containing .claude-plugin/marketplace.json — every plugin listed there is loaded.")
@@ -191,9 +202,9 @@ func main() {
 	// Resolve long/short flag conflicts (prefer the one that was set)
 	resolvedBackend := resolveStringFlag(*backend, *backendLong)
 	resolvedModel := resolveStringFlag(*model, *modelLong)
-	resolvedRole := strings.ToLower(resolveStringFlag(*agentFlag, *roleFlag, *roleFlagLong))
+	resolvedRole := strings.ToLower(resolveStringFlag(*roleFlag, *roleFlagLong))
 	if resolvedRole == "" {
-		resolvedRole = defaultAgent
+		resolvedRole = defaultRole
 	}
 	resolvedShowLog := *showLog || *showLogLong
 	resolvedVerbose := *verbose || *verboseLong
@@ -269,10 +280,20 @@ func main() {
 		workingDirectory = "."
 	}
 
+	// A --skills path is explicit user intent, so a typo is an error rather than
+	// a directory that silently contributes nothing. The conventional ladder
+	// keeps skipping its own missing entries, which is what makes it a ladder.
+	for _, d := range skillDirs {
+		if info, statErr := os.Stat(d); statErr != nil || !info.IsDir() {
+			fmt.Fprintf(os.Stderr, "Error: --skills %s is not a directory\n", d)
+			os.Exit(1)
+		}
+	}
+
 	// Roles are resolved against the working directory, so this has to wait for
 	// it — but it still runs before the LLM client and MCP servers are built, so
 	// a typo costs nothing.
-	if roleErr := validateRole(resolvedRole, workingDirectory); roleErr != nil {
+	if roleErr := validateRole(resolvedRole, workingDirectory, skillDirs); roleErr != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", roleErr)
 		os.Exit(1)
 	}
@@ -428,6 +449,8 @@ func main() {
 		ContinueSession:    resolvedContinue,
 		LLMClient:          llmClient,
 		AgentBackend:       agentbackend.Select(settings, logger, backendOpts),
+		SkipContext:        *noContext,
+		SkillDirs:          skillDirs,
 	})
 	if err != nil {
 		logger.Error("Failed to create agent", "error", err)

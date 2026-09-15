@@ -65,6 +65,7 @@ type Agent struct {
 	// connection having dropped. It sits with the other bools, rather than
 	// beside the field it qualifies, so it packs into their word.
 	codexThreadIsOurs    bool
+	skipContext          bool                // --no-context: inherit no AGENTS.md, .claude history, or .klein memory
 	sessionRules         *permission.RuleSet // in-memory allow/deny rules created during this session
 	permRules            *permission.RuleSet // persistent allow/deny rules from JSON files
 	allowedToolsOverride []string            // CLI override for skill's allowed-tools (guarded by sandboxMu)
@@ -474,6 +475,11 @@ type AgentOptions struct {
 
 	WorkingDir string
 
+	// SkillDirs are extra directories scanned for <name>/SKILL.md, above the
+	// conventional ladder (`klein --skills <dir>`). Skills only — see
+	// skill.LoadRolesAndSkills.
+	SkillDirs []string
+
 	SkipSessionRestore bool
 	IsInteractiveMode  bool
 
@@ -481,6 +487,19 @@ type AgentOptions struct {
 	// starting a fresh one (`klein --continue`). Interactive mode only; a fresh
 	// session is the default so a plain `klein` never inherits stale context.
 	ContinueSession bool
+
+	// SkipContext opens the session with no inherited context at all
+	// (`klein --no-context`). It suppresses all three sources a fresh
+	// interactive session would otherwise pull in:
+	//
+	//   1. AGENTS.md / CLAUDE.md from the working directory (InjectContextFile)
+	//   2. the Claude Code history import offer from .claude
+	//      (offerClaudeHistoryImport)
+	//   3. this project's MEMORY.md under ~/.klein (buildMemorySystemPrompt)
+	//
+	// Session restore is NOT part of it: that is --continue's job, and it is
+	// already off by default.
+	SkipContext bool
 }
 
 // resolveLLMClient returns opts.LLMClient when set, otherwise builds one from the
@@ -763,7 +782,7 @@ func NewAgentWithOptions(ctx context.Context, opts AgentOptions) (*Agent, func()
 	// Load roles and skills (embedded + filesystem) before creating tool
 	// managers. Both land in one registry: Invoke resolves a name without caring
 	// whether it is the session's startup role or a skill reached mid-session.
-	skills, err := skill.LoadRolesAndSkills(workingDir)
+	skills, err := skill.LoadRolesAndSkills(workingDir, opts.SkillDirs...)
 	if err != nil {
 		logger.Warn("Failed to load roles/skills, using empty fallback", "error", err)
 		skills = make(skill.DefinitionMap)
@@ -817,6 +836,7 @@ func NewAgentWithOptions(ctx context.Context, opts AgentOptions) (*Agent, func()
 		memoryDir:          memoryDir,
 		toolResultsDir:     toolResultsDir,
 		memoryManager:      findMemoryManager(opts.MCPToolManagers),
+		skipContext:        opts.SkipContext,
 	}
 
 	cleanup, err = a.wireToolsAndBackend(ctx, tools, opts.AgentBackend)
@@ -1500,9 +1520,17 @@ func (a *Agent) ImportClaudeHistory(jsonlPath string) (int, error) {
 	return len(msgs), nil
 }
 
+// SkipsContext reports whether this session was opened with --no-context, so
+// callers outside the Agent (the REPL's Claude-history import) can honor it.
+func (a *Agent) SkipsContext() bool { return a.skipContext }
+
 // InjectContextFile reads AGENTS.md or CLAUDE.md from the working directory
-// and prepends it as a system message. Does nothing when neither file exists.
+// and prepends it as a system message. Does nothing when neither file exists,
+// or when the session was opened with --no-context.
 func (a *Agent) InjectContextFile() {
+	if a.skipContext {
+		return
+	}
 	content, err := claude.FindContextFile(a.workingDir)
 	if err != nil || content == "" {
 		return
@@ -1731,9 +1759,15 @@ func (a *Agent) recordRecentlyRead(path string) {
 
 // buildMemorySystemPrompt constructs the memory system prompt by reading the
 // current MEMORY.md index and composing it with instructions for all four
-// memory types. Returns "" when memoryDir is empty (non-interactive mode).
+// memory types. Returns "" when memoryDir is empty (non-interactive mode), or
+// under --no-context.
+//
+// --no-context drops the tool instructions along with the remembered content,
+// because the two are one prompt. That is the honest reading of the flag: a
+// session told to inherit nothing should not be told to go read what this
+// project remembered either.
 func (a *Agent) buildMemorySystemPrompt() string {
-	if a.memoryDir == "" {
+	if a.memoryDir == "" || a.skipContext {
 		return ""
 	}
 

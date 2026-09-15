@@ -26,7 +26,7 @@ go run klein/main.go [flags] [prompt]
 |------|------|---------|-------------|
 | `-b`, `--backend` | string | `""` | LLM backend: `openai`, `anthropic`, `gemini`, `codex`, `appserver` |
 | `-m`, `--model` | string | `""` | Model name (overrides settings file) |
-| `-r`, `--role` | string | `"code"` | Role (startup prompt) to open the session with: `code`, `cad`, `claw`, `review`. Naming a *skill* is rejected — see [§4](#4-roles-and-skills) |
+| `-r`, `--role` | string | `"code"` | Role (startup prompt) to open the session with: `code`, `cad`, `claw`, `review`, or any startup-capable agent (`explore`, `plan`, `general-purpose`). Naming a *skill* is rejected — see [§4](#4-roles-and-skills) |
 | `--workdir` | string | `"."` | Working directory for all file operations |
 | `--settings` | string | `""` | Path to a settings file (see [§2](#2-settings-toml)). Parsed as TOML whatever the file is named — the extension carries no meaning, and a `.json` passed here fails to parse rather than falling back. |
 | `--allowed-tools` | string | `""` | Comma-separated tool names, overrides skill's `allowed-tools` |

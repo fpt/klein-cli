@@ -9,7 +9,7 @@ This file provides guidance to AI agent when working with code in this repositor
 # Interactive mode (default)
 go run klein/main.go                         # Start interactive REPL
 go run klein/main.go -b anthropic            # Interactive with Anthropic
-go run klein/main.go --agent explore         # Open the session with the explore agent
+go run klein/main.go -r explore              # Open the session with the explore agent
 
 # One-shot mode
 go run klein/main.go "your requirements"     # Run with requirements
@@ -277,9 +277,11 @@ definition permitting `startup`; the `Task` tool accepts any permitting
 `subagent` (its listing is curated to agent-kind definitions, but a skill name
 works too); `ReadSkill` accepts any permitting `inline`.
 
-Selecting an agent: `--agent <name>` (aliases `-r`, `--role`) opens the session
-with it, and `/<name> [args]` in the REPL runs one turn with it without changing
-the session's own agent. Both accept anything permitting `startup`. Built-in
+Selecting what a session opens on: `-r <name>` (alias `--role`) opens the
+session with it, and `/<name> [args]` in the REPL runs one turn with it without
+changing the session's own choice. Both accept anything permitting `startup`,
+which includes startup-capable *agents* — `-r explore` is valid — so the flag's
+name is about the job, not about which directory the file came from. Built-in
 REPL commands (`/help`, `/clear`, …) win a name collision, so a definition
 cannot make them unreachable.
 

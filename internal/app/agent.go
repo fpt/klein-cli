@@ -65,7 +65,7 @@ type Agent struct {
 	// connection having dropped. It sits with the other bools, rather than
 	// beside the field it qualifies, so it packs into their word.
 	codexThreadIsOurs    bool
-	skipContextFile      bool                // --no-agents-md: never inject AGENTS.md/CLAUDE.md
+	skipContext          bool                // --no-context: inherit no AGENTS.md, .claude history, or .klein memory
 	sessionRules         *permission.RuleSet // in-memory allow/deny rules created during this session
 	permRules            *permission.RuleSet // persistent allow/deny rules from JSON files
 	allowedToolsOverride []string            // CLI override for skill's allowed-tools (guarded by sandboxMu)
@@ -488,10 +488,18 @@ type AgentOptions struct {
 	// session is the default so a plain `klein` never inherits stale context.
 	ContinueSession bool
 
-	// SkipContextFile suppresses the AGENTS.md / CLAUDE.md injection a fresh
-	// interactive session normally performs (`klein --no-agents-md`), for when
-	// the repo's own instructions are not wanted in the conversation.
-	SkipContextFile bool
+	// SkipContext opens the session with no inherited context at all
+	// (`klein --no-context`). It suppresses all three sources a fresh
+	// interactive session would otherwise pull in:
+	//
+	//   1. AGENTS.md / CLAUDE.md from the working directory (InjectContextFile)
+	//   2. the Claude Code history import offer from .claude
+	//      (offerClaudeHistoryImport)
+	//   3. this project's MEMORY.md under ~/.klein (buildMemorySystemPrompt)
+	//
+	// Session restore is NOT part of it: that is --continue's job, and it is
+	// already off by default.
+	SkipContext bool
 }
 
 // resolveLLMClient returns opts.LLMClient when set, otherwise builds one from the
@@ -828,7 +836,7 @@ func NewAgentWithOptions(ctx context.Context, opts AgentOptions) (*Agent, func()
 		memoryDir:          memoryDir,
 		toolResultsDir:     toolResultsDir,
 		memoryManager:      findMemoryManager(opts.MCPToolManagers),
-		skipContextFile:    opts.SkipContextFile,
+		skipContext:        opts.SkipContext,
 	}
 
 	cleanup, err = a.wireToolsAndBackend(ctx, tools, opts.AgentBackend)
@@ -1512,11 +1520,15 @@ func (a *Agent) ImportClaudeHistory(jsonlPath string) (int, error) {
 	return len(msgs), nil
 }
 
+// SkipsContext reports whether this session was opened with --no-context, so
+// callers outside the Agent (the REPL's Claude-history import) can honor it.
+func (a *Agent) SkipsContext() bool { return a.skipContext }
+
 // InjectContextFile reads AGENTS.md or CLAUDE.md from the working directory
 // and prepends it as a system message. Does nothing when neither file exists,
-// or when the session was opened with --no-agents-md.
+// or when the session was opened with --no-context.
 func (a *Agent) InjectContextFile() {
-	if a.skipContextFile {
+	if a.skipContext {
 		return
 	}
 	content, err := claude.FindContextFile(a.workingDir)
@@ -1747,9 +1759,15 @@ func (a *Agent) recordRecentlyRead(path string) {
 
 // buildMemorySystemPrompt constructs the memory system prompt by reading the
 // current MEMORY.md index and composing it with instructions for all four
-// memory types. Returns "" when memoryDir is empty (non-interactive mode).
+// memory types. Returns "" when memoryDir is empty (non-interactive mode), or
+// under --no-context.
+//
+// --no-context drops the tool instructions along with the remembered content,
+// because the two are one prompt. That is the honest reading of the flag: a
+// session told to inherit nothing should not be told to go read what this
+// project remembered either.
 func (a *Agent) buildMemorySystemPrompt() string {
-	if a.memoryDir == "" {
+	if a.memoryDir == "" || a.skipContext {
 		return ""
 	}
 

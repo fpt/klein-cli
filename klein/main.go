@@ -125,7 +125,7 @@ func printUsage() {
 	fmt.Println("  klein --json-schema '{\"type\":\"object\",...}' \"...\"  # Structured output (inline schema)")
 	fmt.Println("  klein --json-schema schema.json \"...\"               # Structured output (schema file)")
 	fmt.Println("  klein --skills ./myskills                # Load extra SKILL.md definitions")
-	fmt.Println("  klein --no-agents-md                     # Ignore the repo's AGENTS.md / CLAUDE.md")
+	fmt.Println("  klein --no-context                       # Start with no inherited context at all")
 	fmt.Println()
 }
 
@@ -174,8 +174,8 @@ func main() {
 	var schedulesFile = flag.String("schedules-file", "", "JSON file backing the ScheduleCreate/List/Delete tools (serve mode; defaults to <base_dir>/schedules.json)")
 	var help = flag.Bool("h", false, "Show this help message")
 	var helpLong = flag.Bool("help", false, "Show this help message")
-	noAgentsMD := flag.Bool("no-agents-md", false,
-		"Do not inject AGENTS.md or CLAUDE.md from the working directory as project context")
+	noContext := flag.Bool("no-context", false,
+		"Open the session with no inherited context: no AGENTS.md/CLAUDE.md, no .claude history import, no .klein memory")
 	var skillDirs stringSliceFlag
 	flag.Var(&skillDirs, "skills",
 		"Directory of <name>/SKILL.md definitions to load, above the built-in and .claude/.agents ladder (repeatable).")
@@ -449,7 +449,7 @@ func main() {
 		ContinueSession:    resolvedContinue,
 		LLMClient:          llmClient,
 		AgentBackend:       agentbackend.Select(settings, logger, backendOpts),
-		SkipContextFile:    *noAgentsMD,
+		SkipContext:        *noContext,
 		SkillDirs:          skillDirs,
 	})
 	if err != nil {

@@ -67,7 +67,7 @@ func TestInjectContextFile_LoadsAgentsMDByDefault(t *testing.T) {
 	a.InjectContextFile()
 
 	if !contextInjected(a, marker) {
-		t.Fatal("AGENTS.md should be injected when SkipContextFile is false")
+		t.Fatal("AGENTS.md should be injected when SkipContext is false")
 	}
 }
 
@@ -77,11 +77,35 @@ func TestInjectContextFile_SkippedByOption(t *testing.T) {
 	dir := t.TempDir()
 	marker := writeContextFile(t, dir)
 
-	a := newOptionsAgent(t, dir, func(o *AgentOptions) { o.SkipContextFile = true })
+	a := newOptionsAgent(t, dir, func(o *AgentOptions) { o.SkipContext = true })
 	a.InjectContextFile()
 
 	if contextInjected(a, marker) {
-		t.Fatal("--no-agents-md must suppress the AGENTS.md injection")
+		t.Fatal("--no-context must suppress the AGENTS.md injection")
+	}
+}
+
+// The memory prompt is the .klein half of --no-context. memoryDir is only set
+// in interactive mode, so the test sets it directly rather than standing up a
+// whole project directory.
+func TestBuildMemorySystemPrompt_SkippedByNoContext(t *testing.T) {
+	t.Parallel()
+
+	memDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(memDir, "MEMORY.md"), []byte("- remembered thing"), 0o600); err != nil {
+		t.Fatalf("write MEMORY.md: %v", err)
+	}
+
+	a := newOptionsAgent(t, t.TempDir(), nil)
+	a.memoryDir = memDir
+	if got := a.buildMemorySystemPrompt(); !strings.Contains(got, "remembered thing") {
+		t.Fatal("MEMORY.md should reach the prompt by default")
+	}
+
+	b := newOptionsAgent(t, t.TempDir(), func(o *AgentOptions) { o.SkipContext = true })
+	b.memoryDir = memDir
+	if got := b.buildMemorySystemPrompt(); got != "" {
+		t.Fatalf("--no-context must drop the memory prompt entirely, got %d bytes", len(got))
 	}
 }
 

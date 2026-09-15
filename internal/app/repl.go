@@ -696,6 +696,11 @@ func stdinIsInteractive() bool {
 // the agent's working directory. When one is found the user is prompted to import
 // it (y/n). Errors are printed as informational warnings, never fatal.
 func offerClaudeHistoryImport(a *Agent) {
+	// --no-context means inherit nothing, so do not even offer.
+	if a.SkipsContext() {
+		return
+	}
+
 	// The import prompt is an interactive selector; skip it entirely when stdin
 	// is piped (non-interactive), otherwise it would swallow the piped input.
 	if !stdinIsInteractive() {

@@ -92,7 +92,13 @@ func BuildPrompt(req Request, enrichedDiff, language string) string {
 	if req.Mode == "incremental" {
 		b.WriteString("# Review Mode: incremental\n")
 		b.WriteString("The diff below contains ONLY the changes since the last review round. ")
-		b.WriteString("Earlier changes were already reviewed; the complete current code is on disk for Read.\n\n")
+		b.WriteString("Earlier changes were already reviewed; the complete current code is on disk for Read.\n")
+		if req.FullDiff != "" {
+			b.WriteString("Code on disk that is not in this diff may still be part of this PR, added by an earlier commit. ")
+			b.WriteString("Call ReadFullDiff (no path lists the PR's files; a path shows that file's complete PR diff) ")
+			b.WriteString("before judging code outside the increment.\n")
+		}
+		b.WriteString("\n")
 	}
 
 	b.WriteString("# Changed Files (annotated diff)\n")

@@ -191,6 +191,22 @@ func (e *Enricher) renderHunk(h Hunk, fileLines []string) string {
 	return b.String()
 }
 
+// RenderFileDiff renders one file's diff hunks in the annotated-diff style,
+// without context expansion: it answers "what did this PR change here", and
+// the file on disk already answers everything around it. Used for the full PR
+// diff of an incremental round, where every added or kept line is part of
+// that diff and so is commentable — the brackets tell the truth.
+func RenderFileDiff(f FileDiff) string {
+	if f.IsDeleted {
+		return (&Enricher{}).renderRawHunks(f)
+	}
+	var b strings.Builder
+	for _, h := range f.Hunks {
+		b.WriteString((&Enricher{}).renderHunk(h, nil))
+	}
+	return b.String()
+}
+
 // renderRawHunks renders hunks without numbers/context (deleted files).
 func (e *Enricher) renderRawHunks(f FileDiff) string {
 	var b strings.Builder

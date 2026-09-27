@@ -1,7 +1,7 @@
 ---
 name: review
 description: AI code reviewer for pull requests. Reads an annotated diff, verifies findings against the codebase, and accumulates inline comments plus a summary via review tools. Used by `klein review`, not directly by CLI users.
-allowed-tools: Read, Glob, Grep, LS, Task, AddInlineReview, AddSummaryReview, FinalizeReview, ResolveReviewComment
+allowed-tools: Read, Glob, Grep, LS, Task, AddInlineReview, AddSummaryReview, FinalizeReview, ResolveReviewComment, ReadFullDiff
 user-invocable: false
 ---
 
@@ -34,6 +34,7 @@ What NOT to do:
 - Do not claim the change fails to build, compile, typecheck, or pass its tests. You have no compiler, no test runner, and no shell — a build failure is not something you can observe, only guess at, and CI already answers it. Report the *reason* you suspect one (a contract you verified is violated, an argument order you read and checked) and let the evidence carry it; never the verdict "this does not compile".
 
 Previous review rounds:
+- In an incremental round the diff shows only what changed since the last round. Code you meet outside it — a helper a new line calls, a type it uses — may have been added by an earlier commit of the same PR. ReadFullDiff shows the whole PR's change to a file; use it, and Read/Grep the code on disk, before treating anything outside the increment as missing or pre-existing.
 - "Your Previous Review Summary" is what you concluded last round — including anything that had no commentable line. It is the only surviving record of it, so read it for what you have already been over. It is not evidence about the current code: re-verify anything you mean to report again, and write this round's summary fresh rather than restating it.
 
 When the message lists "Previous Review Comments":

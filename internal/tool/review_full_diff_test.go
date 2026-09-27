@@ -93,7 +93,11 @@ func TestReadFullDiff_UnknownPathListsFiles(t *testing.T) {
 func TestReadFullDiff_TruncatesOnLineBoundary(t *testing.T) {
 	t.Parallel()
 
-	res := callReview(t, fullDiffManager(t, 40), readFullDiffTool, message.ToolArgumentValues{reviewArgPath: "helper.go"})
+	const budget = 120
+	res := callReview(t, fullDiffManager(t, budget), readFullDiffTool, message.ToolArgumentValues{reviewArgPath: "helper.go"})
+	if len(res.Text) > budget {
+		t.Errorf("answer is %d bytes, over the %d-byte cap", len(res.Text), budget)
+	}
 	if !strings.HasSuffix(res.Text, strings.TrimRight(fullDiffTruncated, "\n")) {
 		t.Errorf("no truncation marker:\n%s", res.Text)
 	}
@@ -110,5 +114,16 @@ func TestReadFullDiff_AbsentWithoutFullDiff(t *testing.T) {
 	m := NewReviewToolManager(rangeValidator, nil)
 	if _, ok := m.GetTools()[readFullDiffTool]; ok {
 		t.Error("ReadFullDiff registered without a full diff")
+	}
+}
+
+// A cap smaller than the marker still holds: the marker is what gives way.
+func TestCapFullDiff_BudgetBelowMarker(t *testing.T) {
+	t.Parallel()
+
+	out := strings.Repeat("abcdefghi\n", 10)
+	got := capFullDiff(out, 25)
+	if got != "abcdefghi\nabcdefghi\n" {
+		t.Errorf("capFullDiff = %q", got)
 	}
 }

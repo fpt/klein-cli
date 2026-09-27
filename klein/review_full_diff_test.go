@@ -70,3 +70,14 @@ func TestPrepareReviewPrompt_FullRoundHasNoFullDiffTool(t *testing.T) {
 		t.Error("a full round's prompt mentions ReadFullDiff")
 	}
 }
+
+// full_diff alone does not make a round incremental: a full round already has
+// the whole diff in its prompt, and an unadvertised tool is noise.
+func TestPrepareReviewPrompt_FullModeIgnoresFullDiff(t *testing.T) {
+	t.Parallel()
+
+	p := prepareFor(t, review.Request{Title: "t", Diff: wholePRDiff, FullDiff: wholePRDiff})
+	if p.hasFullDiff {
+		t.Error("a full-mode request carrying full_diff offered ReadFullDiff")
+	}
+}

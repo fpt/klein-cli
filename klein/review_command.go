@@ -248,7 +248,7 @@ func prepareReviewPrompt(
 	}
 
 	p.ranges = review.CommentableRanges(fullFiles)
-	p.fullFiles, p.hasFullDiff = fullFiles, req.FullDiff != ""
+	p.fullFiles, p.hasFullDiff = fullFiles, req.Mode == "incremental" && req.FullDiff != ""
 	for _, c := range req.PreviousComments {
 		p.previousIDs = append(p.previousIDs, c.ID)
 	}

@@ -45,17 +45,28 @@ func readFullDiff(files []review.FileDiff, path string, maxBytes int) message.To
 			continue
 		}
 		out := fmt.Sprintf("## File: %s%s\n%s", f.Path, fileDiffStatus(f), review.RenderFileDiff(f))
-		if maxBytes > 0 && len(out) > maxBytes {
-			cut := strings.LastIndexByte(out[:maxBytes], '\n') + 1
-			out = out[:cut] + fullDiffTruncated
-		}
-		return message.NewToolResultText(strings.TrimRight(out, "\n"))
+		return message.NewToolResultText(strings.TrimRight(capFullDiff(out, maxBytes), "\n"))
 	}
 	// Name what would have worked: a wrong path is almost always a typo or a
 	// file the PR does not touch, and both are answered by the list.
 	return message.NewToolResultError(fmt.Sprintf(
 		"%s is not changed by this pull request (generated files are excluded). Changed files:\n%s",
 		path, listFullDiffFiles(files)))
+}
+
+// capFullDiff bounds out to maxBytes (0 = unbounded), marker included, cut on
+// a line boundary so no line — or multi-byte rune — is split. A budget too
+// small for the marker gets the bare line-boundary prefix.
+func capFullDiff(out string, maxBytes int) string {
+	if maxBytes <= 0 || len(out) <= maxBytes {
+		return out
+	}
+	marker := fullDiffTruncated
+	if maxBytes < len(marker) {
+		marker = ""
+	}
+	budget := maxBytes - len(marker)
+	return out[:strings.LastIndexByte(out[:budget], '\n')+1] + marker
 }
 
 // listFullDiffFiles lists the PR's files with their status and line counts.

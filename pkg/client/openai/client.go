@@ -2,6 +2,7 @@ package openai
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"strings"
@@ -192,7 +193,6 @@ func (c *OpenAIClient) Chat(ctx context.Context, messages []message.Message, ena
 		params.Reasoning = shared.ReasoningParam{
 			Effort: c.reasoningEffort,
 		}
-
 	}
 
 	// Add tools support
@@ -305,7 +305,6 @@ func (c *OpenAIClient) chatWithStreaming(ctx context.Context, messages []message
 		params.Reasoning = shared.ReasoningParam{
 			Effort: c.reasoningEffort,
 		}
-
 	}
 
 	// Add tools support
@@ -621,7 +620,6 @@ func (c *OpenAIClient) ChatWithToolChoice(ctx context.Context, messages []messag
 		params.Reasoning = shared.ReasoningParam{
 			Effort: c.reasoningEffort,
 		}
-
 	}
 
 	// Add tools and tool choice
@@ -656,7 +654,7 @@ func (c *OpenAIClient) chatWithToolChoiceStreaming(ctx context.Context, params r
 
 	var responseBuilder strings.Builder
 	var reasoningBuilder strings.Builder
-	var completeText string
+	var final *responses.Response
 
 	// Process streaming chunks
 	for stream.Next() {
@@ -707,8 +705,21 @@ func (c *OpenAIClient) chatWithToolChoiceStreaming(ctx context.Context, params r
 			}
 		}
 
-		// Check if we have a completed response
-		if completedEvent := event.AsResponseCompleted(); completedEvent.Type != "" {
+		// The terminal event carries the whole response: every output item,
+		// the tool calls, and usage. It is all this turn needs.
+		switch event.Type {
+		case "response.completed":
+			r := event.AsResponseCompleted().Response
+			final = &r
+		case "response.incomplete":
+			// Stopped early (max_output_tokens, content filter): still an answer,
+			// and the one a follow-up request would have regenerated anyway.
+			r := event.AsResponseIncomplete().Response
+			final = &r
+		case "response.failed":
+			return nil, fmt.Errorf("responses API response failed: %s", event.AsResponseFailed().Response.Error.Message)
+		}
+		if final != nil {
 			fmt.Println()
 			break
 		}
@@ -729,239 +740,16 @@ func (c *OpenAIClient) chatWithToolChoiceStreaming(ctx context.Context, params r
 		return nil, fmt.Errorf("Responses API streaming error: %w", stream.Err())
 	}
 
-	// After streaming is complete, we need to get the final response to check for tool calls
-	// The streaming API provides deltas, but we need the complete response for tool calls
-	// Let me use a non-streaming call to get the complete response
-	resp, err := c.client.Responses.New(ctx, params)
-	if err != nil {
-		return nil, fmt.Errorf("failed to get complete response: %w", err)
+	// No second request: the completed event already holds what one would
+	// return. Re-requesting generated every turn twice — billed twice on
+	// OpenAI, and on a server that only answers SSE (gallium's responses-api)
+	// the non-streaming decode failed outright. The two answers could even
+	// disagree: the text shown was streamed from the first, the tool calls
+	// came from the second.
+	if final == nil {
+		return nil, errors.New("responses API stream ended without a completed response")
 	}
-
-	// Capture token usage if provided
-	if resp.Usage.JSON.InputTokens.Valid() || resp.Usage.JSON.OutputTokens.Valid() || resp.Usage.JSON.TotalTokens.Valid() {
-		c.lastUsage = message.TokenUsage{
-			InputTokens:  int(resp.Usage.InputTokens),
-			OutputTokens: int(resp.Usage.OutputTokens),
-			TotalTokens:  int(resp.Usage.TotalTokens),
-			CachedTokens: int(resp.Usage.InputTokensDetails.CachedTokens),
-		}
-		c.detectTruncation(int(resp.Usage.InputTokens))
-	}
-
-	// Check for different types of output items using the variant system
-	var reasoningContent string
-	var toolCalls []*message.ToolCallMessage
-
-	for _, outputItem := range resp.Output {
-		if os.Getenv("DEBUG_TOOLS") == "1" {
-			fmt.Printf("DEBUG: Processing output item type: %s\n", outputItem.Type)
-		}
-
-		switch variant := outputItem.AsAny().(type) {
-		case responses.ResponseOutputMessage:
-			if os.Getenv("DEBUG_TOOLS") == "1" {
-				fmt.Printf("DEBUG: ResponseOutputMessage - Role: %s, Content: %d items\n",
-					variant.Role, len(variant.Content))
-			}
-			// Regular assistant message - continue processing other items
-
-		case responses.ResponseFileSearchToolCall:
-			if os.Getenv("DEBUG_TOOLS") == "1" {
-				fmt.Printf("DEBUG: ResponseFileSearchToolCall - ID: %s, Queries: %d, Results: %d\n",
-					variant.ID, len(variant.Queries), len(variant.Results))
-			}
-			// File search tool call - could implement if needed
-
-		case responses.ResponseFunctionToolCall:
-			if os.Getenv("DEBUG_TOOLS") == "1" {
-				fmt.Printf("DEBUG: ResponseFunctionToolCall - Name: %s, Args: %s, CallID: %s\n",
-					variant.Name, variant.Arguments, variant.CallID)
-			}
-			// Collect all function calls
-			if variant.Name != "" {
-				toolArgs := convertOpenAIArgsToToolArgs(variant.Arguments)
-				toolCalls = append(toolCalls, message.NewToolCallMessageWithID(
-					variant.CallID,
-					message.ToolName(variant.Name),
-					toolArgs,
-					time.Now(),
-				))
-			}
-
-		case responses.ResponseFunctionWebSearch:
-			if os.Getenv("DEBUG_TOOLS") == "1" {
-				fmt.Printf("DEBUG: ResponseFunctionWebSearch - ID: %s, Status: %s\n",
-					variant.ID, variant.Status)
-			}
-			// Web search tool call - could implement if needed
-
-		case responses.ResponseComputerToolCall:
-			if os.Getenv("DEBUG_TOOLS") == "1" {
-				fmt.Printf("DEBUG: ResponseComputerToolCall - ID: %s, Status: %s\n",
-					variant.ID, variant.Status)
-			}
-			// Computer use tool call - could implement if needed
-
-		case responses.ResponseReasoningItem:
-			if os.Getenv("DEBUG_TOOLS") == "1" {
-				fmt.Printf("DEBUG: ResponseReasoningItem - ID: %s, Summary items: %d, Content items: %d, Status: %s\n",
-					variant.ID, len(variant.Summary), len(variant.Content), variant.Status)
-			}
-
-			// Extract reasoning content for message creation
-			if len(variant.Content) > 0 {
-				var reasoningParts []string
-				for _, content := range variant.Content {
-					if content.Text != "" {
-						reasoningParts = append(reasoningParts, content.Text)
-					}
-				}
-				if len(reasoningParts) > 0 {
-					reasoningContent = strings.Join(reasoningParts, "\n")
-				}
-
-				// Display reasoning content if available
-				fmt.Printf("🧠 Reasoning:\n")
-				for _, content := range variant.Content {
-					if content.Text != "" {
-						// Display reasoning text with proper formatting
-						fmt.Printf("   %s\n", strings.ReplaceAll(content.Text, "\n", "\n   "))
-					}
-				}
-				fmt.Printf("\n")
-			}
-
-			// Display reasoning summary if available
-			if len(variant.Summary) > 0 {
-				fmt.Printf("💭 Reasoning Summary:\n")
-				for _, summary := range variant.Summary {
-					if summary.Text != "" {
-						fmt.Printf("   %s\n", strings.ReplaceAll(summary.Text, "\n", "\n   "))
-					}
-				}
-				fmt.Printf("\n")
-			}
-
-			// Continue processing other items
-
-		case responses.ResponseOutputItemImageGenerationCall:
-			if os.Getenv("DEBUG_TOOLS") == "1" {
-				fmt.Printf("DEBUG: ResponseOutputItemImageGenerationCall - ID: %s, Status: %s\n",
-					variant.ID, variant.Status)
-			}
-			// Image generation tool call - could implement if needed
-
-		case responses.ResponseCodeInterpreterToolCall:
-			if os.Getenv("DEBUG_TOOLS") == "1" {
-				fmt.Printf("DEBUG: ResponseCodeInterpreterToolCall - ID: %s, Status: %s, Code length: %d\n",
-					variant.ID, variant.Status, len(variant.Code))
-			}
-			// Code interpreter tool call - could implement if needed
-
-		case responses.ResponseOutputItemLocalShellCall:
-			if os.Getenv("DEBUG_TOOLS") == "1" {
-				fmt.Printf("DEBUG: ResponseOutputItemLocalShellCall - ID: %s, Status: %s\n",
-					variant.ID, variant.Status)
-			}
-			// Local shell tool call - could implement if needed
-
-		case responses.ResponseOutputItemMcpCall:
-			if os.Getenv("DEBUG_TOOLS") == "1" {
-				fmt.Printf("DEBUG: ResponseOutputItemMcpCall - ID: %s, ServerLabel: %s\n",
-					variant.ID, variant.ServerLabel)
-			}
-			// MCP tool call - could implement if needed
-
-		case responses.ResponseOutputItemMcpListTools:
-			if os.Getenv("DEBUG_TOOLS") == "1" {
-				fmt.Printf("DEBUG: ResponseOutputItemMcpListTools - ID: %s, Tools: %d\n",
-					variant.ID, len(variant.Tools))
-			}
-			// MCP list tools call - could implement if needed
-
-		case responses.ResponseOutputItemMcpApprovalRequest:
-			if os.Getenv("DEBUG_TOOLS") == "1" {
-				fmt.Printf("DEBUG: ResponseOutputItemMcpApprovalRequest - ID: %s\n",
-					variant.ID)
-			}
-			// MCP approval request - could implement if needed
-
-		case responses.ResponseCustomToolCall:
-			if os.Getenv("DEBUG_TOOLS") == "1" {
-				fmt.Printf("DEBUG: ResponseCustomToolCall - ID: %s, Name: %s\n",
-					variant.ID, variant.Name)
-			}
-			// Custom tool call - could implement if needed
-
-		default:
-			if os.Getenv("DEBUG_TOOLS") == "1" {
-				fmt.Printf("DEBUG: Unknown output item variant: %T\n", variant)
-			}
-		}
-	}
-
-	// Decide what to return based on what we found
-	// If we found tool calls, return batch when multiple; single otherwise
-	if len(toolCalls) == 1 {
-		return toolCalls[0], nil
-	} else if len(toolCalls) > 1 {
-		return message.NewToolCallBatch(toolCalls), nil
-	}
-
-	// No tool calls found, return text response
-	finalText := completeText
-	if finalText == "" {
-		finalText = responseBuilder.String()
-	}
-
-	// If we still don't have text, use the response's output text
-	if finalText == "" {
-		finalText = resp.OutputText()
-	}
-
-	if finalText == "" {
-		// Debug: Check what's in the response when we have no text
-		if os.Getenv("DEBUG_TOOLS") == "1" {
-			fmt.Printf("DEBUG: No final text - Response ID: %s, Output items: %d\n", resp.ID, len(resp.Output))
-			fmt.Printf("DEBUG: Complete text: '%s', Builder text: '%s'\n", completeText, responseBuilder.String())
-			for i, item := range resp.Output {
-				fmt.Printf("DEBUG: Output[%d] Type: %s\n", i, item.Type)
-			}
-		}
-		return nil, fmt.Errorf("empty response from Responses API")
-	}
-
-	// Debug: Show what we're using as final text when it looks suspicious
-	if os.Getenv("DEBUG_TOOLS") == "1" && (strings.Contains(finalText, `{"path"`) || len(finalText) < 50) {
-		fmt.Printf("DEBUG: Suspicious final text: '%s'\n", finalText)
-		fmt.Printf("DEBUG: OutputText(): '%s'\n", resp.OutputText())
-		fmt.Printf("DEBUG: Complete text: '%s'\n", completeText)
-		fmt.Printf("DEBUG: Builder text: '%s'\n", responseBuilder.String())
-		fmt.Printf("DEBUG: Reasoning content: '%s'\n", reasoningContent)
-	}
-
-	// Create response message with thinking content if available
-	var responseMessage message.Message
-
-	// Use streaming reasoning content if available, otherwise use non-streaming reasoning content
-	finalReasoningContent := reasoningBuilder.String()
-	if finalReasoningContent == "" {
-		finalReasoningContent = reasoningContent
-	}
-
-	if finalReasoningContent != "" {
-		if os.Getenv("DEBUG_TOOLS") == "1" {
-			fmt.Printf("DEBUG: Tool calling - Creating message with reasoning content: '%s'\n", finalReasoningContent)
-		}
-		responseMessage = message.NewChatMessageWithThinking(message.MessageTypeAssistant, finalText, finalReasoningContent)
-	} else {
-		responseMessage = message.NewChatMessage(message.MessageTypeAssistant, finalText)
-		if os.Getenv("DEBUG_TOOLS") == "1" {
-			fmt.Printf("DEBUG: Tool calling - Creating message WITHOUT thinking content\n")
-		}
-	}
-
-	return responseMessage, nil
+	return c.messageFromResponse(final, responseBuilder.String(), reasoningBuilder.String())
 }
 
 // ResponseToolCall represents a tool call from the Responses API
@@ -1020,69 +808,95 @@ func isStreamingUnsupportedError(err error) bool {
 	return false
 }
 
-// chatWithToolChoiceNonStreaming mirrors the parsing logic used after streaming completes,
-// but performs a single non-streaming request. Used when streaming is disabled or unsupported.
-func (c *OpenAIClient) chatWithToolChoiceNonStreaming(ctx context.Context, params responses.ResponseNewParams, enableThinking bool, thinkingChan chan<- string) (message.Message, error) {
+// chatWithToolChoiceNonStreaming performs a single non-streaming request. Used
+// when streaming is disabled or unsupported.
+func (c *OpenAIClient) chatWithToolChoiceNonStreaming(
+	ctx context.Context, params responses.ResponseNewParams, _ bool, _ chan<- string,
+) (message.Message, error) {
 	resp, err := c.client.Responses.New(ctx, params)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get complete response (non-streaming tool mode): %w", err)
 	}
+	return c.messageFromResponse(resp, "", "")
+}
 
-	// Capture token usage if provided
-	if resp.Usage.JSON.InputTokens.Valid() || resp.Usage.JSON.OutputTokens.Valid() || resp.Usage.JSON.TotalTokens.Valid() {
-		c.lastUsage = message.TokenUsage{
-			InputTokens:  int(resp.Usage.InputTokens),
-			OutputTokens: int(resp.Usage.OutputTokens),
-			TotalTokens:  int(resp.Usage.TotalTokens),
-			CachedTokens: int(resp.Usage.InputTokensDetails.CachedTokens),
-		}
-		c.detectTruncation(int(resp.Usage.InputTokens))
-	}
+// messageFromResponse turns a finished response into the turn's message: its
+// tool calls when there are any (a batch for several), its text otherwise.
+// streamedText and streamedReasoning are what a streaming call already
+// accumulated from deltas, preferred over re-reading the output items; empty
+// for a non-streaming call.
+func (c *OpenAIClient) messageFromResponse(
+	resp *responses.Response, streamedText, streamedReasoning string,
+) (message.Message, error) {
+	c.recordUsage(resp)
 
-	// Check for different types of output items using the variant system
-	var reasoningContent string
-	var toolCalls []*message.ToolCallMessage
-
-	for _, outputItem := range resp.Output {
-		switch variant := outputItem.AsAny().(type) {
-		case responses.ResponseFunctionToolCall:
-			if variant.Name != "" {
-				toolArgs := convertOpenAIArgsToToolArgs(variant.Arguments)
-				toolCalls = append(toolCalls, message.NewToolCallMessageWithID(
-					variant.CallID,
-					message.ToolName(variant.Name),
-					toolArgs,
-					time.Now(),
-				))
-			}
-		case responses.ResponseReasoningItem:
-			if len(variant.Content) > 0 {
-				var reasoningParts []string
-				for _, content := range variant.Content {
-					if content.Text != "" {
-						reasoningParts = append(reasoningParts, content.Text)
-					}
-				}
-				reasoningContent = strings.Join(reasoningParts, "\n")
-			}
-		}
-	}
-
-	// If we found tool calls, return them
-	if len(toolCalls) == 1 {
+	toolCalls, itemReasoning := collectOutputItems(resp)
+	switch len(toolCalls) {
+	case 0:
+	case 1:
 		return toolCalls[0], nil
-	} else if len(toolCalls) > 1 {
+	default:
 		return message.NewToolCallBatch(toolCalls), nil
 	}
 
-	// Otherwise return text answer
-	finalText := resp.OutputText()
-	if finalText == "" {
-		return nil, fmt.Errorf("empty response from Responses API (non-streaming tool mode)")
+	text := streamedText
+	if text == "" {
+		text = resp.OutputText()
 	}
+	if text == "" {
+		return nil, fmt.Errorf("empty response from Responses API (status %q, %d output items)",
+			resp.Status, len(resp.Output))
+	}
+	reasoning := streamedReasoning
+	if reasoning == "" {
+		reasoning = itemReasoning
+	}
+	if reasoning != "" {
+		return message.NewChatMessageWithThinking(message.MessageTypeAssistant, text, reasoning), nil
+	}
+	return message.NewChatMessage(message.MessageTypeAssistant, text), nil
+}
 
-	if reasoningContent != "" {
-		return message.NewChatMessageWithThinking(message.MessageTypeAssistant, finalText, reasoningContent), nil
+// collectOutputItems gathers a response's function calls and the text of its
+// reasoning items. Other item kinds (hosted tools klein never offers) are
+// ignored.
+func collectOutputItems(resp *responses.Response) ([]*message.ToolCallMessage, string) {
+	var toolCalls []*message.ToolCallMessage
+	var reasoningParts []string
+	for _, item := range resp.Output {
+		switch v := item.AsAny().(type) {
+		case responses.ResponseFunctionToolCall:
+			if v.Name != "" {
+				toolCalls = append(toolCalls, message.NewToolCallMessageWithID(
+					v.CallID, message.ToolName(v.Name), convertOpenAIArgsToToolArgs(v.Arguments), time.Now(),
+				))
+			}
+		case responses.ResponseReasoningItem:
+			for _, content := range v.Content {
+				if content.Text != "" {
+					reasoningParts = append(reasoningParts, content.Text)
+				}
+			}
+		default:
+			if os.Getenv("DEBUG_TOOLS") == "1" {
+				fmt.Printf("DEBUG: Ignoring output item type: %s\n", item.Type)
+			}
+		}
 	}
-	return message.NewChatMessage(message.MessageTypeAssistant, finalText), nil
+	return toolCalls, strings.Join(reasoningParts, "\n")
+}
+
+// recordUsage keeps the response's token usage, when it reported any.
+func (c *OpenAIClient) recordUsage(resp *responses.Response) {
+	u := resp.Usage.JSON
+	if !u.InputTokens.Valid() && !u.OutputTokens.Valid() && !u.TotalTokens.Valid() {
+		return
+	}
+	c.lastUsage = message.TokenUsage{
+		InputTokens:  int(resp.Usage.InputTokens),
+		OutputTokens: int(resp.Usage.OutputTokens),
+		TotalTokens:  int(resp.Usage.TotalTokens),
+		CachedTokens: int(resp.Usage.InputTokensDetails.CachedTokens),
+	}
+	c.detectTruncation(int(resp.Usage.InputTokens))
 }

@@ -35,7 +35,7 @@ import (
 // Grep is included so delegated exploration keeps its primary search tool.
 var reviewAllowedTools = []string{
 	"Read", "Glob", "Grep", "LS", "Task",
-	"AddInlineReview", "AddSummaryReview", "FinalizeReview", "ResolveReviewComment",
+	"AddInlineReview", "AddSummaryReview", "FinalizeReview", "ResolveReviewComment", "ReadFullDiff",
 }
 
 const reviewUsage = `Usage:
@@ -208,7 +208,12 @@ type preparedReview struct {
 	ranges      review.Ranges // commentable ranges, always from the full PR diff
 	previousIDs []string
 	skipped     []string // generated files excluded from review
+	// fullFiles is the complete PR diff, backing ReadFullDiff. hasFullDiff
+	// says the harness sent one (an incremental round) — the tool is offered
+	// exactly then, which is also when the prompt tells the model about it.
+	fullFiles   []review.FileDiff
 	numFiles    int
+	hasFullDiff bool
 }
 
 // prepareReviewPrompt reads the request, parses the diff(s), and builds the
@@ -243,6 +248,7 @@ func prepareReviewPrompt(
 	}
 
 	p.ranges = review.CommentableRanges(fullFiles)
+	p.fullFiles, p.hasFullDiff = fullFiles, req.FullDiff != ""
 	for _, c := range req.PreviousComments {
 		p.previousIDs = append(p.previousIDs, c.ID)
 	}
@@ -331,6 +337,9 @@ func executeReview(
 	}
 	reviewMgr := tool.NewReviewToolManager(prepared.ranges.Validate, prepared.previousIDs).
 		WithRangeLister(prepared.ranges.Describe)
+	if prepared.hasFullDiff {
+		reviewMgr.WithFullDiff(prepared.fullFiles, opts.maxDiffBytes)
+	}
 
 	a, cleanup, err := newReviewAgent(ctx, opts, settings, reviewMgr, fsRepo, logger, out)
 	if err != nil {

@@ -351,3 +351,19 @@ func TestBuildPromptSanitizesThePreviousSummary(t *testing.T) {
 		t.Errorf("the previous summary carried a raw control token into the prompt:\n%s", got)
 	}
 }
+
+// An incremental round points the model at ReadFullDiff exactly when the
+// harness sent the full diff that backs it — naming a tool that was never
+// registered would send the model after a "tool not found".
+func TestBuildPromptOffersFullDiffOnlyWhenPresent(t *testing.T) {
+	t.Parallel()
+
+	with := BuildPrompt(Request{Title: "t", Diff: "d", FullDiff: "f", Mode: modeIncremental}, "[  1] + x", "en")
+	if !strings.Contains(with, "ReadFullDiff") {
+		t.Errorf("incremental round with a full diff does not mention ReadFullDiff:\n%s", with)
+	}
+	without := BuildPrompt(Request{Title: "t", Diff: "d", Mode: modeIncremental}, "[  1] + x", "en")
+	if strings.Contains(without, "ReadFullDiff") {
+		t.Errorf("ReadFullDiff mentioned with no full diff to back it:\n%s", without)
+	}
+}

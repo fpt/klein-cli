@@ -146,18 +146,17 @@ type LLMSettings struct {
 	BaseURL   string `toml:"base_url,omitempty"`   // optional provider base URL (OpenAI/Azure-compatible)
 	Thinking  bool   `toml:"thinking,omitempty"`   // enable thinking mode
 	MaxTokens int    `toml:"max_tokens,omitempty"` // maximum tokens for model responses (0 = use model default)
-	// Effort sets the reasoning effort for reasoning-capable models (primarily
-	// OpenAI GPT-5). Empty = backend default. The full vocabulary is in
-	// ValidEfforts, but actual support is model-dependent — e.g. gpt-5.6-luna accepts
-	// none/low/medium/high/xhigh but not minimal. Ignored by models without
-	// reasoning effort.
+	// Effort sets the reasoning effort on every direct backend. Empty = backend
+	// default. Each client maps the ValidEfforts vocabulary onto what its model
+	// accepts: OpenAI reasoning effort, Anthropic output_config.effort, Gemini
+	// thinking level.
 	Effort string `toml:"effort,omitempty"`
 }
 
-// ValidEfforts lists every reasoning-effort value accepted by the OpenAI API
-// (empty = backend default). Per the OpenAI reasoning guide these are
-// model-dependent; a given model may accept only a subset.
-var ValidEfforts = []string{"none", "minimal", "low", "medium", "high", "xhigh"}
+// ValidEfforts lists klein's effort scale, lowest to highest (empty = backend
+// default). No model accepts all of it; clients clamp to the nearest level the
+// model supports.
+var ValidEfforts = []string{"none", "minimal", "low", "medium", "high", "xhigh", "max"}
 
 // IsValidEffort reports whether e is empty (backend default) or a recognized
 // reasoning-effort value.
@@ -762,7 +761,7 @@ func GetDefaultLLMSettingsForBackend(backend string) LLMSettings {
 	case "anthropic", "claude":
 		return LLMSettings{
 			Backend:   "anthropic",
-			Model:     "claude-sonnet-4-6",
+			Model:     "claude-sonnet-5-5",
 			BaseURL:   "",
 			Thinking:  true,
 			MaxTokens: 0,
@@ -770,9 +769,9 @@ func GetDefaultLLMSettingsForBackend(backend string) LLMSettings {
 	case "gemini":
 		return LLMSettings{
 			Backend:   "gemini",
-			Model:     "gemini-2.5-flash-lite",
+			Model:     "gemini-4-argon",
 			BaseURL:   "",
-			Thinking:  false, // Gemini doesn't support thinking in our implementation
+			Thinking:  true,
 			MaxTokens: 0,
 		}
 	case BackendCodex, BackendAppServer:
@@ -785,11 +784,11 @@ func GetDefaultLLMSettingsForBackend(backend string) LLMSettings {
 		// openai — the default backend, and the fallback for an unset one.
 		return LLMSettings{
 			Backend:   DefaultBackend,
-			Model:     "gpt-5.6-luna",
+			Model:     "gpt-6-luna",
 			BaseURL:   "",
 			Thinking:  true,
 			MaxTokens: 0,
-			Effort:    "low", // preserves the prior hardcoded default for GPT-5 reasoning
+			Effort:    "low", // preserves the prior hardcoded default for GPT reasoning
 		}
 	default:
 		// An unrecognized backend keeps its name so ValidateSettings rejects it,

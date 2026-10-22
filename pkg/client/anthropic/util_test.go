@@ -11,118 +11,19 @@ import (
 )
 
 func TestGetAnthropicModel(t *testing.T) {
-	tests := []struct {
-		name     string
-		input    string
-		expected anthropic.Model
-	}{
-		{
-			name:     "claude-opus-4-7",
-			input:    "claude-opus-4-7",
-			expected: anthropic.ModelClaudeOpus4_7,
-		},
-		{
-			name:     "claude-sonnet-4-6",
-			input:    "claude-sonnet-4-6",
-			expected: anthropic.ModelClaudeSonnet4_6,
-		},
-		{
-			name:     "claude-haiku-4-5",
-			input:    "claude-haiku-4-5",
-			expected: anthropic.ModelClaudeHaiku4_5_20251001,
-		},
-		{
-			name:     "claude-haiku-4-5-20251001",
-			input:    "claude-haiku-4-5-20251001",
-			expected: anthropic.ModelClaudeHaiku4_5_20251001,
-		},
-		{
-			name:     "claude-3-5-haiku-latest (legacy alias)",
-			input:    "claude-3-5-haiku-latest",
-			expected: anthropic.ModelClaudeHaiku4_5_20251001,
-		},
-		{
-			name:     "claude-sonnet-4-20250514 (legacy alias)",
-			input:    "claude-sonnet-4-20250514",
-			expected: anthropic.ModelClaudeSonnet4_6,
-		},
-		{
-			name:     "claude-3-7-sonnet-latest (legacy alias)",
-			input:    "claude-3-7-sonnet-latest",
-			expected: anthropic.ModelClaudeSonnet4_6,
-		},
-		{
-			name:     "unknown model defaults to claude-sonnet-4-6",
-			input:    "unknown-model",
-			expected: anthropic.ModelClaudeSonnet4_6,
-		},
-		{
-			name:     "empty string defaults to claude-sonnet-4-6",
-			input:    "",
-			expected: anthropic.ModelClaudeSonnet4_6,
-		},
-	}
+	t.Parallel()
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			result := getAnthropicModel(tt.input)
-			if result != tt.expected {
-				t.Errorf("getAnthropicModel(%q) = %q, want %q", tt.input, result, tt.expected)
-			}
-		})
+	tests := map[string]anthropic.Model{
+		"":                 anthropic.ModelClaudeSonnet5_5,
+		"claude-opus-5-5":  anthropic.ModelClaudeOpus5_5,
+		"claude-fable-5-1": anthropic.ModelClaudeFable5_1,
+		"claude-haiku-5-5": anthropic.ModelClaudeHaiku5_5,
+		"unknown-model":    anthropic.Model("unknown-model"), // passed through, never swapped
 	}
-}
-
-func TestSupportsThinking(t *testing.T) {
-	tests := []struct {
-		name     string
-		model    string
-		expected bool
-	}{
-		{
-			name:     "claude-opus-4-7 supports thinking",
-			model:    "claude-opus-4-7",
-			expected: true,
-		},
-		{
-			name:     "claude-sonnet-4-6 supports thinking",
-			model:    "claude-sonnet-4-6",
-			expected: true,
-		},
-		{
-			name:     "claude-haiku-4-5 does NOT support thinking",
-			model:    "claude-haiku-4-5",
-			expected: false,
-		},
-		{
-			name:     "claude-haiku-4-5-20251001 does NOT support thinking",
-			model:    "claude-haiku-4-5-20251001",
-			expected: false,
-		},
-		{
-			name:     "claude-3-5-haiku-latest does NOT support thinking",
-			model:    "claude-3-5-haiku-latest",
-			expected: false,
-		},
-		{
-			name:     "unknown model defaults to thinking support",
-			model:    "unknown-model",
-			expected: true,
-		},
-		{
-			name:     "empty string defaults to thinking support",
-			model:    "",
-			expected: true,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			result := supportsThinking(tt.model)
-			if result != tt.expected {
-				t.Errorf("supportsThinking(%q) = %v, want %v", tt.model, result, tt.expected)
-			}
-		})
+	for in, want := range tests {
+		if got := getAnthropicModel(in); got != want {
+			t.Errorf("getAnthropicModel(%q) = %q, want %q", in, got, want)
+		}
 	}
 }
 

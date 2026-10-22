@@ -148,7 +148,8 @@ func main() {
 	backendLong := flag.String("backend", "", "LLM backend (openai, anthropic, gemini, codex, or appserver)")
 	var model = flag.String("m", "", "Model name to use")
 	var modelLong = flag.String("model", "", "Model name to use")
-	var effort = flag.String("effort", "", "Reasoning effort for reasoning-capable models (none|minimal|low|medium|high|xhigh; primarily OpenAI)")
+	var effort = flag.String("effort", "",
+		"Reasoning effort for reasoning-capable models (none|minimal|low|medium|high|xhigh|max)")
 	var workdir = flag.String("workdir", "", "Working directory")
 	var settingsPath = flag.String("settings", "", "Path to settings file")
 	// Empty defaults, not defaultRole: with a default on both spellings each one

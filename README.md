@@ -113,7 +113,7 @@ klein "Create an HTTP server with a health check endpoint"
 
 # Use different backends
 klein -b anthropic "Analyze this codebase"
-klein -b openai -m gpt-5.6-luna "Create a console program which calculates fibonacci number in Golang."
+klein -b openai -m gpt-6-luna "Create a console program which calculates fibonacci number in Golang."
 
 # Pick a backend explicitly
 klein -b anthropic "Write a simple main.go that prints 'Hello, world!'. Use write tool."
@@ -148,7 +148,7 @@ required severity: `must` / `major` / `minor` / `nits`.
 klein review --input review-request.json --output review-result.json --workdir /path/to/pr-head
 
 # Backend/model/context/language overrides (--language defaults to en)
-klein review -b openai -m gpt-5.6-luna --context 10 --language ja --input - < review-request.json
+klein review -b openai -m gpt-6-luna --context 10 --language ja --input - < review-request.json
 ```
 
 A ready-made harness lives in this repo: the composite action
@@ -214,9 +214,13 @@ when a release is published; if an asset is missing the action falls back to
 
 ## Supported Models
 
-- **Anthropic**: `claude-opus-4-7`, `claude-sonnet-4-6`, `claude-haiku-4-5`
-- **OpenAI**: `gpt-5.6-luna` (default), `gpt-5.6-sol`, `gpt-5.6-terra`
-- **Google Gemini**: `gemini-2.5`, `gemini-2.5-flash`
+- **Anthropic**: `claude-sonnet-5-5` (default), `claude-opus-5-5`, `claude-fable-5-1`, `claude-haiku-5-5`
+- **OpenAI**: `gpt-6-luna` (default), `gpt-6-sol`, `gpt-6-astra`, `gpt-6.1-sol`
+- **Google Gemini**: `gemini-4-argon` (default)
+
+`--effort none|minimal|low|medium|high|xhigh|max` works on every backend; each
+client maps it to the nearest level its model accepts (OpenAI reasoning effort,
+Anthropic adaptive thinking + `output_config.effort`, Gemini `thinkingLevel`).
 
 ## Tool Approval System
 
@@ -307,7 +311,7 @@ KLEIN CLI uses a unified configuration system with settings stored in `~/.klein/
 **Override with Command Line:**
 ```bash
 # Override backend and model
-klein -b anthropic -m claude-sonnet-4-6 "Analyze this code"
+klein -b anthropic -m claude-sonnet-5-5 "Analyze this code"
 
 # Use custom settings file
 klein --settings ./my-settings.toml "Create a simple web server in Golang."
@@ -356,7 +360,7 @@ base_dir = "~/.klein"
 
 [llm]
 backend = "anthropic"
-model   = "claude-sonnet-4-6"
+model   = "claude-sonnet-5-5"
 
 [claw.discord]
 token            = "YOUR_DISCORD_BOT_TOKEN"

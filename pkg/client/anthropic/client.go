@@ -14,7 +14,11 @@ import (
 )
 
 const (
-	defaultMaxTokens = 8192
+	// defaultMaxTokens leaves room for adaptive thinking, which shares
+	// max_tokens with the answer and runs long at high effort.
+	defaultMaxTokens = 32000
+	// contextWindow is the input capacity of every Claude 5 model.
+	contextWindow = 1000000
 )
 
 // AnthropicCore contains shared Anthropic client resources and core functionality
@@ -23,6 +27,7 @@ type AnthropicCore struct {
 	client    *anthropic.Client
 	model     string
 	maxTokens int
+	effort    string // klein reasoning effort; steers adaptive thinking on Claude 5
 
 	// lastUsage is shared by all wrappers built from this core so token usage
 	// reported via the original client stays accurate even when per-invocation
@@ -32,11 +37,11 @@ type AnthropicCore struct {
 
 // NewAnthropicCore creates a new Anthropic core with shared resources
 func NewAnthropicCore(model string) (*AnthropicCore, error) {
-	return NewAnthropicCoreWithTokens(model, 0) // 0 = use default
+	return NewAnthropicCoreWithTokens(model, 0, "") // 0 = use default
 }
 
-// NewAnthropicCoreWithTokens creates a new Anthropic core with configurable maxTokens
-func NewAnthropicCoreWithTokens(model string, maxTokens int) (*AnthropicCore, error) {
+// NewAnthropicCoreWithTokens creates a new Anthropic core with configurable maxTokens and effort
+func NewAnthropicCoreWithTokens(model string, maxTokens int, effort string) (*AnthropicCore, error) {
 	apiKey := os.Getenv("ANTHROPIC_API_KEY")
 	if apiKey == "" {
 		return nil, fmt.Errorf("ANTHROPIC_API_KEY environment variable not set")
@@ -46,9 +51,7 @@ func NewAnthropicCoreWithTokens(model string, maxTokens int) (*AnthropicCore, er
 		option.WithAPIKey(apiKey),
 	)
 
-	// Use default if maxTokens is 0 or negative
-	// NOTE: Anthropic requires minimum tokens.
-	if maxTokens <= 0 || maxTokens < defaultMaxTokens {
+	if maxTokens <= 0 {
 		maxTokens = defaultMaxTokens
 	}
 
@@ -56,7 +59,19 @@ func NewAnthropicCoreWithTokens(model string, maxTokens int) (*AnthropicCore, er
 		client:    &client,
 		model:     model,
 		maxTokens: maxTokens,
+		effort:    effort,
 	}, nil
+}
+
+// applyThinking sets adaptive thinking, summarized so klein can stream it, with
+// depth steered by effort.
+func (c *AnthropicCore) applyThinking(params *anthropic.MessageNewParams) {
+	params.Thinking = anthropic.ThinkingConfigParamUnion{
+		OfAdaptive: &anthropic.ThinkingConfigAdaptiveParam{
+			Display: anthropic.ThinkingConfigAdaptiveDisplaySummarized,
+		},
+	}
+	params.OutputConfig.Effort = anthropicEffort(c.effort)
 }
 
 // AnthropicClient handles communication with Claude models
@@ -72,12 +87,12 @@ type AnthropicClient struct {
 
 // NewAnthropicClient creates a new Anthropic client with tool calling and thinking capabilities
 func NewAnthropicClient(model string) (domain.ToolCallingLLM, error) {
-	return NewAnthropicClientWithTokens(model, 0) // 0 = use default
+	return NewAnthropicClientWithTokens(model, 0, "") // 0 = use default
 }
 
-// NewAnthropicClientWithTokens creates a new Anthropic client with configurable maxTokens
-func NewAnthropicClientWithTokens(model string, maxTokens int) (domain.ToolCallingLLM, error) {
-	core, err := NewAnthropicCoreWithTokens(model, maxTokens)
+// NewAnthropicClientWithTokens creates a new Anthropic client with configurable maxTokens and effort
+func NewAnthropicClientWithTokens(model string, maxTokens int, effort string) (domain.ToolCallingLLM, error) {
+	core, err := NewAnthropicCoreWithTokens(model, maxTokens, effort)
 	if err != nil {
 		return nil, err
 	}
@@ -100,7 +115,7 @@ func (c *AnthropicClient) ModelID() string { return c.model }
 
 // ContextWindowProvider implementation
 func (c *AnthropicClient) MaxContextTokens() int {
-	return getModelContextWindow(c.model)
+	return contextWindow
 }
 
 // TokenUsageProvider implementation (populated from Message.Usage when available)
@@ -148,26 +163,20 @@ func (c *AnthropicClient) ChatWithToolChoice(ctx context.Context, messages []mes
 		Tools:     tools,
 	}
 
-	// Set tool choice based on the provided configuration
+	c.applyThinking(&messageParams)
+
+	// Forcing a tool ("any"/"tool") is rejected while thinking is on, and
+	// Claude 5 models always think, so it becomes "auto"; the prompt carries
+	// the instruction to use the tool.
 	if len(tools) > 0 {
-		anthropicToolChoice := convertToolChoiceToAnthropic(toolChoice)
-		messageParams.ToolChoice = anthropicToolChoice
-	}
-
-	// Determine if we should enable thinking (only for supported models)
-	shouldEnableThinking := supportsThinking(c.model)
-
-	// Add thinking configuration if supported
-	if shouldEnableThinking {
-		messageParams.Thinking = anthropic.ThinkingConfigParamUnion{
-			OfEnabled: &anthropic.ThinkingConfigEnabledParam{
-				BudgetTokens: int64(2048), // Set a reasonable thinking budget (minimum 1024)
-			},
+		if toolChoice.Type == domain.ToolChoiceAny || toolChoice.Type == domain.ToolChoiceTool {
+			toolChoice = domain.NewToolChoiceAuto()
 		}
+		messageParams.ToolChoice = convertToolChoiceToAnthropic(toolChoice)
 	}
 
 	// Always use streaming for all models (thinking display only if enabled and no tool results)
-	return c.chatWithStreaming(ctx, messageParams, shouldEnableThinking, enableThinking, thinkingChan)
+	return c.chatWithStreaming(ctx, messageParams, true, enableThinking, thinkingChan)
 }
 
 // SetToolManager sets the tool manager for dynamic tool definitions
@@ -203,20 +212,12 @@ func (c *AnthropicClient) Chat(ctx context.Context, messages []message.Message, 
 		Tools:     tools,
 	}
 
-	// Determine if we should enable thinking (only for supported models)
-	shouldEnableThinking := enableThinking && supportsThinking(c.model)
-
-	// Add thinking configuration if requested and supported
-	if shouldEnableThinking {
-		messageParams.Thinking = anthropic.ThinkingConfigParamUnion{
-			OfEnabled: &anthropic.ThinkingConfigEnabledParam{
-				BudgetTokens: int64(2048), // Set a reasonable thinking budget (minimum 1024)
-			},
-		}
-	}
+	// Claude 5 models think whether or not it is requested; enableThinking
+	// only controls whether the thinking is shown.
+	c.applyThinking(&messageParams)
 
 	// Use streaming for all models (thinking display only if enabled and supported)
-	return c.chatWithStreaming(ctx, messageParams, shouldEnableThinking, enableThinking, thinkingChan)
+	return c.chatWithStreaming(ctx, messageParams, enableThinking, enableThinking, thinkingChan)
 }
 
 // chatWithStreaming handles streaming generation with progressive thinking display using Message.Accumulate pattern

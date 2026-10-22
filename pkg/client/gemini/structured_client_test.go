@@ -25,7 +25,7 @@ func TestNewGeminiStructuredClient(t *testing.T) {
 	// Create a mock core
 	core := &GeminiCore{
 		client:    nil, // Would be a real client in production
-		model:     "gemini-2.5-flash-lite",
+		model:     modelGemini4Argon,
 		maxTokens: 1000,
 	}
 
@@ -42,7 +42,7 @@ func TestNewGeminiStructuredClient(t *testing.T) {
 
 func TestGeminiStructuredClient_IsToolCapable(t *testing.T) {
 	core := &GeminiCore{
-		model: "gemini-2.5-flash-lite",
+		model: modelGemini4Argon,
 	}
 	client := NewGeminiStructuredClient[TestResponse](core)
 
@@ -54,7 +54,7 @@ func TestGeminiStructuredClient_IsToolCapable(t *testing.T) {
 
 func TestGeminiStructuredClient_IsVisionCapable(t *testing.T) {
 	core := &GeminiCore{
-		model: "gemini-2.5-flash-lite",
+		model: modelGemini4Argon,
 	}
 	client := NewGeminiStructuredClient[TestResponse](core)
 
@@ -66,7 +66,7 @@ func TestGeminiStructuredClient_IsVisionCapable(t *testing.T) {
 
 func TestGeminiStructuredClient_generateGeminiSchema(t *testing.T) {
 	core := &GeminiCore{
-		model: "gemini-2.5-flash-lite",
+		model: modelGemini4Argon,
 	}
 	client := NewGeminiStructuredClient[TestResponse](core)
 
@@ -100,7 +100,7 @@ func TestGeminiStructuredClient_generateGeminiSchema(t *testing.T) {
 
 func TestGeminiStructuredClient_generateFieldSchema(t *testing.T) {
 	core := &GeminiCore{
-		model: "gemini-2.5-flash-lite",
+		model: modelGemini4Argon,
 	}
 	client := NewGeminiStructuredClient[TestResponse](core)
 
@@ -133,7 +133,7 @@ func TestGeminiStructuredClient_generateFieldSchema(t *testing.T) {
 
 func TestGeminiStructuredClient_generateNestedSchema(t *testing.T) {
 	core := &GeminiCore{
-		model: "gemini-2.5-flash-lite",
+		model: modelGemini4Argon,
 	}
 	client := NewGeminiStructuredClient[TestNestedResponse](core)
 
@@ -165,7 +165,7 @@ func TestGeminiStructuredClient_generateNestedSchema(t *testing.T) {
 
 func TestGeminiStructuredClient_convertMessagesToGemini(t *testing.T) {
 	core := &GeminiCore{
-		model: "gemini-2.5-flash-lite",
+		model: modelGemini4Argon,
 	}
 	client := NewGeminiStructuredClient[TestResponse](core)
 
@@ -200,19 +200,19 @@ func TestGeminiStructuredClient_convertMessagesToGemini(t *testing.T) {
 func TestGeminiStructuredClient_isThinkingCapable(t *testing.T) {
 	// Test with a reasoning model
 	core := &GeminiCore{
-		model: "gemini-2.5-flash-lite", // This should be a reasoning model
+		model: modelGemini4Argon,
 	}
 	client := NewGeminiStructuredClient[TestResponse](core)
 
 	if !client.isThinkingCapable() {
-		t.Error("Gemini 2.5 Flash Lite should be thinking capable")
+		t.Error("gemini-4-argon should be thinking capable")
 	}
 }
 
 // Test interface compliance
 func TestGeminiStructuredClient_InterfaceCompliance(t *testing.T) {
 	core := &GeminiCore{
-		model: "gemini-2.5-flash-lite",
+		model: modelGemini4Argon,
 	}
 	client := NewGeminiStructuredClient[TestResponse](core)
 

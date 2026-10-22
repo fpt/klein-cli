@@ -550,20 +550,20 @@ klein-cli/
 
 ### Available Models
 
-**Anthropic Models:**
-- `claude-opus-4-7` - Most capable model for complex reasoning and agentic coding
-- `claude-sonnet-4-6` - Best combination of speed and intelligence (default)
-- `claude-haiku-4-5` - Fastest model with near-frontier intelligence
+**Anthropic Models:** (Claude 5 — adaptive thinking, steered by `--effort`)
+- `claude-sonnet-5-5` - **Default**
+- `claude-opus-5-5`
+- `claude-fable-5-1` - Most capable
+- `claude-haiku-5-5` - Fastest
 
-**OpenAI Models:** (the gpt-5.6 line — the only OpenAI models klein adopts)
-- `gpt-5.6-luna` - **Default**
-- `gpt-5.6-sol`
-- `gpt-5.6-terra`
+**OpenAI Models:** (the gpt-6 line — the only OpenAI models klein adopts)
+- `gpt-6-luna` - **Default**
+- `gpt-6-sol`
+- `gpt-6-astra` (no `none` effort; mapped to `low`)
+- `gpt-6.1-sol` (no `none` effort; mapped to `low`)
 
-**Google Gemini Models:**
-- `gemini-2.5-flash-lite` - **Recommended** - Latest, fastest, most efficient
-- `gemini-2.5-pro` - High capability model for complex reasoning
-- `gemini-2.5-flash` - Latest experimental features
+**Google Gemini Models:** (thinking depth via `thinkingLevel`, from `--effort`)
+- `gemini-4-argon` (alias `argon`) - **Default**; 32K output; tool calls require thought signatures, which klein echoes back
 
 ### Development Tasks
 

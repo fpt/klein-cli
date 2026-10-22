@@ -66,12 +66,8 @@ func (c *GeminiStructuredClient[T]) ChatWithStructure(ctx context.Context, messa
 		config.SystemInstruction = systemInstruction
 	}
 
-	// Add thinking parameter if supported and enabled
-	if enableThinking && c.isThinkingCapable() {
-		config.ThinkingConfig = &genai.ThinkingConfig{
-			IncludeThoughts: true,
-		}
-	}
+	// Add thinking parameters (level from effort; thoughts if enabled)
+	config.ThinkingConfig = c.core.thinkingConfig(enableThinking && c.isThinkingCapable())
 
 	// Generate content using Gemini's structured output
 	result, err := c.core.client.Models.GenerateContent(

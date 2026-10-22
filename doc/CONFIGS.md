@@ -103,9 +103,9 @@ The `claw` object configures the `klein claw` gateway; see
 
 | Backend | Default model | Default base_url |
 |---------|--------------|-----------------|
-| `anthropic` | `claude-sonnet-4-6` | *(Anthropic API)* |
-| `openai` | `gpt-5.6-luna` | *(OpenAI API)* |
-| `gemini` | `gemini-2.5-flash-lite` | *(Google API)* |
+| `anthropic` | `claude-sonnet-5-5` | *(Anthropic API)* |
+| `openai` | `gpt-6-luna` | *(OpenAI API)* |
+| `gemini` | `gemini-4-argon` | *(Google API)* |
 | `codex` | *(codex-owned)* | *(codex app-server)* |
 | `appserver` | *(server-owned)* | *(the app-server)* |
 
@@ -133,7 +133,7 @@ needs a codex build with `dynamicTools`/`experimentalApi` support.
 ```toml
 [llm]
 backend = "codex"
-model   = "gpt-5.6-luna"
+model   = "gpt-6-luna"
 effort  = "medium"
 
 [codex]
@@ -597,7 +597,7 @@ or port-forward to that host.
 ```toml
 [llm]
 backend    = "anthropic"
-model      = "claude-sonnet-4-6"
+model      = "claude-sonnet-5-5"
 thinking   = true
 max_tokens = 4096
 
@@ -766,7 +766,7 @@ description: What this skill does
 allowed-tools: Read, Write, Bash, WebFetch
 argument-hint: "Describe what you want"
 user-invocable: true
-model: claude-sonnet-4-6
+model: claude-sonnet-5-5
 disable-model-invocation: false
 ---
 ```
@@ -932,7 +932,7 @@ base_dir = "~/.klein"
 
 [llm]
 backend = "anthropic"
-model   = "claude-sonnet-4-6"
+model   = "claude-sonnet-5-5"
 
 [agent]
 max_iterations = 30

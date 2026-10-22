@@ -2,4 +2,4 @@ name = "gemini"
 
 [llm]
 backend = "gemini"
-model = "gemini-3-flash-preview"
+model = "gemini-4-argon"

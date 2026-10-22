@@ -119,6 +119,9 @@ func messageToSerializable(msg message.Message) repository.MessageHistory {
 		Timestamp: msg.Timestamp(),
 		Source:    msg.Source(),
 	}
+	if md := msg.Metadata(); len(md) > 0 {
+		serializable.Metadata = maps.Clone(md)
+	}
 
 	// Handle tool-specific fields if it's a tool call or result message
 	switch msg.Type() {
@@ -152,7 +155,11 @@ func serializableToMessage(s repository.MessageHistory) message.Message {
 		toolName := message.ToolName(s.ToolName)
 		args := make(message.ToolArgumentValues)
 		maps.Copy(args, s.Args)
-		return message.NewToolCallMessageWithID(s.ID, toolName, args, s.Timestamp)
+		call := message.NewToolCallMessageWithID(s.ID, toolName, args, s.Timestamp)
+		for k, v := range s.Metadata {
+			call.SetMetadata(k, v)
+		}
+		return call
 	case message.MessageTypeToolResult:
 		// Create tool result message
 		if s.Error != "" {

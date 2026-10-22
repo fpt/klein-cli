@@ -13,50 +13,35 @@ import (
 
 // Anthropic models
 // https://docs.anthropic.com/en/docs/about-claude/models/overview
+//
+// klein targets the Claude 5 generation (Fable 5.1, Opus 5.5, Sonnet 5.5,
+// Haiku 5.5). All of them think adaptively — thinking cannot be given a fixed
+// budget, and on most it cannot be turned off — and take output_config.effort
+// from low to max. They have a 1M context window and up to 128K output.
 
-// getAnthropicModel maps common model names to Anthropic model constants
+const defaultModel = anthropic.ModelClaudeSonnet5_5
+
+// getAnthropicModel returns the model to request: the default when unset,
+// otherwise the name unchanged, so an invalid name surfaces as an API error
+// rather than being silently swapped for another model.
 func getAnthropicModel(model string) anthropic.Model {
-	switch model {
-	case "claude-opus-4-7":
-		return anthropic.ModelClaudeOpus4_7
-	case "claude-sonnet-4-6":
-		return anthropic.ModelClaudeSonnet4_6
-	case "claude-haiku-4-5", "claude-haiku-4-5-20251001", "claude-3-5-haiku-latest":
-		return anthropic.ModelClaudeHaiku4_5_20251001
-	// Legacy aliases
-	case "claude-opus-4-20250514":
-		return anthropic.ModelClaudeOpus4_7
-	case "claude-sonnet-4-20250514", "claude-3-7-sonnet-latest":
-		return anthropic.ModelClaudeSonnet4_6
+	if model == "" {
+		return defaultModel
 	}
-
-	// Default to Claude Sonnet 4.6
-	return anthropic.ModelClaudeSonnet4_6
+	return anthropic.Model(model)
 }
 
-// supportsThinking checks if the model supports thinking functionality
-func supportsThinking(model string) bool {
-	switch model {
-	case "claude-haiku-4-5", "claude-haiku-4-5-20251001", "claude-3-5-haiku-latest":
-		return false
-	}
-	return true
-}
-
-// getModelContextWindow returns a conservative approximation of the
-// model's context window (input token capacity). Anthropic models
-// generally provide large windows (~200k). This value is used for
-// utilization reporting only.
-func getModelContextWindow(model string) int {
-	switch model {
-	case "claude-opus-4-20250514",
-		"claude-sonnet-4-20250514",
-		"claude-3-7-sonnet-latest",
-		"claude-3-5-haiku-latest":
-		return 200000
+// anthropicEffort maps klein's effort onto output_config.effort. "none" and
+// "minimal" have no Anthropic equivalent and become "low"; empty leaves the
+// API default.
+func anthropicEffort(effort string) anthropic.OutputConfigEffort {
+	switch effort {
+	case "":
+		return ""
+	case "none", "minimal":
+		return anthropic.OutputConfigEffortLow
 	default:
-		// Conservative default for unknown/alias names
-		return 200000
+		return anthropic.OutputConfigEffort(effort)
 	}
 }
 

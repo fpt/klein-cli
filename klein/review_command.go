@@ -84,7 +84,7 @@ func parseReviewFlags(args []string) (opts reviewOptions, code int, ok bool) {
 	backendLong := fs.String("backend", "", "LLM backend (openai, anthropic, gemini)")
 	model := fs.String("m", "", "Model name to use")
 	modelLong := fs.String("model", "", "Model name to use")
-	effort := fs.String("effort", "", "Reasoning effort (none|minimal|low|medium|high|xhigh)")
+	effort := fs.String("effort", "", "Reasoning effort (none|minimal|low|medium|high|xhigh|max)")
 	settingsPath := fs.String("settings", "", "Path to settings file")
 	language := fs.String("language", "en", "Language for the review output (code or name, e.g. en, ja, Japanese)")
 	contextLines := fs.Int("context", 10, "Extra context lines around each hunk in the annotated diff")

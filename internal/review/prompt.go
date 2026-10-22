@@ -114,7 +114,10 @@ func BuildPrompt(req Request, enrichedDiff, language string) string {
 	if len(req.PreviousComments) > 0 {
 		b.WriteString("1. For each previous comment above: Read the current code at that location; ")
 		b.WriteString("if the issue is fixed, call ResolveReviewComment with its id. ")
-		b.WriteString("If it still applies, leave it open and do NOT re-post a duplicate.\n")
+		b.WriteString("If it still applies, leave it open and do NOT re-post a duplicate. ")
+		b.WriteString("Fixed in a way that introduces a NEW problem is still fixed: resolve it and file the new ")
+		b.WriteString("problem as its own AddInlineReview. If ResolveReviewComment is rejected, retry with an id ")
+		b.WriteString("the error names — never finish with a verified resolution outstanding.\n")
 		b.WriteString("2. Understand the change; Read surrounding code to verify each new suspicion before reporting it.\n")
 		b.WriteString("3. Report each verified NEW finding with AddInlineReview (path + the bracketed line number).\n")
 		b.WriteString("4. Write the overall assessment with AddSummaryReview.\n")

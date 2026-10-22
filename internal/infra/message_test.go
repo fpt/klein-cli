@@ -252,3 +252,22 @@ func TestMessageSerializationEdgeCases(t *testing.T) {
 		t.Fatal("Message type not preserved for empty message")
 	}
 }
+
+func TestToolCallMetadataSurvivesRoundTrip(t *testing.T) {
+	t.Parallel()
+	call := message.NewToolCallMessage("Read", message.ToolArgumentValues{"path": "a.go"})
+	call.SetMetadata("gemini_thought_signature", "EllK")
+
+	data, err := json.Marshal(messageToSerializable(call))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var s repository.MessageHistory
+	if err := json.Unmarshal(data, &s); err != nil {
+		t.Fatal(err)
+	}
+	restored := serializableToMessage(s)
+	if got := restored.Metadata()["gemini_thought_signature"]; got != "EllK" {
+		t.Errorf("signature after round trip = %v, want EllK", got)
+	}
+}

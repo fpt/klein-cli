@@ -15,6 +15,8 @@ type MessageHistory struct {
 	Images    []string              `json:"images,omitempty"`
 	Timestamp time.Time             `json:"timestamp"`
 	Source    message.MessageSource `json:"source"`
+	// Provider-specific data a backend must echo back (e.g. thought signatures)
+	Metadata map[string]any `json:"metadata,omitempty"`
 
 	// For tool messages
 	ToolName string         `json:"tool_name,omitempty"`

@@ -1,43 +1,41 @@
 package gemini
 
-// Google Gemini 2.5 Models
+import "google.golang.org/genai"
+
+// Google Gemini Models
 // https://ai.google.dev/gemini-api/docs/models
+//
+// klein targets the Gemini 4 generation. Its thinking depth is set with
+// thinkingLevel (LOW, MEDIUM, HIGH; MINIMAL is rejected), not a token budget.
 
-const (
-	modelGemini25Pro       = "gemini-2.5-pro"
-	modelGemini25Flash     = "gemini-2.5-flash"
-	modelGemini25FlashLite = "gemini-2.5-flash-lite"
-)
+const modelGemini4Argon = "gemini-4-argon"
 
-// getGeminiModel maps user-friendly model names to actual Gemini 2.5 model identifiers
+// getGeminiModel returns the model to request: the default when unset, the
+// "argon" alias resolved, and any other name passed through unchanged so an
+// invalid name surfaces as an API error rather than being silently swapped.
 func getGeminiModel(model string) string {
-	// Normalize the model name to 2.5 series only
 	switch model {
-	case "gemini-2.5-pro", "gemini-pro", "pro":
-		return modelGemini25Pro
-	case "gemini-2.5-flash", "gemini-flash", "flash":
-		return modelGemini25Flash
-	case "gemini-2.5-flash-lite", "gemini-2.5-lite", "gemini-lite", "lite":
-		return modelGemini25FlashLite
+	case "", "argon":
+		return modelGemini4Argon
 	default:
-		// If it's already a valid Gemini 2.5 model name, return as-is
-		if isValidGeminiModel(model) {
-			return model
-		}
-		// Default to Gemini 2.5 Flash for unknown models (most balanced)
-		return modelGemini25Flash
+		return model
 	}
 }
 
-// isValidGeminiModel checks if a model name is a valid Gemini 2.5 model
-func isValidGeminiModel(model string) bool {
-	validModels := map[string]bool{
-		// Gemini 2.5 models only
-		modelGemini25Pro:       true,
-		modelGemini25Flash:     true,
-		modelGemini25FlashLite: true,
+// thinkingLevelFor maps klein's effort onto a Gemini thinking level. The
+// lowest level is LOW, so none/minimal land there; xhigh/max land on HIGH.
+// Empty leaves the API default.
+func thinkingLevelFor(effort string) genai.ThinkingLevel {
+	switch effort {
+	case "":
+		return ""
+	case "none", "minimal", "low":
+		return genai.ThinkingLevelLow
+	case "medium":
+		return genai.ThinkingLevelMedium
+	default:
+		return genai.ThinkingLevelHigh
 	}
-	return validModels[model]
 }
 
 // ModelCapabilities represents the capabilities of a Gemini model
@@ -47,60 +45,25 @@ type ModelCapabilities struct {
 	SupportsStructured  bool
 	MaxTokens           int
 	// MaxContextWindow is the approximate input context window size
-	// Gemini 2.5 models support ~1,048,576 token input contexts.
+	// Gemini 4 models support ~1,048,576 token input contexts.
 	MaxContextWindow     int
 	SupportsSystemPrompt bool
 	SupportsMultimodal   bool
 	IsReasoningModel     bool
 }
 
-// getModelCapabilities returns the capabilities of a specific Gemini 2.5 model
-func getModelCapabilities(model string) ModelCapabilities {
-	switch model {
-	case modelGemini25Pro:
-		return ModelCapabilities{
-			SupportsVision:       true,
-			SupportsToolCalling:  true,  // Function calling supported
-			SupportsStructured:   true,  // Structured output supported
-			MaxTokens:            65536, // Output token limit: 65,536 (Input limit: 1,048,576)
-			MaxContextWindow:     1048576,
-			SupportsSystemPrompt: true,
-			SupportsMultimodal:   true, // Audio, images, video, text, PDF
-			IsReasoningModel:     true, // Thinking supported, caching, code execution, grounding
-		}
-	case modelGemini25Flash:
-		return ModelCapabilities{
-			SupportsVision:       true,
-			SupportsToolCalling:  true,  // Function calling supported
-			SupportsStructured:   true,  // Structured output supported
-			MaxTokens:            65536, // Output token limit: 65,536 (Input limit: 1,048,576)
-			MaxContextWindow:     1048576,
-			SupportsSystemPrompt: true,
-			SupportsMultimodal:   true, // Text, images, video, audio (no PDF)
-			IsReasoningModel:     true, // Thinking supported, caching, code execution, grounding
-		}
-	case modelGemini25FlashLite:
-		return ModelCapabilities{
-			SupportsVision:       true,
-			SupportsToolCalling:  true,  // Function calling supported
-			SupportsStructured:   true,  // Structured output supported
-			MaxTokens:            65536, // Output token limit: 65,536 (Input limit: 1,048,576)
-			MaxContextWindow:     1048576,
-			SupportsSystemPrompt: true,
-			SupportsMultimodal:   true, // Text, images, video, audio, PDF
-			IsReasoningModel:     true, // Thinking supported, caching, code execution, grounding, URL context
-		}
-	default:
-		// Default to Flash Lite capabilities for unknown models
-		return ModelCapabilities{
-			SupportsVision:       true,
-			SupportsToolCalling:  true,  // Function calling supported
-			SupportsStructured:   true,  // Structured output supported
-			MaxTokens:            65536, // Output token limit: 65,536 (Input limit: 1,048,576)
-			MaxContextWindow:     1048576,
-			SupportsSystemPrompt: true,
-			SupportsMultimodal:   true, // Text, images, video, audio, PDF
-			IsReasoningModel:     true, // Thinking supported
-		}
+// getModelCapabilities returns the capability profile for a model. Every
+// model is treated as the Gemini 4 generation (values from models.get for
+// gemini-4-argon).
+func getModelCapabilities(_ string) ModelCapabilities {
+	return ModelCapabilities{
+		SupportsVision:       true,
+		SupportsToolCalling:  true,  // Function calling; requires thought signatures echoed back
+		SupportsStructured:   true,  // Structured output supported
+		MaxTokens:            32768, // Output token limit: 32,768 (Input limit: 1,048,576)
+		MaxContextWindow:     1048576,
+		SupportsSystemPrompt: true,
+		SupportsMultimodal:   true, // Text, images, video, audio, PDF
+		IsReasoningModel:     true, // Thinking supported via thinkingLevel
 	}
 }

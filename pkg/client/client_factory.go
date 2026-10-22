@@ -15,9 +15,17 @@ import (
 func NewLLMClient(settings config.LLMSettings) (domain.LLM, error) {
 	switch settings.Backend {
 	case "anthropic", "claude":
-		return anthropic.NewAnthropicClientWithTokens(settings.Model, settings.MaxTokens)
+		c, err := anthropic.NewAnthropicClientWithTokens(settings.Model, settings.MaxTokens, settings.Effort)
+		if err != nil {
+			return nil, fmt.Errorf("create anthropic client: %w", err)
+		}
+		return c, nil
 	case "gemini":
-		return gemini.NewGeminiClientWithTokens(settings.Model, settings.MaxTokens)
+		c, err := gemini.NewGeminiClientWithTokens(settings.Model, settings.MaxTokens, settings.Effort)
+		if err != nil {
+			return nil, fmt.Errorf("create gemini client: %w", err)
+		}
+		return c, nil
 	case "codex", "appserver":
 		// These are whole-agent backends routed via internal/agentbackend; this
 		// stub only satisfies domain.LLM for agent construction (Chat is never

@@ -57,7 +57,8 @@ type OpenAIClient struct {
 
 // NewOpenAIClient creates a new OpenAI client with configurable maxTokens and
 // reasoning effort. maxTokens = 0 means default; effort = "" means
-// defaultReasoningEffort. effort is one of: none, minimal, low, medium, high, xhigh.
+// defaultReasoningEffort. effort is one of: none, minimal, low, medium, high,
+// xhigh, max; it is clamped to a level the model accepts.
 func NewOpenAIClient(model string, maxTokens int, effort string) (*OpenAIClient, error) {
 	apiKey := os.Getenv("OPENAI_API_KEY")
 	if apiKey == "" {
@@ -86,7 +87,7 @@ func NewOpenAIClient(model string, maxTokens int, effort string) (*OpenAIClient,
 		client:               &client,
 		model:                openaiModel,
 		maxTokens:            maxTokens,
-		reasoningEffort:      parseReasoningEffort(effort),
+		reasoningEffort:      supportedEffort(openaiModel, parseReasoningEffort(effort)),
 		streamingUnsupported: false,
 	}
 
@@ -111,6 +112,8 @@ func parseReasoningEffort(effort string) shared.ReasoningEffort {
 		return shared.ReasoningEffortHigh
 	case "xhigh":
 		return shared.ReasoningEffortXhigh
+	case "max":
+		return shared.ReasoningEffortMax
 	default:
 		return defaultReasoningEffort
 	}
@@ -520,10 +523,9 @@ func (c *OpenAIClient) convertMessagesToResponsesInputItems(messages []message.M
 			// Cast to ToolResultMessage to access result-specific methods
 			if toolResultMsg, ok := msg.(*message.ToolResultMessage); ok {
 				// Use proper function call output input item
-				inputItem := responses.ResponseInputItemParamOfFunctionCallOutput(
-					toolResultMsg.ID(), // Use message ID as call ID (should match the corresponding tool call)
-					toolResultMsg.Result,
-				)
+				inputItem := responses.ResponseInputItemParamOfFunctionCallOutput(toolResultMsg.Result)
+				// Use message ID as call ID (should match the corresponding tool call)
+				inputItem.OfFunctionCallOutput.CallID = param.NewOpt(toolResultMsg.ID())
 				inputItems = append(inputItems, inputItem)
 				// If the tool result contains images, inject a user message with the image
 				// (FunctionCallOutput is text-only, so images must go in a separate message)

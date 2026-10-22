@@ -4,25 +4,23 @@ import (
 	"testing"
 )
 
-// TestGetOpenAIModel pins the adoption policy: only the gpt-5.6 line
-// (sol/terra/luna) is accepted. Everything else — including older gpt-5.x and
-// gpt-4 — falls back to the default (luna).
+// TestGetOpenAIModel pins the adoption policy: only the gpt-6 line is
+// accepted. Everything else — including the older gpt-5.x lines — falls back
+// to the default (luna).
 func TestGetOpenAIModel(t *testing.T) {
 	t.Parallel()
 	testCases := []struct {
 		input    string
 		expected string
 	}{
+		{ModelAstra, ModelAstra},
 		{ModelLuna, ModelLuna},
 		{ModelSol, ModelSol},
-		{ModelTerra, ModelTerra},
-		{ModelLuna + "-2026-05-01", ModelLuna + "-2026-05-01"}, // dated variant of an adopted model
+		{ModelSol61, ModelSol61},
+		{ModelLuna + "-2026-09-01", ModelLuna + "-2026-09-01"}, // dated variant of an adopted model
 		// Not adopted → default fallback.
-		{"gpt-5.4", defaultModel},
-		{"gpt-5.4-mini", defaultModel},
-		{"gpt-5.4-nano", defaultModel},
+		{"gpt-5.6-luna", defaultModel},
 		{"gpt-5.5", defaultModel},
-		{"gpt-5", defaultModel},
 		{"gpt-4o", defaultModel},
 		{"unknown-model", defaultModel},
 		{"", defaultModel},

@@ -20,6 +20,7 @@ type GeminiCore struct {
 	client    *genai.Client
 	model     string
 	maxTokens int
+	effort    string // klein reasoning effort, sent as thinkingLevel
 
 	// lastUsage is shared by all wrappers built from this core so token usage
 	// reported via the original client stays accurate even when per-invocation
@@ -39,11 +40,11 @@ type GeminiClient struct {
 
 // NewGeminiClient creates a new Gemini client with the specified model
 func NewGeminiClient(model string) (*GeminiClient, error) {
-	return NewGeminiClientWithTokens(model, 0) // 0 = use default
+	return NewGeminiClientWithTokens(model, 0, "") // 0 = use default
 }
 
 // NewGeminiClientWithTokens creates a new Gemini client with configurable maxTokens
-func NewGeminiClientWithTokens(model string, maxTokens int) (*GeminiClient, error) {
+func NewGeminiClientWithTokens(model string, maxTokens int, effort string) (*GeminiClient, error) {
 	apiKey := os.Getenv("GEMINI_API_KEY")
 	if apiKey == "" {
 		return nil, fmt.Errorf("GEMINI_API_KEY environment variable not set")
@@ -70,6 +71,7 @@ func NewGeminiClientWithTokens(model string, maxTokens int) (*GeminiClient, erro
 		client:    client,
 		model:     geminiModel,
 		maxTokens: maxTokens,
+		effort:    effort,
 	}
 
 	return &GeminiClient{
@@ -155,11 +157,11 @@ func (c *GeminiClient) Chat(ctx context.Context, messages []message.Message, ena
 		config.SystemInstruction = systemInstruction
 	}
 
+	config.ThinkingConfig = c.thinkingConfig(false)
+
 	// Enable thinking if requested and model supports it
 	if enableThinking && c.isThinkingCapable() {
-		config.ThinkingConfig = &genai.ThinkingConfig{
-			IncludeThoughts: true,
-		}
+		config.ThinkingConfig = c.thinkingConfig(true)
 
 		// Use streaming for progressive thinking display (no tool handling in basic chat)
 		return c.chatWithStreaming(ctx, geminiContents, config, true, false, enableThinking, thinkingChan)
@@ -210,6 +212,17 @@ func (c *GeminiClient) Chat(ctx context.Context, messages []message.Message, ena
 	return message.NewChatMessage(message.MessageTypeAssistant, responseText), nil
 }
 
+// thinkingConfig returns the thinking settings for a request: the thinking
+// level from effort, and whether thought summaries are returned. nil when
+// there is nothing to set.
+func (c *GeminiCore) thinkingConfig(includeThoughts bool) *genai.ThinkingConfig {
+	level := thinkingLevelFor(c.effort)
+	if !includeThoughts && level == "" {
+		return nil
+	}
+	return &genai.ThinkingConfig{IncludeThoughts: includeThoughts, ThinkingLevel: level}
+}
+
 // isThinkingCapable checks if the current model supports thinking
 func (c *GeminiClient) isThinkingCapable() bool {
 	capabilities := getModelCapabilities(c.model)
@@ -224,7 +237,7 @@ func (c *GeminiClient) chatWithStreaming(ctx context.Context, contents []*genai.
 
 	var responseText strings.Builder
 	var thinkingText strings.Builder
-	var toolCalls []*genai.FunctionCall // Collect multiple tool calls
+	var toolCallParts []*genai.Part // Collect multiple tool calls
 
 	// Process streaming responses using the iter.Seq2 pattern
 	for resp, err := range stream {
@@ -237,23 +250,25 @@ func (c *GeminiClient) chatWithStreaming(ctx context.Context, contents []*genai.
 			for _, part := range resp.Candidates[0].Content.Parts {
 				// Handle function calls if tool handling is enabled
 				if handleTools && part.FunctionCall != nil {
-					// Collect tool calls for later processing
-					toolCalls = append(toolCalls, part.FunctionCall)
+					// Collect tool calls (with their thought signatures) for later processing
+					toolCallParts = append(toolCallParts, part)
 					continue
 				}
 
-				// Handle regular text content
-				if part.Text != "" {
-					if showThinking {
-						// Send thinking content to channel if enabled
-						if enableThinking && thinkingChan != nil {
-							message.SendThinkingContent(thinkingChan, part.Text)
-						}
-					}
-
-					// Accumulate all text
-					responseText.WriteString(part.Text)
+				if part.Text == "" {
+					continue
 				}
+
+				// Thought summaries are thinking, not part of the answer
+				if part.Thought {
+					if showThinking && enableThinking && thinkingChan != nil {
+						message.SendThinkingContent(thinkingChan, part.Text)
+					}
+					thinkingText.WriteString(part.Text)
+					continue
+				}
+
+				responseText.WriteString(part.Text)
 			}
 		}
 	}
@@ -264,19 +279,8 @@ func (c *GeminiClient) chatWithStreaming(ctx context.Context, contents []*genai.
 	}
 
 	// Check if we have tool calls to return (only when tool handling is enabled)
-	if handleTools && len(toolCalls) > 0 {
-		// Build messages for all collected function calls
-		if len(toolCalls) == 1 {
-			fc := toolCalls[0]
-			args := convertGeminiArgsToToolArgs(convertToolArgsToJSON(fc.Args))
-			return message.NewToolCallMessage(message.ToolName(fc.Name), args), nil
-		}
-		calls := make([]*message.ToolCallMessage, 0, len(toolCalls))
-		for _, fc := range toolCalls {
-			args := convertGeminiArgsToToolArgs(convertToolArgsToJSON(fc.Args))
-			calls = append(calls, message.NewToolCallMessage(message.ToolName(fc.Name), args))
-		}
-		return message.NewToolCallBatch(calls), nil
+	if handleTools && len(toolCallParts) > 0 {
+		return toolCallsFromParts(toolCallParts), nil
 	}
 
 	finalText := responseText.String()
@@ -308,66 +312,12 @@ func (c *GeminiClient) GetToolManager() domain.ToolManager {
 
 // IsToolCapable checks if the Gemini client supports native tool calling
 func (c *GeminiClient) IsToolCapable() bool {
-	// All Gemini 1.5+ and 2.0+ models support function calling
-	return strings.Contains(c.model, "gemini-1.5") ||
-		strings.Contains(c.model, "gemini-2.0") ||
-		strings.Contains(c.model, "gemini-2.5")
+	return getModelCapabilities(c.model).SupportsToolCalling
 }
 
 // ChatWithToolChoice implements ToolCallingLLM interface with tool manager integration
 func (c *GeminiClient) ChatWithToolChoice(ctx context.Context, messages []message.Message, toolChoice domain.ToolChoice, enableThinking bool, thinkingChan chan<- string) (message.Message, error) {
-	// Convert internal messages to Gemini format
-	geminiContents := make([]*genai.Content, 0)
-	var systemInstruction *genai.Content
-
-	for _, msg := range messages {
-		switch msg.Type() {
-		case message.MessageTypeUser:
-			// Handle images if present
-			if images := msg.Images(); len(images) > 0 {
-				// Create parts with both text and images
-				parts := []*genai.Part{}
-				if content := msg.Content(); content != "" {
-					parts = append(parts, &genai.Part{Text: content})
-				}
-				// TODO: Implement image handling with proper base64 decoding
-				// For now, just add text content
-				geminiContents = append(geminiContents, genai.NewContentFromParts(parts, genai.RoleUser))
-			} else {
-				geminiContents = append(geminiContents, genai.NewContentFromText(msg.Content(), genai.RoleUser))
-			}
-
-		case message.MessageTypeAssistant:
-			// Add assistant messages as context
-			geminiContents = append(geminiContents, genai.NewContentFromText(msg.Content(), genai.RoleModel))
-
-		case message.MessageTypeSystem:
-			// Use the last system message as system instruction
-			systemInstruction = genai.NewContentFromText(msg.Content(), genai.RoleUser)
-
-		case message.MessageTypeToolCall:
-			// For tool calls, represent as assistant function calls
-			if toolCallMsg, ok := msg.(interface {
-				ToolName() message.ToolName
-				ToolArguments() message.ToolArgumentValues
-			}); ok {
-				argsJSON := convertToolArgsToJSON(toolCallMsg.ToolArguments())
-				toolCallText := "[Function call: " + string(toolCallMsg.ToolName()) + "(" + argsJSON + ")]"
-				geminiContents = append(geminiContents, genai.NewContentFromText(toolCallText, genai.RoleModel))
-			}
-
-		case message.MessageTypeToolResult:
-			// Represent tool results as user messages
-			if toolResultMsg, ok := msg.(interface{ Content() string }); ok {
-				resultText := "[Function result: " + toolResultMsg.Content() + "]"
-				geminiContents = append(geminiContents, genai.NewContentFromText(resultText, genai.RoleUser))
-			}
-
-		case message.MessageTypeToolCallBatch:
-			// Skip batch containers; individual calls/results are already in the transcript
-			continue
-		}
-	}
+	geminiContents, systemInstruction := convertMessagesToGemini(messages)
 
 	// Prepare configuration
 	config := &genai.GenerateContentConfig{
@@ -394,9 +344,7 @@ func (c *GeminiClient) ChatWithToolChoice(ctx context.Context, messages []messag
 
 	// Enable thinking for tool calling as well
 	if c.isThinkingCapable() {
-		config.ThinkingConfig = &genai.ThinkingConfig{
-			IncludeThoughts: true,
-		}
+		config.ThinkingConfig = c.thinkingConfig(true)
 
 		// Use streaming for progressive thinking display with tool handling enabled
 		return c.chatWithStreaming(ctx, geminiContents, config, true, true, enableThinking, thinkingChan)
@@ -443,18 +391,9 @@ func (c *GeminiClient) ChatWithToolChoice(ctx context.Context, messages []messag
 	}
 
 	// Check if response contains function calls (collect all)
-	if len(resp.Candidates) > 0 && resp.Candidates[0].Content != nil && len(resp.Candidates[0].Content.Parts) > 0 {
-		var calls []*message.ToolCallMessage
-		for _, part := range resp.Candidates[0].Content.Parts {
-			if functionCall := part.FunctionCall; functionCall != nil {
-				args := convertGeminiArgsToToolArgs(convertToolArgsToJSON(functionCall.Args))
-				calls = append(calls, message.NewToolCallMessage(message.ToolName(functionCall.Name), args))
-			}
-		}
-		if len(calls) == 1 {
-			return calls[0], nil
-		} else if len(calls) > 1 {
-			return message.NewToolCallBatch(calls), nil
+	if resp.Candidates[0].Content != nil {
+		if calls := toolCallsFromParts(resp.Candidates[0].Content.Parts); calls != nil {
+			return calls, nil
 		}
 	}
 
@@ -469,7 +408,5 @@ func (c *GeminiClient) ChatWithToolChoice(ctx context.Context, messages []messag
 
 // SupportsVision implements VisionLLM interface
 func (c *GeminiClient) SupportsVision() bool {
-	// Gemini Pro Vision models support vision
-	return strings.Contains(c.model, "vision") || strings.Contains(c.model, "gemini-pro-vision") ||
-		strings.Contains(c.model, "gemini-2.0") || strings.Contains(c.model, "gemini-1.5")
+	return getModelCapabilities(c.model).SupportsVision
 }

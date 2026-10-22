@@ -3,13 +3,13 @@ package config
 import "testing"
 
 func TestIsValidEffort(t *testing.T) {
-	valid := []string{"", "none", "minimal", "low", "medium", "high", "xhigh"}
+	valid := []string{"", "none", "minimal", "low", "medium", "high", "xhigh", "max"}
 	for _, e := range valid {
 		if !IsValidEffort(e) {
 			t.Errorf("IsValidEffort(%q) = false, want true", e)
 		}
 	}
-	invalid := []string{"lowish", "HIGH", "max", "1", "default"}
+	invalid := []string{"lowish", "HIGH", "maximum", "1", "default"}
 	for _, e := range invalid {
 		if IsValidEffort(e) {
 			t.Errorf("IsValidEffort(%q) = true, want false", e)

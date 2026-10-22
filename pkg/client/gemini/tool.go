@@ -1,7 +1,9 @@
 package gemini
 
 import (
+	"encoding/base64"
 	"encoding/json"
+	"slices"
 	"strings"
 
 	"google.golang.org/genai"
@@ -185,5 +187,137 @@ func convertToolChoiceToGemini(toolChoice domain.ToolChoice, tools []*genai.Tool
 
 	return &genai.ToolConfig{
 		FunctionCallingConfig: functionCallingConfig,
+	}
+}
+
+// thoughtSignatureKey is the message metadata key holding a function call's
+// thought signature (base64, so it survives the JSON session file unchanged).
+const thoughtSignatureKey = "gemini_thought_signature"
+
+// skipThoughtSignature is Google's documented placeholder for a function call
+// that has no real signature — history resumed from an older session or
+// produced by another model. Gemini 3+ rejects function calls without one.
+// https://ai.google.dev/gemini-api/docs/thought-signatures
+var skipThoughtSignature = []byte("skip_thought_signature_validator")
+
+// newToolCallFromPart builds a tool call message from a functionCall part,
+// keeping its thought signature so it can be echoed back on the next request.
+func newToolCallFromPart(part *genai.Part) *message.ToolCallMessage {
+	fc := part.FunctionCall
+	args := convertGeminiArgsToToolArgs(convertToolArgsToJSON(fc.Args))
+	call := message.NewToolCallMessage(message.ToolName(fc.Name), args)
+	if len(part.ThoughtSignature) > 0 {
+		call.SetMetadata(thoughtSignatureKey, base64.StdEncoding.EncodeToString(part.ThoughtSignature))
+	}
+	return call
+}
+
+// toolCallsFromParts collects every functionCall part into a single message:
+// a ToolCallMessage for one call, a ToolCallBatchMessage for several.
+func toolCallsFromParts(parts []*genai.Part) message.Message {
+	var calls []*message.ToolCallMessage
+	for _, part := range parts {
+		if part.FunctionCall != nil {
+			calls = append(calls, newToolCallFromPart(part))
+		}
+	}
+	switch len(calls) {
+	case 0:
+		return nil
+	case 1:
+		return calls[0]
+	default:
+		return message.NewToolCallBatch(calls)
+	}
+}
+
+// convertMessagesToGemini converts the transcript into Gemini contents for a
+// tool-calling request. Tool calls and results become native functionCall /
+// functionResponse parts; consecutive calls (a parallel batch) share one model
+// turn and their results share one user turn, as the API expects.
+func convertMessagesToGemini(messages []message.Message) ([]*genai.Content, *genai.Content) {
+	var contents []*genai.Content
+	var systemInstruction *genai.Content
+	callNames := make(map[string]string) // tool call ID → function name, for responses
+
+	for _, msg := range messages {
+		switch msg.Type() {
+		case message.MessageTypeUser:
+			// TODO: Implement image handling with proper base64 decoding
+			contents = append(contents, genai.NewContentFromText(msg.Content(), genai.RoleUser))
+
+		case message.MessageTypeAssistant:
+			contents = append(contents, genai.NewContentFromText(msg.Content(), genai.RoleModel))
+
+		case message.MessageTypeSystem:
+			// Use the last system message as system instruction
+			systemInstruction = genai.NewContentFromText(msg.Content(), genai.RoleUser)
+
+		case message.MessageTypeToolCall:
+			if call, ok := msg.(*message.ToolCallMessage); ok {
+				callNames[call.ID()] = string(call.ToolName())
+				contents = appendFunctionPart(contents, genai.RoleModel, functionCallPart(call))
+			}
+
+		case message.MessageTypeToolResult:
+			contents = appendFunctionPart(contents, genai.RoleUser, functionResponsePart(msg, callNames[msg.ID()]))
+
+		case message.MessageTypeToolCallBatch:
+			// Skip batch containers; individual calls/results are already in the transcript
+			continue
+		}
+	}
+
+	markUnsignedCallTurns(contents)
+	return contents, systemInstruction
+}
+
+// functionCallPart converts a tool call, restoring its thought signature.
+func functionCallPart(call *message.ToolCallMessage) *genai.Part {
+	part := genai.NewPartFromFunctionCall(string(call.ToolName()), call.ToolArguments())
+	if sig, ok := call.Metadata()[thoughtSignatureKey].(string); ok {
+		if decoded, err := base64.StdEncoding.DecodeString(sig); err == nil {
+			part.ThoughtSignature = decoded
+		}
+	}
+	return part
+}
+
+// functionResponsePart converts a tool result, forwarding a tool error as such.
+func functionResponsePart(msg message.Message, name string) *genai.Part {
+	response := map[string]any{"output": msg.Content()}
+	if result, ok := msg.(*message.ToolResultMessage); ok && result.Error != "" {
+		response = map[string]any{"error": result.Error}
+	}
+	return genai.NewPartFromFunctionResponse(name, response)
+}
+
+// isFunctionTurn reports whether content holds functionCall/functionResponse parts.
+func isFunctionTurn(content *genai.Content) bool {
+	return len(content.Parts) > 0 &&
+		(content.Parts[0].FunctionCall != nil || content.Parts[0].FunctionResponse != nil)
+}
+
+// appendFunctionPart adds a function part to the previous content when it has
+// the same role and holds function parts too, so a batch stays one turn.
+func appendFunctionPart(contents []*genai.Content, role string, part *genai.Part) []*genai.Content {
+	if n := len(contents); n > 0 && contents[n-1].Role == role && isFunctionTurn(contents[n-1]) {
+		contents[n-1].Parts = append(contents[n-1].Parts, part)
+		return contents
+	}
+	return append(contents, genai.NewContentFromParts([]*genai.Part{part}, genai.Role(role)))
+}
+
+// markUnsignedCallTurns gives the placeholder signature to every model turn of
+// function calls that has none. Only the first call of a turn carries one, and
+// a turn without any was not produced by this model.
+func markUnsignedCallTurns(contents []*genai.Content) {
+	for _, content := range contents {
+		if content.Role != genai.RoleModel || !isFunctionTurn(content) || content.Parts[0].FunctionCall == nil {
+			continue
+		}
+		if !slices.ContainsFunc(content.Parts, func(p *genai.Part) bool { return len(p.ThoughtSignature) > 0 }) {
+			content.Parts[0].ThoughtSignature = skipThoughtSignature
+		}
 	}
 }

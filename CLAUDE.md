@@ -65,8 +65,8 @@ go run klein/main.go "Run go build on this project"
 
 # Multi-backend support
 go run klein/main.go -b anthropic "Analyze this codebase"
-go run klein/main.go -b openai -m gpt-5.6-luna "Create a REST API"
-go run klein/main.go -b gemini -m gemini-2.5-flash-lite "Optimize this code"
+go run klein/main.go -b openai -m gpt-6-luna "Create a REST API"
+go run klein/main.go -b gemini -m gemini-4-argon "Optimize this code"
 go run klein/main.go -b anthropic "Write unit tests"
 
 # Custom skills can be placed in .claude/skills/ (project) or ~/.claude/skills/ (personal)
@@ -404,7 +404,7 @@ base_dir = "~/.klein"
 
 [llm]
 backend = "anthropic"
-model   = "claude-sonnet-4-6"
+model   = "claude-sonnet-5-5"
 
 [claw.discord]
 token               = "BOT_TOKEN"
@@ -913,7 +913,7 @@ The `allowed-tools` frontmatter field controls which tools are available to a sk
 - Dependencies:
   - `github.com/anthropics/anthropic-sdk-go v1.5.0`
   - `github.com/openai/openai-go/v2 v2.0.2`
-  - `google.golang.org/genai v1.19.0`
+  - `google.golang.org/genai v1.75.0`
   - `github.com/chzyer/readline v1.5.1` - Terminal interaction with cursor movement and autocomplete
   - `connectrpc.com/connect` - Connect-gRPC framework (supports Connect, gRPC, and gRPC-Web protocols)
   - `google.golang.org/protobuf` - Protocol Buffers runtime
@@ -945,20 +945,24 @@ one anywhere else in klein is not.
 
 ## Model Performance
 
-**Anthropic Models (Native Tool Calling):**
-- `claude-3-7-sonnet-latest` - Default Claude model
-- `claude-3-5-haiku-latest` - Faster Claude model
-- `claude-sonnet-4-20250514` - Latest Claude Sonnet 4
+**Anthropic Models:** (Claude 5 — adaptive thinking, steered by `--effort`)
+- `claude-sonnet-5-5` - **Default**
+- `claude-opus-5-5`
+- `claude-fable-5-1` - Most capable
+- `claude-haiku-5-5` - Fastest
 
-**OpenAI Models (Native Tool Calling + Structured Output):**
-- `gpt-5.6-luna` - Default (tool calling, structured output, vision)
-- `gpt-5.6-sol`
-- `gpt-5.6-terra`
+**OpenAI Models:** (the gpt-6 line — the only OpenAI models klein adopts)
+- `gpt-6-luna` - **Default**
+- `gpt-6-sol`
+- `gpt-6-astra` (no `none` effort; mapped to `low`)
+- `gpt-6.1-sol` (no `none` effort; mapped to `low`)
 
-**Google Gemini Models (Native Schema + Structured Output):**
-- `gemini-2.5-flash-lite` - **Recommended** - Latest, fastest, most efficient
-- `gemini-2.5-pro` - High capability model for complex reasoning
-- `gemini-2.5-flash` - Latest experimental features
+**Google Gemini Models:** (thinking depth via `thinkingLevel`, from `--effort`)
+- `gemini-4-argon` (alias `argon`) - **Default**; 32K output; tool calls require thought signatures, which klein echoes back
+
+`--effort` (`none|minimal|low|medium|high|xhigh|max`) applies to every direct
+backend; each client clamps it to what the model accepts. Older model
+generations are not special-cased.
 
 ## Testing Practices
 

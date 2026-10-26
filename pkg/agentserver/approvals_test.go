@@ -60,3 +60,23 @@ func TestApprovalApproverDecides(t *testing.T) {
 		t.Errorf("approved approver should accept, got %q", resp2.Decision.Kind())
 	}
 }
+
+// A writeStdin request names the running process, not the input bound for it, so
+// it must not reach an allowlist as that process's command.
+func TestApprovalWriteStdinWithholdsCommands(t *testing.T) {
+	t.Parallel()
+	var got ApprovalRequest
+	h := &toolHandler{approver: stubApprover{seen: &got}}
+	_, _ = h.ItemCommandExecutionRequestApproval(context.Background(),
+		protocol.CommandExecutionRequestApprovalParams{
+			Kind:           protocol.CommandExecutionApprovalKindWriteStdin,
+			Command:        strptr("python3"),
+			CommandActions: []interface{}{map[string]any{"type": "unknown", "command": "python3"}},
+		})
+	if len(got.Commands) != 0 {
+		t.Errorf("writeStdin passed commands to the approver: %v", got.Commands)
+	}
+	if !strings.Contains(got.Summary, "stdin") || !strings.Contains(got.Summary, "python3") {
+		t.Errorf("summary should say it is stdin for python3: %q", got.Summary)
+	}
+}

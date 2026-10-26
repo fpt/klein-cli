@@ -231,10 +231,11 @@ func splitOfferedManagers(
 // nothing for a codex session that had proxied a large server — the case the
 // flag exists for — while ProxyMCPServers, the setting it exists to make
 // affordable, was never gated at all. Nothing about the wire format needed the
-// gate either: buildDynamicTools writes "advertised": false only when deferring,
-// so a backend that has never heard of the key skips it and advertises the tool.
-// The downside of asking a backend that ignores it is therefore exactly today's
-// behavior, which is what makes extending it safe.
+// gate either: agentserver spells deferral per dialect — codex's deferLoading
+// inside a namespace, "advertised": false for everyone else — and writes either
+// only when deferring, so a backend that has never heard of the key skips it and
+// advertises the tool. The downside of asking a backend that ignores it is
+// therefore exactly today's behavior, which is what makes extending it safe.
 func defersMCPTools(settings *config.Settings) bool {
 	return settings.AppServer.DeferMCPTools
 }

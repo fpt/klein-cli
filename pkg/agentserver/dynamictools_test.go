@@ -59,7 +59,7 @@ func TestBuildDynamicTools(t *testing.T) {
 		{Name: "ScheduleList", Description: "list them"},
 	}}
 
-	specs := buildDynamicTools(tools)
+	specs := buildDynamicTools(tools, DialectGeneric)
 	if len(specs) != 2 {
 		t.Fatalf("want 2 specs, got %d", len(specs))
 	}
@@ -90,7 +90,7 @@ func TestBuildDynamicTools(t *testing.T) {
 // TestBuildDynamicToolsNil returns nil when there are no tools to offer.
 func TestBuildDynamicToolsNil(t *testing.T) {
 	t.Parallel()
-	if buildDynamicTools(nil) != nil {
+	if buildDynamicTools(nil, DialectGeneric) != nil {
 		t.Error("expected nil when no tools are offered")
 	}
 }
@@ -168,12 +168,15 @@ func TestBuildDynamicToolsMarksDeferred(t *testing.T) {
 	}}
 
 	byName := map[string]map[string]any{}
-	for _, s := range buildDynamicTools(tools) {
+	for _, s := range buildDynamicTools(tools, DialectGeneric) {
 		byName[s["name"].(string)] = s
 	}
 
 	if got, ok := byName["tree_dir"]["advertised"]; !ok || got != false {
 		t.Errorf(`deferred tool: advertised = %v (present=%v), want false`, got, ok)
+	}
+	if _, ok := byName["tree_dir"]["deferLoading"]; ok {
+		t.Error("a generic deferred tool must not carry codex's deferLoading")
 	}
 	// The deferred tool is still registered — deferral is not omission.
 	if byName["tree_dir"]["inputSchema"] == nil {
@@ -192,9 +195,57 @@ func TestBuildDynamicToolsOmitsAdvertisedWhenNothingIsDeferred(t *testing.T) {
 		{Name: "Bash", Description: "run a command"},
 	}}
 
-	for _, s := range buildDynamicTools(tools) {
+	for _, s := range buildDynamicTools(tools, DialectGeneric) {
 		if _, ok := s["advertised"]; ok {
 			t.Errorf("tool %v carried an advertised key when nothing was deferred", s["name"])
+		}
+		if _, ok := s["deferLoading"]; ok {
+			t.Errorf("tool %v carried a deferLoading key when nothing was deferred", s["name"])
+		}
+	}
+}
+
+// codex refuses a deferred tool outside a namespace, so under DialectCodex the
+// deferred tools travel in one namespace spec with deferLoading set, and the
+// advertised ones stay top-level functions untouched.
+func TestBuildDynamicToolsCodexNamespacesDeferred(t *testing.T) {
+	t.Parallel()
+	tools := stubTools{specs: []ToolSpec{
+		{Name: "Glob", Description: "match paths"},
+		{Name: "tree_dir", Description: "walk a tree", Deferred: true},
+		{Name: "grep_docs", Description: "grep the docs", Deferred: true},
+	}}
+
+	specs := buildDynamicTools(tools, DialectCodex)
+	if len(specs) != 2 {
+		t.Fatalf("want Glob + one namespace, got %d specs: %v", len(specs), specs)
+	}
+	if specs[0]["name"] != "Glob" || specs[0]["type"] != "function" {
+		t.Errorf("advertised tool changed: %v", specs[0])
+	}
+	if _, ok := specs[0]["deferLoading"]; ok {
+		t.Error("an advertised tool must not carry deferLoading")
+	}
+	assertDeferredNamespace(t, specs[1], 2)
+}
+
+// assertDeferredNamespace checks a codex namespace spec holding want deferred
+// tools, each with deferLoading and a schema and without gallium's key.
+func assertDeferredNamespace(t *testing.T, ns map[string]any, want int) {
+	t.Helper()
+	if ns["type"] != "namespace" || ns["name"] != deferredNamespace || ns["description"] == "" {
+		t.Fatalf("namespace spec = %v", ns)
+	}
+	inner, _ := ns["tools"].([]map[string]any)
+	if len(inner) != want {
+		t.Fatalf("namespace should hold %d deferred tools: %v", want, ns["tools"])
+	}
+	for _, tool := range inner {
+		if tool["deferLoading"] != true || tool["inputSchema"] == nil {
+			t.Errorf("namespaced tool = %v, want deferLoading and a schema", tool)
+		}
+		if _, ok := tool["advertised"]; ok {
+			t.Errorf("namespaced tool %v carried gallium's advertised key", tool["name"])
 		}
 	}
 }

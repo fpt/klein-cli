@@ -24,6 +24,17 @@ const (
 	// among those it offers the model. Written only when false; see
 	// buildDynamicTools.
 	keyAdvertised = "advertised"
+	// keyDeferLoading is codex's spelling of the same request. codex accepts it
+	// only on a tool inside a namespace spec, so it is never written beside
+	// keyAdvertised; see buildDynamicTools.
+	keyDeferLoading = "deferLoading"
+
+	// deferredNamespace names the namespace codex's deferred tools are grouped
+	// under, and deferredNamespaceDescription is what its tool search shows for
+	// the group as a whole.
+	deferredNamespace            = "deferred_tools"
+	deferredNamespaceDescription = "Additional tools whose schemas are loaded on demand. " +
+		"Search for one by name or purpose before calling it."
 
 	decisionAccept  = "accept"  // approve a file-change request
 	decisionDecline = "decline" // deny it; codex continues the turn
@@ -79,6 +90,15 @@ func (h *toolHandler) ItemCommandExecutionRequestApproval(
 		Summary:  summary,
 		Commands: commandActionCommands(p.CommandActions),
 	}
+	// writeStdin asks to send input to a terminal that is already running. The
+	// command and its actions name that terminal's process, not the input — which
+	// the request does not carry at all. Passing the actions on would let an
+	// allowlist that trusts the process approve whatever is typed into it, so the
+	// request goes to the prompt with nothing to match against.
+	if p.Kind == protocol.CommandExecutionApprovalKindWriteStdin {
+		req.Summary = "write to the stdin of: " + summary
+		req.Commands = nil
+	}
 	if h.approve(ctx, req) {
 		return &protocol.CommandExecutionRequestApprovalResponse{Decision: cmdDecisionAccept}, nil
 	}
@@ -130,16 +150,26 @@ func toolCallResult(success bool, text string) *protocol.DynamicToolCallResponse
 // buildDynamicTools renders the offered tools as codex FunctionDynamicTool specs
 // (type/name/description/inputSchema) for thread/start's dynamicTools field.
 //
-// A deferred tool carries "advertised": false. The key is written only when it
-// is false, so the payload for a caller that defers nothing is byte-identical to
-// what it always was, and a backend that has never heard of the field skips an
-// unknown key and advertises the tool — the degradation that makes deferral safe
-// to ask for before the other end supports it.
-func buildDynamicTools(tools DynamicTools) []map[string]any {
+// A deferred tool is spelled per dialect, because the two known servers ask for
+// deferral in incompatible ways:
+//
+//   - rs-gallium (and the generic default) takes "advertised": false on the tool
+//     itself. The key is written only when deferring, so the payload for a caller
+//     that defers nothing is byte-identical to what it always was, and a backend
+//     that has never heard of the field skips an unknown key and advertises the
+//     tool — the degradation that makes deferral safe to ask for before the other
+//     end supports it.
+//   - codex takes "deferLoading": true, and only on a tool inside a namespace
+//     spec: a top-level deferred function is refused at thread/start ("deferred
+//     dynamic tool must include a namespace", codex-cli 0.164.0). So the deferred
+//     tools travel together in one namespace after the advertised ones. Its tool
+//     calls name the namespace beside the tool, and dispatch is by tool name
+//     alone, so nothing on the calling side changes.
+func buildDynamicTools(tools DynamicTools, dialect Dialect) []map[string]any {
 	if tools == nil {
 		return nil
 	}
-	var out []map[string]any
+	var out, deferred []map[string]any
 	for _, spec := range tools.Specs() {
 		entry := map[string]any{
 			keyType:       "function",
@@ -147,10 +177,24 @@ func buildDynamicTools(tools DynamicTools) []map[string]any {
 			"description": spec.Description,
 			"inputSchema": toInputSchema(spec.Parameters),
 		}
-		if spec.Deferred {
+		switch {
+		case !spec.Deferred:
+			out = append(out, entry)
+		case dialect == DialectCodex:
+			entry[keyDeferLoading] = true
+			deferred = append(deferred, entry)
+		default:
 			entry[keyAdvertised] = false
+			out = append(out, entry)
 		}
-		out = append(out, entry)
+	}
+	if len(deferred) > 0 {
+		out = append(out, map[string]any{
+			keyType:       "namespace",
+			"name":        deferredNamespace,
+			"description": deferredNamespaceDescription,
+			"tools":       deferred,
+		})
 	}
 	return out
 }

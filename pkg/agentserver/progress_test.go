@@ -626,3 +626,65 @@ func TestClassify_UnhandledMethod_NilLoggerDoesNotPanic(t *testing.T) {
 
 	classifyNote(unknownNote("gallium/whatever"), progress)
 }
+
+// codex sends a change's kind as PatchChangeKind, an object. Decoding it into a
+// string failed the whole item, so no fileChange from codex was ever shown.
+func TestProgress_FileChange_CodexObjectKind(t *testing.T) {
+	t.Parallel()
+	progress, got := newProgress()
+
+	feed(progress, completed(itm("item_4b", "fileChange", map[string]any{
+		"status": stCompleted,
+		"changes": []any{map[string]any{
+			"path": "main.go", "diff": "...", "kind": map[string]any{keyType: "update", "move_path": nil},
+		}},
+	})))
+
+	if len(*got) != 2 {
+		t.Fatalf("fileChange with an object kind should announce + report: %+v", *got)
+	}
+	files, _ := firstStart(t, *got).Arguments[argFiles].([]string)
+	if len(files) != 1 || files[0] != "update main.go" {
+		t.Errorf("files = %v, want [update main.go]", files)
+	}
+}
+
+// codex's mcpToolCall error is McpToolCallError ({message}); the failed call must
+// still render, with the message as its result.
+func TestProgress_ToolCall_CodexObjectError(t *testing.T) {
+	t.Parallel()
+	progress, got := newProgress()
+
+	feed(progress, completed(itm("t5", "mcpToolCall", map[string]any{
+		"server": "godoc", kTool: "lookup", "status": statusFailed, kArgs: map[string]any{},
+		"error": map[string]any{"message": "server went away"},
+	})))
+
+	res := toolResults(*got)
+	if len(res) != 1 || !res[0].IsError || res[0].Content != "server went away" {
+		t.Fatalf("object error not rendered: %+v", res)
+	}
+}
+
+// A dynamicToolCall reports its namespace beside the tool, and its own success
+// verdict apart from status.
+func TestProgress_ToolCall_DynamicNamespaceAndSuccess(t *testing.T) {
+	t.Parallel()
+	progress, got := newProgress()
+
+	feed(progress, completed(itm("t6", "dynamicToolCall", map[string]any{
+		"namespace": "klein", kTool: "Open", "status": stCompleted, "success": false,
+		kArgs: map[string]any{},
+		"contentItems": []any{
+			map[string]any{keyType: "inputText", keyText: "no such file"},
+		},
+	})))
+
+	if name := firstStart(t, *got).Name; name != "klein/Open" {
+		t.Errorf("tool name = %q, want klein/Open", name)
+	}
+	res := toolResults(*got)
+	if len(res) != 1 || !res[0].IsError {
+		t.Fatalf("success:false should be an error: %+v", res)
+	}
+}

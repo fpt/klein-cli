@@ -1,6 +1,6 @@
 module github.com/fpt/klein-cli
 
-go 1.26.0
+go 1.26.10
 
 require (
 	connectrpc.com/connect v1.20.0
@@ -14,7 +14,7 @@ require (
 	github.com/mark3labs/mcp-go v0.58.0
 	github.com/openai/openai-go/v3 v3.85.0
 	github.com/pkg/errors v0.9.1
-	github.com/pmenglund/codex-sdk-go v0.147.0
+	github.com/pmenglund/codex-sdk-go v0.164.0
 	github.com/robfig/cron/v3 v3.0.1
 	github.com/santhosh-tekuri/jsonschema/v6 v6.0.3
 	golang.org/x/net v0.60.0

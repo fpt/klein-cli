@@ -93,12 +93,14 @@ type DynamicTools interface {
 // Dialect selects behavior specific to one app-server implementation, for the
 // few places where the protocol is not enough on its own.
 //
-// It exists for exactly one thing today: codex answers `initialize` even when it
-// is logged out, so a login failure would otherwise surface on the user's first
+// It exists for two things today. codex answers `initialize` even when it is
+// logged out, so a login failure would otherwise surface on the user's first
 // prompt rather than at startup, and only a codex server has an account to ask
-// about. Everything else the client does is the same for every backend, which is
-// the point — the protocol subset is a contract, and a conforming server must
-// not have to be recognized to be driven.
+// about. And codex spells a deferred dynamic tool differently from rs-gallium, in
+// a shape gallium does not accept (see buildDynamicTools). Everything else the
+// client does is the same for every backend, which is the point — the protocol
+// subset is a contract, and a conforming server must not have to be recognized
+// to be driven.
 //
 // The zero value is DialectGeneric, so a caller that says nothing gets the
 // behavior that assumes nothing.
@@ -107,7 +109,8 @@ type Dialect int
 const (
 	// DialectGeneric — any server implementing the protocol subset.
 	DialectGeneric Dialect = iota
-	// DialectCodex — the codex app-server, which additionally has an account.
+	// DialectCodex — the codex app-server, which additionally has an account
+	// and its own spelling for deferred tools.
 	DialectCodex
 )
 

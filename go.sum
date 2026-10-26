@@ -129,8 +129,8 @@ github.com/pb33f/ordered-map/v2 v2.3.1 h1:5319HDO0aw4DA4gzi+zv4FXU9UlSs3xGZ40wcP
 github.com/pb33f/ordered-map/v2 v2.3.1/go.mod h1:qxFQgd0PkVUtOMCkTapqotNgzRhMPL7VvaHKbd1HnmQ=
 github.com/pkg/errors v0.9.1 h1:FEBLx1zS214owpjy7qsBeixbURkuhQAwrK5UwLGTwt4=
 github.com/pkg/errors v0.9.1/go.mod h1:bwawxfHBFNV+L2hUp1rHADufV3IMtnDRdf1r5NINEl0=
-github.com/pmenglund/codex-sdk-go v0.147.0 h1:RAb2KfXweM6FupIixnzW+SAa1Ci1mGBs9qEOEi86q+c=
-github.com/pmenglund/codex-sdk-go v0.147.0/go.mod h1:j5lkVZEMTDhv2NHEBFUePjenoGqE3cOQoUrRkYao5Ic=
+github.com/pmenglund/codex-sdk-go v0.164.0 h1:lE4B/GMSs251JD/IDG0E1j1H3YjJoCEjzPAxU3pY7O0=
+github.com/pmenglund/codex-sdk-go v0.164.0/go.mod h1:kY+IQpooI6Fmx2Zcb0K4erYn26t2u9v7RBELqY9KDSA=
 github.com/pmezard/go-difflib v1.0.1-0.20181226105442-5d4384ee4fb2 h1:Jamvg5psRIccs7FGNTlIRMkT8wgtp5eCXdBlqhYGL6U=
 github.com/pmezard/go-difflib v1.0.1-0.20181226105442-5d4384ee4fb2/go.mod h1:iKH77koFhYxTK1pcRnkKkqfTogsbg7gZNVY4sRDYZ/4=
 github.com/remyoudompheng/bigfft v0.0.0-20230129092748-24d4a6f8daec h1:W09IVJc94icq4NjY3clb7Lk8O1qJ8BdBEF8z0ibU0rE=

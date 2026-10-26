@@ -78,8 +78,8 @@ type Config struct {
 	// purely by env; see appServerEnv). Empty means the child inherits klein's
 	// environment.
 	Env []string
-	// Dialect names which app-server this is, for the one piece of
-	// implementation-specific behavior the client has (the codex auth probe).
+	// Dialect names which app-server this is, for the little
+	// implementation-specific behavior the client has (see Dialect).
 	Dialect Dialect
 	// Logger reports item types the backend sent that this renderer has no case
 	// for. Optional: nil keeps the old silence, which is what the tests use.
@@ -180,7 +180,7 @@ func NewRunner(ctx context.Context, cfg Config) (*Runner, error) {
 
 	runner := &Runner{
 		cfg:      cfg,
-		dynTools: buildDynamicTools(cfg.Tools),
+		dynTools: buildDynamicTools(cfg.Tools, cfg.Dialect),
 		started:  make(map[string]bool),
 	}
 	if err := runner.connect(ctx); err != nil {
@@ -792,10 +792,14 @@ func classifyNote(note rpc.Notification, progress *turnProgress) (string, noteSt
 // ItemCompletedNotification schema) that klein renders as progress. The `type`
 // field discriminates the variant; the rest are variant-specific and left zero
 // when absent.
+//
+// Fields whose shape differs between backends are kept raw and read through
+// flexText. One field of the wrong Go type fails the whole item's decode, and an
+// item that does not decode is not rendered at all — so a strict `string` here
+// once hid every fileChange and every failed MCP call codex reported.
 type codexItem struct {
 	AggregatedOutput *string  `json:"aggregatedOutput"`
 	ExitCode         *int     `json:"exitCode"`
-	Error            *string  `json:"error"`
 	ID               string   `json:"id"`
 	Type             string   `json:"type"`
 	Command          string   `json:"command"`
@@ -804,9 +808,20 @@ type codexItem struct {
 	Server           string   `json:"server"`
 	Query            string   `json:"query"`
 	Summary          []string `json:"summary"`
-	Changes          []struct {
+	// Namespace qualifies a dynamicToolCall's tool, the way Server does an MCP
+	// one. Null or absent for a tool registered without one.
+	Namespace *string `json:"namespace"`
+	// Success is the dynamicToolCall's own verdict, which codex reports apart
+	// from status: a call can complete and still have failed.
+	Success *bool `json:"success"`
+	// Error is a string on some backends and codex's McpToolCallError
+	// ({message}) on others.
+	Error   json.RawMessage `json:"error"`
+	Changes []struct {
 		Path string `json:"path"`
-		Kind string `json:"kind"`
+		// Kind is codex's PatchChangeKind ({type: add|delete|update}), or a bare
+		// string from a backend that flattens it.
+		Kind json.RawMessage `json:"kind"`
 	} `json:"changes"`
 	// Tool-call input/output. Field names vary across backends and item variants,
 	// so several output candidates are captured and the first non-empty is shown;
@@ -819,6 +834,26 @@ type codexItem struct {
 	// `result` field on that variant at all — so this is the only candidate
 	// that carries anything for the tool calls gallium reports.
 	ContentItems json.RawMessage `json:"contentItems"`
+}
+
+// flexText reads a field that is either a JSON string or an object naming its
+// value under key, returning "" for null, absence, or any other shape.
+func flexText(raw json.RawMessage, key string) string {
+	if len(raw) == 0 {
+		return ""
+	}
+	var s string
+	if json.Unmarshal(raw, &s) == nil {
+		return strings.TrimSpace(s)
+	}
+	var obj map[string]json.RawMessage
+	if json.Unmarshal(raw, &obj) != nil {
+		return ""
+	}
+	if json.Unmarshal(obj[key], &s) == nil {
+		return strings.TrimSpace(s)
+	}
+	return ""
 }
 
 // Synthetic tool names klein assigns to codex activity so it renders through
@@ -881,16 +916,29 @@ type turnProgress struct {
 // item of every turn (both item/started and item/completed; verified against
 // codex-cli 0.144.1). Displaying the user's own input back to them is noise, and
 // leaving it out of this set made the drift warning fire on every single prompt.
+//
+// The tail of the list is the rest of codex's ThreadItem union as of codex-cli
+// 0.164.0: legitimate variants klein has no display for, which would otherwise
+// raise the drift warning against a perfectly current codex. functionCallOutput
+// in particular carries the output of a call whose own item klein already
+// renders, so showing it too would print the result twice.
 var itemTypesKnownUnrendered = map[string]bool{
-	"agentMessage":       true,
-	"userMessage":        true,
-	"plan":               true,
-	"sleep":              true,
-	"reviewMode":         true,
-	"enteredReviewMode":  true,
-	"exitedReviewMode":   true,
-	"autoApprovalReview": true,
-	"permissions":        true,
+	"agentMessage":        true,
+	"userMessage":         true,
+	"plan":                true,
+	"sleep":               true,
+	"reviewMode":          true,
+	"enteredReviewMode":   true,
+	"exitedReviewMode":    true,
+	"autoApprovalReview":  true,
+	"permissions":         true,
+	"functionCallOutput":  true,
+	"contextCompaction":   true,
+	"hookPrompt":          true,
+	"imageView":           true,
+	"imageGeneration":     true,
+	"collabAgentToolCall": true,
+	"subAgentActivity":    true,
 }
 
 // reportUnrendered logs an item type that reached render with no case for it.
@@ -1065,7 +1113,7 @@ func (tp *turnProgress) renderCommand(it codexItem, completed bool) {
 func (tp *turnProgress) renderFileChange(it codexItem, completed bool) {
 	paths := make([]string, 0, len(it.Changes))
 	for _, c := range it.Changes {
-		paths = append(paths, strings.TrimSpace(c.Kind+" "+c.Path))
+		paths = append(paths, strings.TrimSpace(flexText(c.Kind, keyType)+" "+c.Path))
 	}
 	tp.announce(it.ID, toolApplyPatch, map[string]any{argFiles: paths})
 	if !completed {
@@ -1082,6 +1130,8 @@ func (tp *turnProgress) renderToolCall(it codexItem, completed bool) {
 	name := it.Tool
 	if it.Server != "" {
 		name = it.Server + "/" + it.Tool
+	} else if ns := ptrStr(it.Namespace); ns != "" {
+		name = ns + "/" + it.Tool
 	}
 	tp.announce(it.ID, name, toolCallArgs(it.Arguments))
 	if !completed {
@@ -1114,9 +1164,9 @@ func toolCallArgs(raw json.RawMessage) map[string]any {
 // toolCallOutcome extracts a displayable result + error flag for a completed
 // tool call: an explicit error, else the tool's output text, else the status.
 func toolCallOutcome(it codexItem) (content string, isErr bool) {
-	isErr = it.Status == statusFailed
-	if it.Error != nil && strings.TrimSpace(*it.Error) != "" {
-		return strings.TrimSpace(*it.Error), true
+	isErr = it.Status == statusFailed || (it.Success != nil && !*it.Success)
+	if msg := flexText(it.Error, "message"); msg != "" {
+		return msg, true
 	}
 	for _, raw := range []json.RawMessage{it.Result, it.Output, it.Content, it.ContentItems} {
 		if s := renderToolResult(raw); s != "" {

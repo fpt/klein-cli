@@ -24,6 +24,18 @@ const (
 	reviewArgVerdict   = "verdict"
 	reviewArgID        = "id"
 	reviewArgNote      = "note"
+	reviewArgStatus    = "status"
+)
+
+// ResolveReviewComment statuses. still_applies exists because a model that has
+// checked a previous comment wants to report the check, and the only verb it
+// had was "resolve": twice — on two different backends — a model resolved a
+// thread with a note saying the problem was still there, which would close an
+// open finding on the PR. Giving "checked, still open" its own answer leaves
+// resolve meaning one thing.
+const (
+	resolveStatusFixed        = "fixed"
+	resolveStatusStillApplies = "still_applies"
 )
 
 // reviewVerdictDefault is used when the model never sets a verdict.
@@ -220,12 +232,15 @@ func (m *ReviewToolManager) register() {
 
 	if len(m.previousIDs) > 0 {
 		m.RegisterTool("ResolveReviewComment",
-			"Mark a previous-round review comment as fixed, after verifying the fix in the current code. "+
-				"Use the short id shown in the 'Previous Review Comments' section (P1, P2, …). "+
-				"The harness resolves the thread.",
+			"Report the outcome of re-checking a previous-round review comment against the current code. "+
+				"status \"fixed\" resolves the thread (the harness closes it); status \"still_applies\" leaves it "+
+				"open — the existing thread already carries the finding, so do not re-post it with AddInlineReview. "+
+				"Use the short id shown in the 'Previous Review Comments' section (P1, P2, …).",
 			[]message.ToolArgument{
 				{Name: reviewArgID, Required: true, Type: "string",
 					Description: "The short id of the previous comment as listed in the prompt: P1, P2, …"},
+				{Name: reviewArgStatus, Required: true, Type: "string",
+					Description: "fixed (verified fixed: resolves the thread) or still_applies (thread stays open)"},
 				{Name: reviewArgNote, Required: false, Type: "string",
 					Description: "Short note on how it was fixed (e.g. 'guarded in commit …', 'divisor restored')"},
 			},
@@ -241,6 +256,20 @@ func (m *ReviewToolManager) handleResolve(_ context.Context, args message.ToolAr
 	id, ok := m.previousIDs[strings.ToLower(named)]
 	if !ok {
 		return m.rejectResolve(fmt.Sprintf("unknown comment id %q", named)), nil
+	}
+
+	status := strings.ToLower(strings.TrimSpace(stringArg(args, reviewArgStatus)))
+	switch status {
+	case resolveStatusFixed:
+	case resolveStatusStillApplies:
+		const leftOpen = "Previous comment %s left open: its thread still carries the finding. " +
+			"Do not re-post it with AddInlineReview; mention it in the summary if it matters."
+		return message.NewToolResultText(fmt.Sprintf(leftOpen, named)), nil
+	default:
+		const badStatus = "status must be %q (verified fixed — resolves the thread) or %q " +
+			"(still there — leaves it open); got %s"
+		got := describeArg(args[reviewArgStatus])
+		return message.NewToolResultError(fmt.Sprintf(badStatus, resolveStatusFixed, resolveStatusStillApplies, got)), nil
 	}
 
 	m.mu.Lock()
@@ -485,6 +514,50 @@ func (m *ReviewToolManager) handleFinalize(_ context.Context, _ message.ToolArgu
 		"Review finalized: %d inline comment(s), verdict %s. "+
 			"Reply with a one-line confirmation; the harness posts the review.",
 		len(m.comments), m.verdict)), nil
+}
+
+// UnfinishedPrompt returns a follow-up user message for a run whose model
+// stopped replying without completing FinalizeReview, or "" when the review is
+// finalized.
+//
+// It exists because the model's last word is not evidence of the review's
+// state. Two observed endings left a review half-done while claiming
+// otherwise: "the review tools are unavailable in this session" after six
+// successful calls to one of them (fpt/go-pduckdb#50, turn 2), and "review
+// complete, one finding added" after FinalizeReview had refused because that
+// finding was rejected. So the message is built from what the tools recorded —
+// what is set, what was lost — and names the tools, which were available all
+// along.
+func (m *ReviewToolManager) UnfinishedPrompt() string {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.finalized {
+		return ""
+	}
+	var b strings.Builder
+	b.WriteString("The review is not finished: FinalizeReview has not completed, so nothing will be posted. ")
+	b.WriteString("The review tools are available in this session — AddInlineReview, AddSummaryReview and FinalizeReview")
+	if len(m.previousAliases) > 0 {
+		b.WriteString(", plus ResolveReviewComment")
+	}
+	b.WriteString(". Call them now; a prose reply does not record anything.\n\nRecorded so far: ")
+	fmt.Fprintf(&b, "%d inline comment(s)", len(m.comments))
+	if m.rejected > 0 {
+		fmt.Fprintf(&b, ", %d rejected (not recorded — re-target them on a bracketed new-side line, "+
+			"or fold them into the summary)", m.rejected)
+	}
+	if m.summary == "" {
+		b.WriteString(", no summary yet")
+	} else {
+		b.WriteString(", summary set")
+	}
+	b.WriteString(".\n\nFinish the review: ")
+	if m.summary == "" {
+		b.WriteString("call AddSummaryReview, then FinalizeReview.")
+	} else {
+		b.WriteString("call FinalizeReview (fix whatever it reports first, then call it again).")
+	}
+	return b.String()
 }
 
 // Result returns the accumulated review.

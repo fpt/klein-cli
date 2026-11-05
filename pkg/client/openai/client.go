@@ -43,6 +43,13 @@ type OpenAICore struct {
 	// per-invocation wrappers make the actual API calls.
 	lastUsage       message.TokenUsage
 	prevInputTokens int // previous call's input tokens for truncation detection
+	// Input items sent by the request in flight and by the previous one. The
+	// core is shared by every wrapper, so consecutive calls can belong to
+	// different conversations — a Task subagent's first call follows its
+	// parent's longest one. Fewer tokens is only truncation when the request
+	// carried at least as many items as the last one.
+	curInputItems  int
+	prevInputItems int
 }
 
 // OpenAIClient implements ToolCallingLLM and VisionLLM interfaces
@@ -174,6 +181,7 @@ func (c *OpenAIClient) Chat(ctx context.Context, messages []message.Message, ena
 
 	// Convert messages to proper structured input
 	inputItems := c.convertMessagesToResponsesInputItems(messages)
+	c.curInputItems = len(inputItems)
 
 	// Create response parameters
 	params := responses.ResponseNewParams{
@@ -286,6 +294,7 @@ func (c *OpenAIClient) Chat(ctx context.Context, messages []message.Message, ena
 func (c *OpenAIClient) chatWithStreaming(ctx context.Context, messages []message.Message, showThinking bool, thinkingChan chan<- string) (message.Message, error) {
 	// Convert messages to proper structured input
 	inputItems := c.convertMessagesToResponsesInputItems(messages)
+	c.curInputItems = len(inputItems)
 
 	// Create response parameters
 	params := responses.ResponseNewParams{
@@ -600,6 +609,7 @@ func (c *OpenAIClient) IsToolCapable() bool {
 func (c *OpenAIClient) ChatWithToolChoice(ctx context.Context, messages []message.Message, toolChoice domain.ToolChoice, enableThinking bool, thinkingChan chan<- string) (message.Message, error) {
 	// Convert messages to proper structured input
 	inputItems := c.convertMessagesToResponsesInputItems(messages)
+	c.curInputItems = len(inputItems)
 
 	// Create response parameters
 	params := responses.ResponseNewParams{
@@ -770,15 +780,25 @@ func (c *OpenAIClient) SupportsVision() bool {
 
 // detectTruncation checks if the API silently truncated input and logs a warning.
 // When truncation: "auto" is active, the API drops items from the beginning.
-// We detect this by comparing: if input_tokens decreased while we expected growth,
-// the API must have dropped older items.
-func (c *OpenAIClient) detectTruncation(inputTokens int) {
-	prev := c.prevInputTokens
-	c.prevInputTokens = inputTokens
+// We detect this by comparing: if input_tokens decreased while we sent at least
+// as many input items as last time, the API must have dropped older items.
+//
+// The item comparison is what keeps a subagent from tripping it. Before it,
+// every Task dispatch printed "dropped ~133k tokens from beginning" on the
+// subagent's first, short call, and the parent's next call printed another —
+// in a review run whose parent context was never truncated at all.
+func (c *OpenAIClient) detectTruncation(inputTokens int) bool {
+	prev, prevItems := c.prevInputTokens, c.prevInputItems
+	c.prevInputTokens, c.prevInputItems = inputTokens, c.curInputItems
 
 	// Skip first call (no baseline) and calls with missing data
 	if prev == 0 || inputTokens == 0 {
-		return
+		return false
+	}
+	// A request with fewer items is a different (or compacted) conversation,
+	// not one the server cut short.
+	if c.curInputItems < prevItems {
+		return false
 	}
 
 	// If input tokens dropped significantly from last call, truncation likely occurred.
@@ -786,7 +806,9 @@ func (c *OpenAIClient) detectTruncation(inputTokens int) {
 	if inputTokens < prev-truncationDetectionThreshold {
 		fmt.Fprintf(os.Stderr, "OpenAI: context truncation detected (input tokens: %d → %d, dropped ~%d tokens from beginning)\n",
 			prev, inputTokens, prev-inputTokens)
+		return true
 	}
+	return false
 }
 
 // isStreamingUnsupportedError checks whether the error indicates that streaming is not allowed

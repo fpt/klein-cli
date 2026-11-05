@@ -355,6 +355,22 @@ func executeReview(
 	if err != nil && !budgetExceeded {
 		return zero, fmt.Errorf("review run failed: %w", err)
 	}
+	// One follow-up turn when the model stopped talking before finishing. The
+	// session keeps its history, so this costs one more turn, not a re-review;
+	// one is the limit, so a model that cannot finish still ends the run.
+	if follow := reviewMgr.UnfinishedPrompt(); follow != "" && !budgetExceeded {
+		logger.Warn("Model ended without finalizing the review; asking it to finish",
+			"comments", len(reviewMgr.Result().Comments))
+		var retryResp message.Message
+		retryResp, err = a.Invoke(ctx, follow, "review")
+		budgetExceeded = errors.Is(err, react.ErrTokenBudgetExceeded)
+		if err != nil && !budgetExceeded {
+			return zero, fmt.Errorf("review follow-up failed: %w", err)
+		}
+		if retryResp != nil {
+			response = retryResp
+		}
+	}
 	printTokenUsage(a.GetLLMClient())
 
 	result := finalizeReviewResult(reviewMgr.Result(), response, opts, budgetExceeded, logger)

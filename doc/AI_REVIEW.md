@@ -302,7 +302,7 @@ construction — the subcommand passes `ranges.Validate`, keeping
 | `AddInlineReview` | Validates path+line via the injected validator; rejects duplicates (same path+range), missing/bad severities (required: `must/major/minor/nits`), a missing `rationale`, and calls after finalize. Swapped `line`/`end_line` bounds are silently normalized rather than bounced. **`rationale` is required and distinct from `body`**: `body` = the problem + concrete fix, `rationale` = why it's a problem and what was verified in the code — a forcing function at the tool-call site that gives the skill's verify step somewhere structured to land, and lets reviewers audit reasoning quality from the result JSON. The harness renders it as a collapsed `<details>` block so inline comments stay scannable. |
 | `AddSummaryReview` | Sets summary + verdict (`approve/comment/request_changes`, default `comment`); calling again *replaces* (never accumulates). Locked after finalize. |
 | `FinalizeReview` | Requires a summary first; idempotence errors on a second call; locks all further mutation. Bounces **once** per kind of dropped work — every attempted inline comment rejected and none recorded, or a rejected `ResolveReviewComment` with some previous comment still unresolved (see below); the retry always completes. |
-| `ResolveReviewComment` | Marks a previous-round comment as verified-fixed. Takes the alias shown in the prompt (`P1`, `P2`, …); the raw thread id is also accepted, case-insensitively, and the result always carries the real id. Duplicates rejected; a rejection names the valid aliases. Only registered when previous comments exist. The harness resolves the thread. |
+| `ResolveReviewComment` | Reports a re-check of a previous-round comment with a required `status`: `fixed` marks it verified-fixed; `still_applies` records nothing and leaves the thread open (the model's outlet for "checked, still there" — without it, models resolved threads whose note said the issue remained). Takes the alias shown in the prompt (`P1`, `P2`, …); the raw thread id is also accepted, case-insensitively, and the result always carries the real id. Duplicates rejected; a rejection names the valid aliases. Only registered when previous comments exist. The harness resolves the thread. |
 | `ReadFullDiff` | Read-only view of the complete PR diff (`full_diff`) in an incremental round, whose prompt shows only the increment. No `path` lists the changed files with status and `+/-` counts; a `path` (new or pre-rename name) returns that file's hunks with bracketed new-side line numbers, capped at `--max-diff-bytes`. An unknown path is rejected with the file list. Only registered when the harness sends `full_diff`, which is also when the prompt mentions it — so code added by an earlier commit of the PR is not mistaken for missing. |
 
 Every rejection returns a tool *error result* (not a Go error), phrased as an
@@ -323,9 +323,17 @@ instruction to re-target the findings or fold them into the summary. It
 bounces only once, so a rejection the model can't satisfy still yields a
 postable review rather than hanging the run.
 
-**Fallback:** if the model never calls `AddSummaryReview`, the subcommand
+**Follow-up turn:** a run whose model stops replying before `FinalizeReview`
+completes gets one more turn in the same session, with a message built from the
+tool state (what is recorded, what was rejected, which tools to call). The
+model's last word is not evidence of the review's state: observed endings
+include "the review tools are unavailable" after successful tool calls, and
+"review complete" after `FinalizeReview` had refused.
+
+**Fallback:** if the model still never calls `AddSummaryReview`, the subcommand
 uses the agent's final text response as the summary and marks
-`finalized: false`, so the harness always has something to post.
+`finalized: false`. The harness does not post that as the round's summary —
+see the failure table in §8.
 
 ## 8. The harness (`.github/actions/ai-review/`)
 
@@ -447,7 +455,7 @@ caller level even though only the inner `resolve` job uses it.
 | Empty/unparseable diff | Exit 1 before any model call |
 | All changed files are generated | Exit 0; `approve` result naming skipped files, no model call |
 | Model targets an invalid line | Tool call bounced with the valid ranges; finding is re-placed or dropped by the model |
-| Model never summarizes | Final response becomes the summary, `finalized: false` (logged as a warning) |
+| Model never finalizes (after the follow-up turn) | `finalized: false`: the previous summary and state marker are kept, with one line saying the round did not complete, so the next push reviews the same range again. Inline comments it did record are posted as `COMMENT`; its verdict neither requests changes nor dismisses an earlier request |
 | Review with zero findings | Exit 0; summary-only review is posted |
 | Reviews API rejects the payload | Harness retries summary-only as `COMMENT` |
 | Fork PR | Workflow job skipped (no secret) |

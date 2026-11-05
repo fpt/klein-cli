@@ -171,7 +171,8 @@ runs:
           # the reviewer wrote and is the only surviving record of it, since
           # this comment is overwritten each round (fpt/klein-cli#122).
           jq -r .body /tmp/sticky.json \
-            | sed 's|<!-- klein-review-state {[^}]*} -->||' > /tmp/previous-summary.md
+            | sed 's|<!-- klein-review-state {[^}]*} -->||' \
+            | grep -v 'klein-review-incomplete' > /tmp/previous-summary.md || true
         else
           STATE=$(gh api "repos/$GITHUB_REPOSITORY/pulls/$PR/reviews" --paginate 2>/dev/null \
             | jq -rs 'add // [] | .[] | select(.user.login == "github-actions[bot]") | .body' \
@@ -464,6 +465,33 @@ runs:
           + ",\"reviewed_at\":\"" + $reviewedat + "\"} -->"
         ' /tmp/review-result.json > /tmp/summary-body.txt
 
+        # --- An unfinished round (FinalizeReview never completed) must not
+        # replace the summary or advance the marker. Its summary is whatever
+        # the model said last — in fpt/go-pduckdb#50 turn 2, "the required
+        # review tools are unavailable" — and posting it overwrote the only
+        # record of the previous round's findings, while the advanced marker
+        # told the next round those changes had been reviewed. Instead keep
+        # both, add one line saying the round did not complete, and leave the
+        # marker where it was so the next push reviews the same range again.
+        FINALIZED=$(jq -r '.finalized' /tmp/review-result.json)
+        if [ "$FINALIZED" != true ]; then
+          echo "::warning::klein did not finalize the review; keeping the previous summary and state so these changes are reviewed again"
+          NOTE="> ⚠️ _Turn $TURN (review of ${HEAD_SHA:0:7}) did not complete, so it does not replace this summary; these changes will be reviewed again on the next push._ <!-- klein-review-incomplete -->"
+          if [ -n "$STICKY_ID" ]; then
+            # Keep the previous body and marker; only the comment total moves,
+            # since inline comments from this round are still posted below.
+            jq -r .body /tmp/sticky.json \
+              | grep -v 'klein-review-incomplete' \
+              | awk -v note="$NOTE" '/<!-- klein-review-state/ && !done { print note; done = 1 } { print }' \
+              | sed "/<!-- klein-review-state/s/\"total\":[0-9]*/\"total\":$TOTAL/" > /tmp/summary-body.txt
+          else
+            # No earlier round: a marker with no head_sha makes the next round a
+            # full review, and lets it find and reuse this comment.
+            printf '## 🤖 AI Review (klein)\n\n%s\n\n<!-- klein-review-state {"turn":0,"total":%s} -->\n' \
+              "$NOTE" "$N_NEW" > /tmp/summary-body.txt
+          fi
+        fi
+
         if [ -n "$STICKY_ID" ]; then
           gh api --method PATCH "repos/$GITHUB_REPOSITORY/issues/comments/$STICKY_ID" \
             -F body=@/tmp/summary-body.txt > /dev/null
@@ -479,7 +507,9 @@ runs:
         # changes, dismiss the bot's still-active CHANGES_REQUESTED review(s) or
         # the PR keeps showing a blocking change request with no open comments.
         # Best-effort: a failed dismissal is a warning, not a hard failure.
-        if [ "$(jq -r '.verdict' /tmp/review-result.json)" != "request_changes" ]; then
+        # An unfinished round's verdict is not a judgement of the change, so it
+        # neither dismisses nor (below) issues a change request.
+        if [ "$FINALIZED" = true ] && [ "$(jq -r '.verdict' /tmp/review-result.json)" != "request_changes" ]; then
           # Capture the listing in its own `if` so a failed/permission-denied
           # list only warns — under pipefail a failing pipeline stage would
           # otherwise abort the step before the minimal review is posted.
@@ -510,7 +540,9 @@ runs:
         # (request_changes). APPROVE is never sent: the github-actions bot
         # can't approve, and GitHub would downgrade it to an empty COMMENT
         # review (noise). approve/comment therefore map to a COMMENT event.
-        EVENT=$(jq -r 'if .verdict == "request_changes" then "REQUEST_CHANGES" else "COMMENT" end' /tmp/review-result.json)
+        EVENT=$(jq -r --arg fin "$FINALIZED" \
+          'if .verdict == "request_changes" and $fin == "true" then "REQUEST_CHANGES" else "COMMENT" end' \
+          /tmp/review-result.json)
         N_COMMENTS=$(jq '.comments | length' /tmp/review-result.json)
         if [ "$N_COMMENTS" -eq 0 ] && [ "$EVENT" = "COMMENT" ]; then
           echo "No inline comments and non-blocking verdict — summary comment only"

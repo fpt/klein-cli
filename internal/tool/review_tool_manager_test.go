@@ -54,6 +54,11 @@ func expectErr(t *testing.T, res message.ToolResult, substr, what string) {
 	}
 }
 
+// resolveArgs is a ResolveReviewComment call reporting the comment fixed.
+func resolveArgs(id string) message.ToolArgumentValues {
+	return message.ToolArgumentValues{reviewArgStatus: resolveStatusFixed, reviewArgID: id}
+}
+
 func inline(path string, line int, extra message.ToolArgumentValues) message.ToolArgumentValues {
 	args := message.ToolArgumentValues{
 		"path": path, "line": line, "comment": "finding", "severity": "minor", "rationale": "verified in code",
@@ -205,15 +210,17 @@ func TestReviewToolManager_Resolve(t *testing.T) {
 	t.Parallel()
 	m := NewReviewToolManager(rangeValidator, []string{"T1", "T2"})
 
-	expectErr(t, callReview(t, m, "ResolveReviewComment", message.ToolArgumentValues{"id": "T9"}),
+	expectErr(t, callReview(t, m, "ResolveReviewComment", resolveArgs("T9")),
 		"unknown comment id", "unknown id")
 	expectOK(t, callReview(t, m, "ResolveReviewComment",
-		message.ToolArgumentValues{"id": "T1", "note": "fixed"}), "valid resolve")
-	expectErr(t, callReview(t, m, "ResolveReviewComment", message.ToolArgumentValues{"id": "T1"}),
+		message.ToolArgumentValues{
+			reviewArgStatus: resolveStatusFixed, reviewArgID: "T1", reviewArgNote: "patched",
+		}), "valid resolve")
+	expectErr(t, callReview(t, m, "ResolveReviewComment", resolveArgs("T1")),
 		"already marked resolved", "double resolve")
 
 	got := m.Result()
-	if len(got.Resolved) != 1 || got.Resolved[0].ID != "T1" || got.Resolved[0].Note != "fixed" {
+	if len(got.Resolved) != 1 || got.Resolved[0].ID != "T1" || got.Resolved[0].Note != "patched" {
 		t.Errorf("resolved: %+v", got.Resolved)
 	}
 }
@@ -250,8 +257,7 @@ func TestReviewToolManager_ResolveByAlias(t *testing.T) {
 	const threadID = "PRRT_kwDOSHq0gM6bd94g"
 	m := NewReviewToolManager(rangeValidator, []string{threadID, "PRRT_kwDOSHq0gM6beA4e"})
 
-	expectOK(t, callReview(t, m, "ResolveReviewComment",
-		message.ToolArgumentValues{"id": "P1", "note": "fixed"}), "resolve by alias")
+	expectOK(t, callReview(t, m, "ResolveReviewComment", resolveArgs("P1")), "resolve by alias")
 
 	got := m.Result()
 	if len(got.Resolved) != 1 || got.Resolved[0].ID != threadID {
@@ -268,7 +274,7 @@ func TestReviewToolManager_ResolveIgnoresIDCase(t *testing.T) {
 	m := NewReviewToolManager(rangeValidator, []string{threadID})
 
 	expectOK(t, callReview(t, m, "ResolveReviewComment",
-		message.ToolArgumentValues{"id": "PRRT_kwDOSHq0gM6bd94G"}), "resolve with a mistyped case")
+		resolveArgs("PRRT_kwDOSHq0gM6bd94G")), "resolve with a mistyped case")
 
 	got := m.Result()
 	if len(got.Resolved) != 1 || got.Resolved[0].ID != threadID {
@@ -282,7 +288,7 @@ func TestReviewToolManager_ResolveRejectionNamesTheValidIDs(t *testing.T) {
 	t.Parallel()
 	m := NewReviewToolManager(rangeValidator, []string{previousThreadID, secondThreadID})
 
-	res := callReview(t, m, "ResolveReviewComment", message.ToolArgumentValues{"id": "PRRT_typo"})
+	res := callReview(t, m, "ResolveReviewComment", resolveArgs("PRRT_typo"))
 	for _, want := range []string{"unknown comment id", "P1", "P2"} {
 		if !strings.Contains(res.Error, want) {
 			t.Errorf("rejection does not mention %q: %q", want, res.Error)
@@ -297,7 +303,7 @@ func TestReviewToolManager_FinalizeBouncesOnADroppedResolve(t *testing.T) {
 	t.Parallel()
 	m := NewReviewToolManager(rangeValidator, []string{previousThreadID})
 
-	expectErr(t, callReview(t, m, "ResolveReviewComment", message.ToolArgumentValues{"id": "PRRT_A_typo"}),
+	expectErr(t, callReview(t, m, "ResolveReviewComment", resolveArgs("PRRT_A_typo")),
 		"unknown comment id", "mistyped id")
 	expectOK(t, callReview(t, m, "AddInlineReview", inline(allowedFile, 12, nil)), "finding")
 	expectOK(t, callReview(t, m, "AddSummaryReview", message.ToolArgumentValues{"summary": "s"}), "summary")
@@ -315,9 +321,9 @@ func TestReviewToolManager_FinalizeAcceptsARetriedResolve(t *testing.T) {
 	t.Parallel()
 	m := NewReviewToolManager(rangeValidator, []string{previousThreadID})
 
-	expectErr(t, callReview(t, m, "ResolveReviewComment", message.ToolArgumentValues{"id": "nonsense"}),
+	expectErr(t, callReview(t, m, "ResolveReviewComment", resolveArgs("nonsense")),
 		"unknown comment id", "mistyped id")
-	expectOK(t, callReview(t, m, "ResolveReviewComment", message.ToolArgumentValues{"id": "P1"}), "retry")
+	expectOK(t, callReview(t, m, "ResolveReviewComment", resolveArgs("P1")), "retry")
 	expectOK(t, callReview(t, m, "AddSummaryReview", message.ToolArgumentValues{"summary": "s"}), "summary")
 	expectOK(t, callReview(t, m, "FinalizeReview", nil), "FinalizeReview after a successful retry")
 }
@@ -329,9 +335,9 @@ func TestReviewToolManager_FinalizeBouncesWhenADifferentCommentWasResolved(t *te
 	t.Parallel()
 	m := NewReviewToolManager(rangeValidator, []string{previousThreadID, secondThreadID})
 
-	expectErr(t, callReview(t, m, "ResolveReviewComment", message.ToolArgumentValues{"id": "P1_typo"}),
+	expectErr(t, callReview(t, m, "ResolveReviewComment", resolveArgs("P1_typo")),
 		"unknown comment id", "mistyped id")
-	expectOK(t, callReview(t, m, "ResolveReviewComment", message.ToolArgumentValues{"id": "P2"}), "a different comment")
+	expectOK(t, callReview(t, m, "ResolveReviewComment", resolveArgs("P2")), "a different comment")
 	expectOK(t, callReview(t, m, "AddSummaryReview", message.ToolArgumentValues{"summary": "s"}), "summary")
 
 	res := callReview(t, m, "FinalizeReview", nil)
@@ -350,10 +356,82 @@ func TestReviewToolManager_FinalizeAcceptsWhenEveryCommentIsResolved(t *testing.
 	t.Parallel()
 	m := NewReviewToolManager(rangeValidator, []string{previousThreadID, secondThreadID})
 
-	expectErr(t, callReview(t, m, "ResolveReviewComment", message.ToolArgumentValues{"id": "nonsense"}),
+	expectErr(t, callReview(t, m, "ResolveReviewComment", resolveArgs("nonsense")),
 		"unknown comment id", "mistyped id")
-	expectOK(t, callReview(t, m, "ResolveReviewComment", message.ToolArgumentValues{"id": "P1"}), "first")
-	expectOK(t, callReview(t, m, "ResolveReviewComment", message.ToolArgumentValues{"id": "P2"}), "second")
+	expectOK(t, callReview(t, m, "ResolveReviewComment", resolveArgs("P1")), "first")
+	expectOK(t, callReview(t, m, "ResolveReviewComment", resolveArgs("P2")), "second")
 	expectOK(t, callReview(t, m, "AddSummaryReview", message.ToolArgumentValues{"summary": "s"}), "summary")
 	expectOK(t, callReview(t, m, "FinalizeReview", nil), "FinalizeReview with nothing left open")
+}
+
+func TestReviewToolManager_UnfinishedPromptEmptyOnceFinalized(t *testing.T) {
+	t.Parallel()
+	m := NewReviewToolManager(rangeValidator, nil)
+	expectOK(t, callReview(t, m, "AddSummaryReview", message.ToolArgumentValues{"summary": "s"}), "summary")
+	expectOK(t, callReview(t, m, "FinalizeReview", nil), "finalize")
+	if got := m.UnfinishedPrompt(); got != "" {
+		t.Errorf("finalized review should need no follow-up, got %q", got)
+	}
+}
+
+// The model that said the tools were unavailable had called none of the
+// recording ones: the follow-up has to name them and say what is missing.
+func TestReviewToolManager_UnfinishedPromptNamesToolsAndMissingSummary(t *testing.T) {
+	t.Parallel()
+	m := NewReviewToolManager(rangeValidator, []string{previousThreadID})
+	got := m.UnfinishedPrompt()
+	for _, want := range []string{"AddSummaryReview", "FinalizeReview", "ResolveReviewComment", "no summary yet"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("follow-up should mention %q:\n%s", want, got)
+		}
+	}
+}
+
+// The model that said "review complete, one finding added" had a summary, a
+// rejected finding, and a FinalizeReview that refused: the follow-up reports
+// the rejection rather than repeating the generic instruction.
+func TestReviewToolManager_UnfinishedPromptReportsRejectedFinding(t *testing.T) {
+	t.Parallel()
+	m := NewReviewToolManager(rangeValidator, nil)
+	expectErr(t, callReview(t, m, "AddInlineReview", inline(allowedFile, 99, nil)), "outside", "out-of-range inline")
+	expectOK(t, callReview(t, m, "AddSummaryReview", message.ToolArgumentValues{"summary": "s"}), "summary")
+	expectErr(t, callReview(t, m, "FinalizeReview", nil), "rejected", "bounced finalize")
+	got := m.UnfinishedPrompt()
+	if !strings.Contains(got, "1 rejected") || !strings.Contains(got, "summary set") {
+		t.Errorf("follow-up should report the rejected finding and the set summary:\n%s", got)
+	}
+	if strings.Contains(got, ", plus ResolveReviewComment") {
+		t.Errorf("follow-up names ResolveReviewComment, which is not registered:\n%s", got)
+	}
+}
+
+// A re-check that finds the problem still there has its own answer: nothing is
+// resolved, and the reply steers away from re-posting the finding.
+func TestReviewToolManager_ResolveStillAppliesLeavesThreadOpen(t *testing.T) {
+	t.Parallel()
+	m := NewReviewToolManager(rangeValidator, []string{previousThreadID})
+	res := callReview(t, m, "ResolveReviewComment", message.ToolArgumentValues{
+		reviewArgID: "P1", reviewArgStatus: resolveStatusStillApplies, reviewArgNote: "still unfixed",
+	})
+	expectOK(t, res, "still_applies")
+	if !strings.Contains(res.Text, "left open") || !strings.Contains(res.Text, "Do not re-post") {
+		t.Errorf("still_applies reply should say the thread stays open and not to re-post: %q", res.Text)
+	}
+	if got := m.Result().Resolved; len(got) != 0 {
+		t.Errorf("still_applies must not resolve anything, got %+v", got)
+	}
+}
+
+// The observed misuse sent no status at all; resolving on a missing status
+// would keep closing threads whose note says the issue remains.
+func TestReviewToolManager_ResolveRequiresStatus(t *testing.T) {
+	t.Parallel()
+	m := NewReviewToolManager(rangeValidator, []string{previousThreadID})
+	expectErr(t, callReview(t, m, "ResolveReviewComment", message.ToolArgumentValues{"id": "P1"}),
+		"status must be", "missing status")
+	expectErr(t, callReview(t, m, "ResolveReviewComment",
+		message.ToolArgumentValues{reviewArgID: "P1", reviewArgStatus: "resolved"}), "still_applies", "unknown status")
+	if got := m.Result().Resolved; len(got) != 0 {
+		t.Errorf("a resolve without a valid status must not land, got %+v", got)
+	}
 }

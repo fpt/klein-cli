@@ -450,15 +450,30 @@ func (r *Runner) RunTurn(
 // the thread). Calls to them still arrive here, so the Runner's Tools must
 // answer the same names.
 //
+// By default the fork carries the source's whole history. ForkThrough or
+// ForkBefore cuts it at a turn instead — to retry from before a turn that went
+// wrong, or to branch a job off a known-good point. Turn ids come from a
+// TurnObserver.
+//
 // An error means there is nothing to continue — the source is unknown to this
-// server (its rollout is gone, or CODEX_HOME is another one), or the backend has
-// no thread/fork. The caller starts a fresh thread instead: RunTurn with "".
-func (r *Runner) ForkThread(ctx context.Context, sourceThreadID, developerInstructions string) (string, error) {
+// server (its rollout is gone, or CODEX_HOME is another one), the turn named is
+// not one of its turns, or the backend has no thread/fork. The caller starts a
+// fresh thread instead: RunTurn with "".
+func (r *Runner) ForkThread(
+	ctx context.Context, sourceThreadID, developerInstructions string, opts ...ForkOption,
+) (string, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
 	if sourceThreadID == "" {
 		return "", errors.New("codex thread/fork: no thread to fork")
+	}
+	var at forkPoint
+	for _, opt := range opts {
+		opt(&at)
+	}
+	if err := at.validate(); err != nil {
+		return "", err
 	}
 	if err := r.ensureConnected(ctx); err != nil {
 		return "", err
@@ -468,6 +483,12 @@ func (r *Runner) ForkThread(ctx context.Context, sourceThreadID, developerInstru
 	params[keyThreadID] = sourceThreadID
 	// The history is the server's to keep; returning it would only be read past.
 	params["excludeTurns"] = true
+	if at.through != nil {
+		params["lastTurnId"] = *at.through
+	}
+	if at.before != nil {
+		params["beforeTurnId"] = *at.before
+	}
 
 	var resp struct {
 		Thread struct {
@@ -486,6 +507,38 @@ func (r *Runner) ForkThread(ctx context.Context, sourceThreadID, developerInstru
 	}
 	r.started[resp.Thread.ID] = true
 	return resp.Thread.ID, nil
+}
+
+// ForkOption chooses where in the source's history ForkThread cuts.
+type ForkOption func(*forkPoint)
+
+// ForkThrough ends the fork's history with turnID, inclusive: later turns are
+// left out. The turn must have finished.
+func ForkThrough(turnID string) ForkOption {
+	return func(p *forkPoint) { p.through = &turnID }
+}
+
+// ForkBefore ends the fork's history just before turnID, leaving out that turn
+// and every later one — the fork is the thread as it stood before turnID ran.
+func ForkBefore(turnID string) ForkOption {
+	return func(p *forkPoint) { p.before = &turnID }
+}
+
+// forkPoint holds pointers so that an option given an empty id is told apart
+// from no option: an empty id is a caller that lost the turn it meant, and
+// forking the whole history in its place would hide that.
+type forkPoint struct {
+	through, before *string
+}
+
+func (p forkPoint) validate() error {
+	if p.through != nil && p.before != nil {
+		return errors.New("codex thread/fork: ForkThrough and ForkBefore cannot be combined")
+	}
+	if (p.through != nil && *p.through == "") || (p.before != nil && *p.before == "") {
+		return errors.New("codex thread/fork: no turn to fork at")
+	}
+	return nil
 }
 
 // threadParams is what thread/start and thread/fork share: where the thread
@@ -564,6 +617,9 @@ func (r *Runner) runTurn(
 		// id (a refusal, a dead transport) makes this a no-op.
 		r.interruptTurn(ctx, threadID, turnID)
 		return "", fmt.Errorf("codex turn/start: %w", err)
+	}
+	if o, ok := obs.(TurnObserver); ok && turnID != "" {
+		o.TurnStarted(threadID, turnID)
 	}
 
 	progress := &turnProgress{

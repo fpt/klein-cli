@@ -424,6 +424,10 @@ restarts). A caller of `pkg/agentserver` that wants an earlier process's thread
 back forks it (`Runner.ForkThread`): codex persists a thread's dynamic tools with
 it, so the fork keeps the source's history and tools, and the calls to them reach
 the forking client (checked against codex 0.164). The source is left untouched.
+A fork can also be cut at a turn (`ForkThrough` / `ForkBefore`, codex's
+`lastTurnId` / `beforeTurnId`) to retry from before a turn or branch off a
+known-good point; the turn ids come from an Observer that implements
+`TurnObserver`.
 
 **Spawned or dialed.** The transport is the one place these two deployments
 differ. `appserver.command` spawns a child and speaks JSONL over its stdio;

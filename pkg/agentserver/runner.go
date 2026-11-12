@@ -107,7 +107,7 @@ type Runner struct {
 
 	// Two locks, because they are held for very different spans.
 	//
-	// mu serializes whole turns. clientMu guards client, link and closed, and is
+	// mu serializes whole turns. clientMu guards client, link, closed and active, and is
 	// held only long enough to read or replace the handle — so Close does not
 	// wait out the turn it is stopping, and a redial mid-turn cannot be read
 	// half-done. clientMu is a leaf: never take mu while holding it.
@@ -116,6 +116,9 @@ type Runner struct {
 	// closed marks a Runner that has been shut down, so a turn still in flight
 	// cannot redial its way back to a live server afterwards.
 	closed bool
+	// active is the turn RunTurn is running, if any, for SteerTurn to add to.
+	// Guarded by clientMu rather than mu, which the turn holds throughout.
+	active *activeTurn
 	// startGraceOverride shortens startTurnGrace for tests; zero uses the const.
 	startGraceOverride time.Duration
 }
@@ -509,6 +512,67 @@ func (r *Runner) ForkThread(
 	return resp.Thread.ID, nil
 }
 
+// ErrNoActiveTurn is SteerTurn's answer when no turn is running on the thread
+// to add the input to. The caller sends it as the next turn instead.
+var ErrNoActiveTurn = errors.New("no turn is running on that thread")
+
+// SteerTurn adds prompt to the turn RunTurn is running on threadID
+// (turn/steer), for input that arrives while the backend is still working — a
+// message sent mid-turn, a correction typed during a long run. The model reads
+// it within that turn, so the text RunTurn returns is its answer to both.
+//
+// Unlike every other Runner method, it runs alongside a turn rather than after
+// it: that is its whole purpose. It goes over the connection the turn is
+// listening on, and names the turn it expects (expectedTurnId), so it can only
+// ever reach the turn the caller saw running.
+//
+// ErrNoActiveTurn means nothing is running on threadID here. Any other error
+// usually means the input was not delivered — most often the turn ended first
+// ("no active turn to steer"), or the backend has no turn/steer — and the
+// caller should send it as the next turn. The one exception is a connection
+// that failed after sending, which cannot say whether the backend got it.
+func (r *Runner) SteerTurn(ctx context.Context, threadID, prompt string) error {
+	if prompt == "" {
+		return errors.New("codex turn/steer: no input")
+	}
+	r.clientMu.Lock()
+	at := r.active
+	r.clientMu.Unlock()
+	if at == nil || at.threadID != threadID {
+		return ErrNoActiveTurn
+	}
+
+	params := map[string]any{
+		keyThreadID:      threadID,
+		"input":          textInput(prompt),
+		"expectedTurnId": at.turnID,
+	}
+	var resp struct {
+		TurnID string `json:"turnId"`
+	}
+	if err := at.client.Call(ctx, "turn/steer", params, &resp); err != nil {
+		return fmt.Errorf("codex turn/steer %s: %w", at.turnID, err)
+	}
+	return nil
+}
+
+// activeTurn is a running turn and the connection it listens on.
+type activeTurn struct {
+	client           *rpc.Client
+	threadID, turnID string
+}
+
+func (r *Runner) setActive(at *activeTurn) {
+	r.clientMu.Lock()
+	r.active = at
+	r.clientMu.Unlock()
+}
+
+// textInput is a user message of plain text, as turn/start and turn/steer take it.
+func textInput(text string) []map[string]any {
+	return []map[string]any{{keyType: keyText, keyText: text}}
+}
+
 // ForkOption chooses where in the source's history ForkThread cuts.
 type ForkOption func(*forkPoint)
 
@@ -605,7 +669,7 @@ func (r *Runner) runTurn(
 
 	turnParams := map[string]any{
 		keyThreadID: threadID,
-		"input":     []map[string]any{{keyType: keyText, keyText: prompt}},
+		"input":     textInput(prompt),
 	}
 	if r.cfg.Effort != "" {
 		turnParams["effort"] = r.cfg.Effort
@@ -618,6 +682,11 @@ func (r *Runner) runTurn(
 		r.interruptTurn(ctx, threadID, turnID)
 		return "", fmt.Errorf("codex turn/start: %w", err)
 	}
+	// Registered before the observer hears of the turn, so one that steers in
+	// response — from the callback itself or from a goroutine it wakes — finds
+	// the turn there to steer.
+	r.setActive(&activeTurn{client: client, threadID: threadID, turnID: turnID})
+	defer r.setActive(nil)
 	if o, ok := obs.(TurnObserver); ok && turnID != "" {
 		o.TurnStarted(threadID, turnID)
 	}

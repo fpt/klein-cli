@@ -3,6 +3,7 @@ package agentserver
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"sync"
@@ -96,6 +97,8 @@ func (f *fakeServer) WriteLine(line string) error {
 		}()
 	case "turn/interrupt":
 		f.reply(req.ID, `{}`)
+	case "turn/steer":
+		f.reply(req.ID, `{"turnId":"turn_1"}`)
 	default:
 		f.reply(req.ID, `{}`)
 	}
@@ -421,5 +424,114 @@ func TestRunTurn_ReportsTheTurnID(t *testing.T) {
 	defer obs.mu.Unlock()
 	if len(obs.turns) != 1 || obs.turns[0] != [2]string{"thread_1", testTurn} {
 		t.Errorf("turns reported = %v", obs.turns)
+	}
+}
+
+// signalingObserver closes started when the turn begins, so a test can act
+// during it.
+type signalingObserver struct {
+	discardObserver
+	started chan struct{}
+}
+
+func (o *signalingObserver) TurnStarted(string, string) { close(o.started) }
+
+// Input steered into a running turn goes to that turn, by the id codex checks it
+// against — and once the turn is over, there is nothing left to steer.
+func TestSteerTurn_ReachesTheRunningTurn(t *testing.T) {
+	t.Parallel()
+
+	server := newFakeServer(0)
+	runner := runnerOn(t, server, time.Second)
+	obs := &signalingObserver{started: make(chan struct{})}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		_, _, _ = runner.RunTurn(ctx, "thread_1", "hi", "", obs)
+	}()
+	select {
+	case <-obs.started:
+	case <-time.After(time.Second):
+		t.Fatal("the turn never started")
+	}
+
+	if err := runner.SteerTurn(context.Background(), "thread_1", "also this"); err != nil {
+		t.Fatalf("SteerTurn: %v", err)
+	}
+	var steer map[string]any
+	for _, req := range server.requests() {
+		if req["method"] == "turn/steer" {
+			steer, _ = req["params"].(map[string]any)
+		}
+	}
+	if steer == nil {
+		t.Fatalf("no turn/steer sent: %v", server.requests())
+	}
+	if steer[keyThreadID] != "thread_1" || steer["expectedTurnId"] != testTurn {
+		t.Errorf("turn/steer params = %v", steer)
+	}
+	input, _ := steer["input"].([]any)
+	if len(input) != 1 || input[0].(map[string]any)[keyText] != "also this" {
+		t.Errorf("turn/steer input = %v", steer["input"])
+	}
+
+	cancel()
+	<-done
+	if err := runner.SteerTurn(context.Background(), "thread_1", "late"); !errors.Is(err, ErrNoActiveTurn) {
+		t.Errorf("steer after the turn ended: err = %v, want ErrNoActiveTurn", err)
+	}
+}
+
+// With no turn running on the thread — none at all, or one on another thread —
+// SteerTurn says so without asking the server.
+func TestSteerTurn_WithoutARunningTurn(t *testing.T) {
+	t.Parallel()
+
+	server := newFakeServer(0)
+	runner := runnerOn(t, server, time.Second)
+	if err := runner.SteerTurn(context.Background(), "thread_1", "x"); !errors.Is(err, ErrNoActiveTurn) {
+		t.Errorf("idle runner: err = %v, want ErrNoActiveTurn", err)
+	}
+	runner.active = &activeTurn{client: runner.client, threadID: "thread_2", turnID: "turn_9"}
+	if err := runner.SteerTurn(context.Background(), "thread_1", "x"); !errors.Is(err, ErrNoActiveTurn) {
+		t.Errorf("other thread's turn: err = %v, want ErrNoActiveTurn", err)
+	}
+	if len(server.requests()) != 0 {
+		t.Errorf("reached the server: %v", server.requests())
+	}
+}
+
+// steeringObserver steers from inside TurnStarted, the earliest a caller can.
+type steeringObserver struct {
+	discardObserver
+	runner *Runner
+	err    chan error
+}
+
+func (o *steeringObserver) TurnStarted(threadID, _ string) {
+	o.err <- o.runner.SteerTurn(context.Background(), threadID, "right away")
+}
+
+// A turn is steerable by the time its observer is told it started.
+func TestSteerTurn_FromTurnStarted(t *testing.T) {
+	t.Parallel()
+
+	server := newFakeServer(0)
+	runner := runnerOn(t, server, time.Second)
+	obs := &steeringObserver{runner: runner, err: make(chan error, 1)}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	defer cancel()
+	_, _, _ = runner.RunTurn(ctx, "thread_1", "hi", "", obs)
+
+	select {
+	case err := <-obs.err:
+		if err != nil {
+			t.Errorf("steer from TurnStarted: %v", err)
+		}
+	default:
+		t.Fatal("TurnStarted was never called")
 	}
 }

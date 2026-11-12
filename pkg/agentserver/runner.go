@@ -682,11 +682,14 @@ func (r *Runner) runTurn(
 		r.interruptTurn(ctx, threadID, turnID)
 		return "", fmt.Errorf("codex turn/start: %w", err)
 	}
+	// Registered before the observer hears of the turn, so one that steers in
+	// response — from the callback itself or from a goroutine it wakes — finds
+	// the turn there to steer.
+	r.setActive(&activeTurn{client: client, threadID: threadID, turnID: turnID})
+	defer r.setActive(nil)
 	if o, ok := obs.(TurnObserver); ok && turnID != "" {
 		o.TurnStarted(threadID, turnID)
 	}
-	r.setActive(&activeTurn{client: client, threadID: threadID, turnID: turnID})
-	defer r.setActive(nil)
 
 	progress := &turnProgress{
 		obs:       obs,

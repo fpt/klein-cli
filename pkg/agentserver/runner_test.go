@@ -502,3 +502,36 @@ func TestSteerTurn_WithoutARunningTurn(t *testing.T) {
 		t.Errorf("reached the server: %v", server.requests())
 	}
 }
+
+// steeringObserver steers from inside TurnStarted, the earliest a caller can.
+type steeringObserver struct {
+	discardObserver
+	runner *Runner
+	err    chan error
+}
+
+func (o *steeringObserver) TurnStarted(threadID, _ string) {
+	o.err <- o.runner.SteerTurn(context.Background(), threadID, "right away")
+}
+
+// A turn is steerable by the time its observer is told it started.
+func TestSteerTurn_FromTurnStarted(t *testing.T) {
+	t.Parallel()
+
+	server := newFakeServer(0)
+	runner := runnerOn(t, server, time.Second)
+	obs := &steeringObserver{runner: runner, err: make(chan error, 1)}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	defer cancel()
+	_, _, _ = runner.RunTurn(ctx, "thread_1", "hi", "", obs)
+
+	select {
+	case err := <-obs.err:
+		if err != nil {
+			t.Errorf("steer from TurnStarted: %v", err)
+		}
+	default:
+		t.Fatal("TurnStarted was never called")
+	}
+}

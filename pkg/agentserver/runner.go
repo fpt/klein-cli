@@ -393,10 +393,10 @@ func probeReady(ctx context.Context, client *rpc.Client, dialect Dialect) error 
 }
 
 // RunTurn runs one turn against a codex thread and returns the thread id and the
-// final assistant text. An empty threadID (or one this process did not start)
-// begins a fresh thread with klein's dynamic tools registered — codex's
-// thread/resume cannot re-register dynamic tools, so a tool-enabled thread is
-// always one we started this run.
+// final assistant text. An empty threadID (or one this process neither started
+// nor forked) begins a fresh thread with klein's dynamic tools registered. To
+// continue a thread from an earlier process, fork it first (ForkThread) and
+// pass the id that returns.
 //
 // developerInstructions steers the new thread, and is read only when one is
 // started. It is where a caller puts anything a fresh thread must begin with,
@@ -437,7 +437,60 @@ func (r *Runner) RunTurn(
 	return threadID, resp, nil
 }
 
-func (r *Runner) startThread(ctx context.Context, developerInstructions string) (string, error) {
+// ForkThread forks the thread sourceThreadID (thread/fork) and returns the new
+// thread's id, which RunTurn then continues: the fork begins with the source's
+// history, read from the rollout the server persisted, so the source may be a
+// thread another process ran — an earlier run of the same job. The source is
+// left as it was, and forking it again gives a second, independent continuation.
+//
+// developerInstructions replaces the source's when not empty. The Runner's
+// model, sandbox, approval policy and MCP servers apply to the fork as they do
+// to a thread it starts. Its dynamic tools do not: thread/fork takes none, and
+// the fork keeps the ones the source was started with (codex persists them with
+// the thread). Calls to them still arrive here, so the Runner's Tools must
+// answer the same names.
+//
+// An error means there is nothing to continue — the source is unknown to this
+// server (its rollout is gone, or CODEX_HOME is another one), or the backend has
+// no thread/fork. The caller starts a fresh thread instead: RunTurn with "".
+func (r *Runner) ForkThread(ctx context.Context, sourceThreadID, developerInstructions string) (string, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	if sourceThreadID == "" {
+		return "", errors.New("codex thread/fork: no thread to fork")
+	}
+	if err := r.ensureConnected(ctx); err != nil {
+		return "", err
+	}
+
+	params := r.threadParams(developerInstructions)
+	params[keyThreadID] = sourceThreadID
+	// The history is the server's to keep; returning it would only be read past.
+	params["excludeTurns"] = true
+
+	var resp struct {
+		Thread struct {
+			ID string `json:"id"`
+		} `json:"thread"`
+	}
+	client, err := r.conn()
+	if err != nil {
+		return "", err
+	}
+	if err := client.Call(ctx, "thread/fork", params, &resp); err != nil {
+		return "", fmt.Errorf("codex thread/fork %s: %w", sourceThreadID, err)
+	}
+	if resp.Thread.ID == "" {
+		return "", errors.New("codex thread/fork returned no thread id")
+	}
+	r.started[resp.Thread.ID] = true
+	return resp.Thread.ID, nil
+}
+
+// threadParams is what thread/start and thread/fork share: where the thread
+// runs and under which policy, model, instructions and MCP servers.
+func (r *Runner) threadParams(developerInstructions string) map[string]any {
 	params := map[string]any{
 		"cwd":            r.cfg.Cwd,
 		"approvalPolicy": r.approvalPolicy(),
@@ -449,11 +502,16 @@ func (r *Runner) startThread(ctx context.Context, developerInstructions string) 
 	if developerInstructions != "" {
 		params["developerInstructions"] = developerInstructions
 	}
-	if len(r.dynTools) > 0 {
-		params["dynamicTools"] = r.dynTools
-	}
 	if len(r.cfg.MCPServers) > 0 {
 		params["config"] = map[string]any{"mcp_servers": r.cfg.MCPServers}
+	}
+	return params
+}
+
+func (r *Runner) startThread(ctx context.Context, developerInstructions string) (string, error) {
+	params := r.threadParams(developerInstructions)
+	if len(r.dynTools) > 0 {
+		params["dynamicTools"] = r.dynTools
 	}
 
 	// codex's ThreadStartResponse carries the id inside the thread object.

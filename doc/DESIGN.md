@@ -428,6 +428,9 @@ A fork can also be cut at a turn (`ForkThrough` / `ForkBefore`, codex's
 `lastTurnId` / `beforeTurnId`) to retry from before a turn or branch off a
 known-good point; the turn ids come from an Observer that implements
 `TurnObserver`.
+`Runner.SteerTurn` (`turn/steer`) adds input to the turn in flight on a thread —
+the one Runner call made alongside a turn rather than after it; if the turn has
+already ended it fails, and the caller sends the input as the next turn.
 
 **Spawned or dialed.** The transport is the one place these two deployments
 differ. `appserver.command` spawns a child and speaks JSONL over its stdio;

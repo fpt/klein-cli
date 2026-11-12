@@ -416,10 +416,14 @@ schedule tools as `dynamicTools` on `thread/start`, and services the backend's
 MCP servers** are also passed through backend config; filesystem/shell come from
 the backend's own native tools.
 
-Thread lifecycle: `dynamicTools` cannot be re-registered on `thread/resume`, so a
-tool-enabled thread is always one this process started — a session's persisted
-`thread_id` from a prior run is replaced by a fresh (tool-enabled) thread on its
-next turn (memory-context injection still carries facts across restarts).
+Thread lifecycle: `thread/resume` and `thread/fork` take no `dynamicTools`, so
+klein itself only runs turns on threads this process started — a session's
+persisted `thread_id` from a prior run is replaced by a fresh (tool-enabled)
+thread on its next turn (memory-context injection still carries facts across
+restarts). A caller of `pkg/agentserver` that wants an earlier process's thread
+back forks it (`Runner.ForkThread`): codex persists a thread's dynamic tools with
+it, so the fork keeps the source's history and tools, and the calls to them reach
+the forking client (checked against codex 0.164). The source is left untouched.
 
 **Spawned or dialed.** The transport is the one place these two deployments
 differ. `appserver.command` spawns a child and speaks JSONL over its stdio;

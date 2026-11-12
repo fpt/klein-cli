@@ -35,7 +35,9 @@ type fakeServer struct {
 	// threadStartResult is the raw JSON answered to thread/start, so a test can
 	// choose the response shape.
 	threadStartResult string
-	seen              []map[string]any
+	// threadForkResult is the raw JSON answered to thread/fork.
+	threadForkResult string
+	seen             []map[string]any
 
 	once sync.Once
 	mu   sync.Mutex
@@ -47,6 +49,7 @@ func newFakeServer(startDelay time.Duration) *fakeServer {
 	return &fakeServer{
 		startDelay:        startDelay,
 		threadStartResult: `{"thread":{"id":"thread_new"}}`,
+		threadForkResult:  `{"thread":{"id":"thread_fork"}}`,
 		out:               make(chan string, 8),
 		closed:            make(chan struct{}),
 	}
@@ -80,6 +83,8 @@ func (f *fakeServer) WriteLine(line string) error {
 	switch req.Method {
 	case "thread/start":
 		f.reply(req.ID, f.threadStartResult)
+	case "thread/fork":
+		f.reply(req.ID, f.threadForkResult)
 	case "turn/start":
 		go func() {
 			select {
@@ -144,6 +149,68 @@ func TestStartThread_ReadsTheIDFromTheThreadObject(t *testing.T) {
 	}
 	if id != "thread_new" {
 		t.Errorf("thread id = %q, want thread_new", id)
+	}
+}
+
+// A fork continues a thread another process ran: it names the source, asks for
+// no history back, sends no dynamic tools (thread/fork takes none; the fork
+// keeps the source's), and its id is one RunTurn continues rather than replaces.
+func TestForkThread_ContinuesTheSource(t *testing.T) {
+	t.Parallel()
+
+	server := newFakeServer(0)
+	runner := runnerOn(t, server, time.Second)
+	runner.cfg.Model = "m"
+	runner.cfg.MCPServers = map[string]any{"docs": map[string]any{"command": "docs"}}
+	runner.dynTools = []map[string]any{{"name": "t"}}
+
+	id, err := runner.ForkThread(context.Background(), "thread_old", "be brief")
+	if err != nil {
+		t.Fatalf("ForkThread: %v", err)
+	}
+	if id != "thread_fork" || !runner.started[id] {
+		t.Fatalf("fork id = %q, started = %v", id, runner.started)
+	}
+	reqs := server.requests()
+	if len(reqs) != 1 || reqs[0]["method"] != "thread/fork" {
+		t.Fatalf("requests = %v", reqs)
+	}
+	p, _ := reqs[0]["params"].(map[string]any)
+	want := map[string]any{
+		"threadId": "thread_old", "excludeTurns": true, "developerInstructions": "be brief", "model": "m",
+	}
+	for k, v := range want {
+		if p[k] != v {
+			t.Errorf("thread/fork %s = %v, want %v", k, p[k], v)
+		}
+	}
+	if p["config"] == nil {
+		t.Errorf("thread/fork was sent no MCP servers: %v", p)
+	}
+	if _, ok := p["dynamicTools"]; ok {
+		t.Errorf("thread/fork was sent dynamicTools: %v", p)
+	}
+}
+
+// Nothing to continue is an error, not a fresh thread under the old name: the
+// caller decides to start over.
+func TestForkThread_WithoutASourceOrAnID_Fails(t *testing.T) {
+	t.Parallel()
+
+	server := newFakeServer(0)
+	runner := runnerOn(t, server, time.Second)
+	if _, err := runner.ForkThread(context.Background(), "", ""); err == nil {
+		t.Error("want an error for an empty source thread")
+	}
+	if len(server.requests()) != 0 {
+		t.Errorf("an empty source reached the server: %v", server.requests())
+	}
+	server.threadForkResult = `{}`
+	if _, err := runner.ForkThread(context.Background(), "thread_old", ""); err == nil {
+		t.Error("want an error when thread/fork returns no id")
+	}
+	if len(runner.started) != 1 { // only runnerOn's thread_1
+		t.Errorf("started = %v", runner.started)
 	}
 }
 

@@ -512,6 +512,57 @@ func (r *Runner) ForkThread(
 	return resp.Thread.ID, nil
 }
 
+// ArchiveThread archives threadID (thread/archive). codex keeps its history but
+// lists it no more, and thread/unarchive brings it back; archiving one already
+// archived does nothing. Threads it spawned (subagents) are archived with it.
+//
+// It is for threads the caller is done with — a session's thread replaced by a
+// fresh one, the source of a fork that has taken over. The thread may be one an
+// earlier process ran. This Runner forgets it either way, so a later RunTurn
+// naming it starts a new thread rather than continuing one the backend has put
+// away.
+//
+// It waits for a turn the Runner is running to end first. codex would otherwise
+// shut the thread down mid-turn.
+func (r *Runner) ArchiveThread(ctx context.Context, threadID string) error {
+	return r.removeThread(ctx, "thread/archive", threadID)
+}
+
+// DeleteThread deletes threadID (thread/delete) and its history for good,
+// along with any threads it spawned. Unlike ArchiveThread there is no undo, and
+// a thread the backend does not know is an error. Otherwise it behaves as
+// ArchiveThread does: it waits out a running turn, and the Runner forgets the
+// thread.
+func (r *Runner) DeleteThread(ctx context.Context, threadID string) error {
+	return r.removeThread(ctx, "thread/delete", threadID)
+}
+
+func (r *Runner) removeThread(ctx context.Context, method, threadID string) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	if threadID == "" {
+		return fmt.Errorf("codex %s: no thread named", method)
+	}
+	// Forgotten even if the call fails. The caller is done with the thread, and
+	// a failure can come after codex has already shut it down — continuing it
+	// then would fail on the next turn instead of starting a new one.
+	defer delete(r.started, threadID)
+
+	if err := r.ensureConnected(ctx); err != nil {
+		return err
+	}
+	client, err := r.conn()
+	if err != nil {
+		return err
+	}
+	var resp struct{}
+	if err := client.Call(ctx, method, map[string]any{keyThreadID: threadID}, &resp); err != nil {
+		return fmt.Errorf("codex %s %s: %w", method, threadID, err)
+	}
+	return nil
+}
+
 // ErrNoActiveTurn is SteerTurn's answer when no turn is running on the thread
 // to add the input to. The caller sends it as the next turn instead.
 var ErrNoActiveTurn = errors.New("no turn is running on that thread")

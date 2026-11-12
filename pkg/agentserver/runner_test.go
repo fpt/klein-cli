@@ -535,3 +535,84 @@ func TestSteerTurn_FromTurnStarted(t *testing.T) {
 		t.Fatal("TurnStarted was never called")
 	}
 }
+
+// Archiving or deleting a thread names it to the server, and the Runner then
+// forgets it, so a later RunTurn starts a new thread rather than continuing it.
+func TestRemoveThread_ForgetsTheThread(t *testing.T) {
+	t.Parallel()
+
+	for method, remove := range map[string]func(*Runner, context.Context, string) error{
+		"thread/archive": (*Runner).ArchiveThread,
+		"thread/delete":  (*Runner).DeleteThread,
+	} {
+		server := newFakeServer(0)
+		runner := runnerOn(t, server, time.Second)
+		if err := remove(runner, context.Background(), "thread_1"); err != nil {
+			t.Fatalf("%s: %v", method, err)
+		}
+		reqs := server.requests()
+		if len(reqs) != 1 || reqs[0]["method"] != method {
+			t.Fatalf("%s: requests = %v", method, reqs)
+		}
+		if p, _ := reqs[0]["params"].(map[string]any); p[keyThreadID] != "thread_1" {
+			t.Errorf("%s: params = %v", method, p)
+		}
+		if runner.started["thread_1"] {
+			t.Errorf("%s: the Runner still continues thread_1", method)
+		}
+	}
+}
+
+// Without a thread named there is nothing to send.
+func TestRemoveThread_WithoutAThread_Fails(t *testing.T) {
+	t.Parallel()
+
+	server := newFakeServer(0)
+	runner := runnerOn(t, server, time.Second)
+	if err := runner.ArchiveThread(context.Background(), ""); err == nil {
+		t.Error("ArchiveThread: want an error for no thread")
+	}
+	if err := runner.DeleteThread(context.Background(), ""); err == nil {
+		t.Error("DeleteThread: want an error for no thread")
+	}
+	if len(server.requests()) != 0 {
+		t.Errorf("reached the server: %v", server.requests())
+	}
+}
+
+// A thread with a turn running is removed only once the turn is over: codex
+// would shut it down mid-turn.
+func TestRemoveThread_WaitsForTheRunningTurn(t *testing.T) {
+	t.Parallel()
+
+	server := newFakeServer(0)
+	runner := runnerOn(t, server, time.Second)
+	obs := &signalingObserver{started: make(chan struct{})}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	turnDone := make(chan struct{})
+	go func() {
+		defer close(turnDone)
+		_, _, _ = runner.RunTurn(ctx, "thread_1", "hi", "", obs)
+	}()
+	<-obs.started
+
+	archived := make(chan struct{})
+	go func() {
+		defer close(archived)
+		_ = runner.ArchiveThread(context.Background(), "thread_1")
+	}()
+	select {
+	case <-archived:
+		t.Fatal("archived while the turn was still running")
+	case <-time.After(100 * time.Millisecond):
+	}
+
+	cancel()
+	<-turnDone
+	select {
+	case <-archived:
+	case <-time.After(time.Second):
+		t.Fatal("never archived after the turn ended")
+	}
+}

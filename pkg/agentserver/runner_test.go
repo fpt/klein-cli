@@ -341,3 +341,85 @@ func TestDialectZeroValueIsGeneric(t *testing.T) {
 		t.Errorf("the zero Dialect is %v, want DialectGeneric", unset)
 	}
 }
+
+// A fork point names the turn to cut at, by the field codex reads for that
+// side of it, and only that field.
+func TestForkThread_AtATurn(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct {
+		opt        ForkOption
+		sent, left string
+	}{
+		{ForkThrough("turn_3"), "lastTurnId", "beforeTurnId"},
+		{ForkBefore("turn_3"), "beforeTurnId", "lastTurnId"},
+	} {
+		server := newFakeServer(0)
+		runner := runnerOn(t, server, time.Second)
+		if _, err := runner.ForkThread(context.Background(), "thread_old", "", tc.opt); err != nil {
+			t.Fatalf("ForkThread: %v", err)
+		}
+		p, _ := server.requests()[0]["params"].(map[string]any)
+		if p[tc.sent] != "turn_3" {
+			t.Errorf("thread/fork %s = %v, want turn_3", tc.sent, p[tc.sent])
+		}
+		if _, ok := p[tc.left]; ok {
+			t.Errorf("thread/fork was sent %s too: %v", tc.left, p)
+		}
+	}
+}
+
+// A fork point that cannot be honored fails before reaching the server, rather
+// than quietly forking the whole history: an empty id is a caller that lost the
+// turn it meant.
+func TestForkThread_AtAnUnusableTurn_Fails(t *testing.T) {
+	t.Parallel()
+
+	for name, opts := range map[string][]ForkOption{
+		"both":          {ForkThrough("turn_1"), ForkBefore("turn_2")},
+		"empty through": {ForkThrough("")},
+		"empty before":  {ForkBefore("")},
+	} {
+		server := newFakeServer(0)
+		runner := runnerOn(t, server, time.Second)
+		if _, err := runner.ForkThread(context.Background(), "thread_old", "", opts...); err == nil {
+			t.Errorf("%s: want an error", name)
+		}
+		if len(server.requests()) != 0 {
+			t.Errorf("%s: reached the server: %v", name, server.requests())
+		}
+	}
+}
+
+type turnRecorder struct {
+	discardObserver
+	mu    sync.Mutex
+	turns [][2]string
+}
+
+func (o *turnRecorder) TurnStarted(threadID, turnID string) {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	o.turns = append(o.turns, [2]string{threadID, turnID})
+}
+
+// A TurnObserver is told each turn's id once the backend accepts it — the id a
+// later ForkThrough or ForkBefore takes.
+func TestRunTurn_ReportsTheTurnID(t *testing.T) {
+	t.Parallel()
+
+	server := newFakeServer(0)
+	runner := runnerOn(t, server, time.Second)
+	obs := &turnRecorder{}
+
+	// The fake never completes a turn, so the deadline ends it once started.
+	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	defer cancel()
+	_, _, _ = runner.RunTurn(ctx, "thread_1", "hi", "", obs)
+
+	obs.mu.Lock()
+	defer obs.mu.Unlock()
+	if len(obs.turns) != 1 || obs.turns[0] != [2]string{"thread_1", testTurn} {
+		t.Errorf("turns reported = %v", obs.turns)
+	}
+}

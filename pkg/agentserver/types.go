@@ -246,6 +246,17 @@ type TokenUsageObserver interface {
 	TokenUsageUpdated(TokenUsage)
 }
 
+// TurnObserver is an optional extension an Observer may implement to learn the
+// id of each turn it watches — the handle ForkThrough and ForkBefore take, so a
+// caller that records it can later fork a thread from that point.
+//
+// TurnStarted is called once per turn, after the backend has accepted it and
+// before any of its activity is reported. Optional for the same reason as
+// TokenUsageObserver: Observer is implemented outside this module.
+type TurnObserver interface {
+	TurnStarted(threadID, turnID string)
+}
+
 // discardObserver is what a nil Observer becomes, so the render path can call
 // through unconditionally.
 type discardObserver struct{}

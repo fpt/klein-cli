@@ -513,14 +513,16 @@ func (r *Runner) ForkThread(
 }
 
 // ArchiveThread archives threadID (thread/archive). codex keeps its history but
-// lists it no more, and thread/unarchive brings it back; archiving one already
-// archived does nothing. Threads it spawned (subagents) are archived with it.
+// lists it no more, and thread/unarchive brings it back. Threads it spawned
+// (subagents) are archived with it. Archiving one already archived is an error
+// (codex 0.164: "no rollout found"), as is one the backend does not know.
 //
 // It is for threads the caller is done with — a session's thread replaced by a
-// fresh one, the source of a fork that has taken over. The thread may be one an
-// earlier process ran. This Runner forgets it either way, so a later RunTurn
-// naming it starts a new thread rather than continuing one the backend has put
-// away.
+// fresh one, the source of a fork that has taken over. An archived thread
+// cannot be forked until it is unarchived, so the source of a fork is done
+// with only once nothing will fork it again. The thread may be one an earlier
+// process ran. This Runner forgets it either way, so a later RunTurn naming it
+// starts a new thread rather than continuing one the backend has put away.
 //
 // It waits for a turn the Runner is running to end first. codex would otherwise
 // shut the thread down mid-turn.
@@ -530,9 +532,17 @@ func (r *Runner) ArchiveThread(ctx context.Context, threadID string) error {
 
 // DeleteThread deletes threadID (thread/delete) and its history for good,
 // along with any threads it spawned. Unlike ArchiveThread there is no undo, and
-// a thread the backend does not know is an error. Otherwise it behaves as
-// ArchiveThread does: it waits out a running turn, and the Runner forgets the
-// thread.
+// a thread the backend does not know — one already deleted — is an error.
+//
+// A thread that has been forked cannot be deleted while a fork of it exists: a
+// fork's history refers to its source's rather than copying it, and codex
+// refuses (0.164: "forked history still references it"). Delete the forks
+// first, or archive the source instead.
+//
+// Otherwise it behaves as ArchiveThread does: it waits out a running turn, and
+// the Runner forgets the thread — also when the delete was refused and the
+// thread is still there. To go on with such a thread, fork it (ForkThread);
+// RunTurn naming it would start a new one.
 func (r *Runner) DeleteThread(ctx context.Context, threadID string) error {
 	return r.removeThread(ctx, "thread/delete", threadID)
 }
@@ -546,7 +556,9 @@ func (r *Runner) removeThread(ctx context.Context, method, threadID string) erro
 	}
 	// Forgotten even if the call fails. The caller is done with the thread, and
 	// a failure can come after codex has already shut it down — continuing it
-	// then would fail on the next turn instead of starting a new one.
+	// then would fail on the next turn instead of starting a new one. The cost
+	// is a refusal that left the thread untouched (a delete of a forked
+	// thread): it is forgotten too, and only ForkThread reaches it again.
 	defer delete(r.started, threadID)
 
 	if err := r.ensureConnected(ctx); err != nil {

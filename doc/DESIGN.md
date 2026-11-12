@@ -434,7 +434,11 @@ already ended it fails, and the caller sends the input as the next turn.
 `ArchiveThread` / `DeleteThread` (`thread/archive`, `thread/delete`) clear away
 threads a caller is done with, such as a replaced session thread or a fork's
 source. Each waits for a running turn to end first, and the Runner then forgets
-the thread, so naming it again starts a new one.
+the thread, so naming it again starts a new one. A fork refers to its source's
+history rather than copying it, which shapes both (checked against codex 0.164):
+an archived thread cannot be forked again until it is unarchived, and a thread
+cannot be deleted while a fork of it exists. Archiving a thread twice, or
+deleting one twice, is an error.
 
 **Spawned or dialed.** The transport is the one place these two deployments
 differ. `appserver.command` spawns a child and speaks JSONL over its stdio;

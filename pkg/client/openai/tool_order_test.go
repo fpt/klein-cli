@@ -44,3 +44,21 @@ func TestConvertToolsIsSortedAndStable(t *testing.T) {
 		}
 	}
 }
+
+// A tool's description must reach the API: it carries what the parameter
+// names alone cannot (an MCP tool's units, coordinate system, preconditions).
+func TestConvertToolsSendsDescriptions(t *testing.T) {
+	tools := map[message.ToolName]message.Tool{
+		"android_tap": domain.NewMCPToolAdapter(mcpapi.Tool{
+			Name:        "android_tap",
+			Description: "Tap at normalized coordinates (0.0-1.0).",
+		}, "test", nil),
+	}
+	got := convertTools(tools)
+	if len(got) != 1 || got[0].OfFunction == nil {
+		t.Fatalf("got %+v", got)
+	}
+	if d := got[0].OfFunction.Description.Value; d != "[test] Tap at normalized coordinates (0.0-1.0)." {
+		t.Errorf("description = %q", d)
+	}
+}

@@ -216,8 +216,12 @@ func (a *MCPToolAdapter) Handler() func(ctx context.Context, args message.ToolAr
 			return message.NewToolResultError(err.Error()), nil
 		}
 
-		// Extract text content from result
+		// Extract text content from result; images (screenshots from a
+		// perception server) ride along so a vision model can see them.
 		textContent := extractTextFromMCPResult(result)
+		if images := extractImagesFromMCPResult(result); len(images) > 0 {
+			return message.NewToolResultWithImages(textContent, images), nil
+		}
 		return message.NewToolResultText(textContent), nil
 	}
 }
@@ -277,4 +281,22 @@ func extractTextFromMCPResult(result *mcpapi.CallToolResult) string {
 	}
 
 	return ""
+}
+
+// extractImagesFromMCPResult returns the base64 data of every image item in
+// result, in order.
+func extractImagesFromMCPResult(result *mcpapi.CallToolResult) []string {
+	if result == nil {
+		return nil
+	}
+	var images []string
+	for _, c := range result.Content {
+		switch img := c.(type) {
+		case mcpapi.ImageContent:
+			images = append(images, img.Data)
+		case *mcpapi.ImageContent:
+			images = append(images, img.Data)
+		}
+	}
+	return images
 }

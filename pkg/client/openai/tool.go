@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"sort"
 	"strings"
 
 	"github.com/fpt/klein-cli/pkg/agent/domain"
@@ -252,8 +253,16 @@ func convertToolArgsToJSON(args message.ToolArgumentValues) string {
 func convertTools(tools map[message.ToolName]message.Tool) []responses.ToolUnionParam {
 	var responsesTools []responses.ToolUnionParam
 
-	// Convert domain tools to Responses API format
-	for _, tool := range tools {
+	// Convert domain tools to Responses API format, in name order: a stable
+	// tool list keeps the prompt prefix identical between turns, which is what
+	// lets a local server reuse its KV cache.
+	names := make([]message.ToolName, 0, len(tools))
+	for name := range tools {
+		names = append(names, name)
+	}
+	sort.Slice(names, func(i, j int) bool { return names[i] < names[j] })
+	for _, name := range names {
+		tool := tools[name]
 		// Create properties from tool arguments
 		properties := make(map[string]any)
 		var required []string

@@ -1,0 +1,10 @@
+# Mutations for pkg/agent/state compaction split (S1–S3 in split_property_test.go).
+# name	file	perl substitution
+slice before split one short	pkg/agent/state/compaction.go	s/range messages\[:splitPoint\] \{/range messages[:splitPoint-1] {/
+ignore IDs (any later result blocks)	pkg/agent/state/compaction.go	s/MessageTypeToolResult && callsBefore\[msg.ID\(\)\]/MessageTypeToolResult/
+allow split at len	pkg/agent/state/compaction.go	s/splitPoint >= len\(messages\)/splitPoint > len(messages)/
+search stops before split 1	pkg/agent/state/compaction.go	s/for i := desiredSplitPoint; i >= 0; i-- \{/for i := desiredSplitPoint; i > 1; i-- {/
+desired split off by one	pkg/agent/state/compaction.go	s/desiredSplitPoint := len\(messages\) - preserveRecent/desiredSplitPoint := len(messages) - preserveRecent - 1/
+search forward (earliest safe)	pkg/agent/state/compaction.go	s/for i := desiredSplitPoint; i >= 0; i-- \{\n\t\tif isSafeSplitPoint\(messages, i\)/for i := 1; i <= desiredSplitPoint; i++ {\n\t\tif isSafeSplitPoint(messages, i)/
+# reaches the generator's canceled-batch boundary: only S1/S2 on unanswered calls can see it
+unanswered call blocks split	pkg/agent/state/compaction.go	s/\tfor _, msg := range messages\[splitPoint:\] \{/\tfor _, msg := range messages[:splitPoint] {\n\t\tif msg.Type() == message.MessageTypeToolResult {\n\t\t\tdelete(callsBefore, msg.ID())\n\t\t}\n\t}\n\tif len(callsBefore) > 0 {\n\t\treturn false\n\t}\n\tfor _, msg := range messages[splitPoint:] {/

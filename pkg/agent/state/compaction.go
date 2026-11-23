@@ -450,46 +450,21 @@ func isSafeSplitPoint(messages []message.Message, splitPoint int) bool {
 		return false
 	}
 
-	// Check if we're splitting in the middle of a tool call chain
-	// Rule: Don't split if there's an unpaired tool call before the split point
-	// or an unpaired tool result after the split point
-
-	// Count unpaired tool calls before split point (looking backwards)
-	unpairedToolCalls := 0
-	for i := splitPoint - 1; i >= 0; i-- {
-		switch messages[i].Type() {
-		case message.MessageTypeToolCall:
-			unpairedToolCalls++
-		case message.MessageTypeToolResult:
-			if unpairedToolCalls > 0 {
-				unpairedToolCalls--
-			}
+	// Pairs are matched by ID (a result carries its call's ID), not by counting:
+	// a batch is written as all calls then all results (C C R R), and a
+	// canceled batch leaves calls that are never answered. Unsafe means a call
+	// before the split whose result is at or after it.
+	callsBefore := make(map[string]bool)
+	for _, msg := range messages[:splitPoint] {
+		if msg.Type() == message.MessageTypeToolCall {
+			callsBefore[msg.ID()] = true
 		}
 	}
-
-	// If there are unpaired tool calls before the split, it's not safe
-	if unpairedToolCalls > 0 {
-		return false
-	}
-
-	// Check for orphaned tool results after split point
-	unpairedToolResults := 0
-	for i := splitPoint; i < len(messages); i++ {
-		switch messages[i].Type() {
-		case message.MessageTypeToolResult:
-			unpairedToolResults++
-		case message.MessageTypeToolCall:
-			if unpairedToolResults > 0 {
-				unpairedToolResults--
-			}
+	for _, msg := range messages[splitPoint:] {
+		if msg.Type() == message.MessageTypeToolResult && callsBefore[msg.ID()] {
+			return false
 		}
 	}
-
-	// If there are unpaired tool results after the split, it's not safe
-	if unpairedToolResults > 0 {
-		return false
-	}
-
 	return true
 }
 

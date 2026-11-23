@@ -15,4 +15,4 @@ main
 testsuite/results/
 
 # rapid failure repro files (tied to the failing code; not rerun automatically)
-testdata/rapid/
+**/testdata/rapid/

@@ -1,0 +1,13 @@
+# Mutations for internal/app bracketed paste (P1–P3 in bracketed_paste_property_test.go).
+# name	file	perl substitution
+revert 617ac31: held bytes not rejoined	internal/app/bracketed_paste.go	s/if len\(r.seqBuf\) > 0 \{\n\t\tjoined/if false \&\& len(r.seqBuf) > 0 {\n\t\tjoined/
+inline limit off by one	internal/app/bracketed_paste.go	s/runeCount <= maxInlinePasteRunes/runeCount < maxInlinePasteRunes/
+bytes counted as runes	internal/app/bracketed_paste.go	s/runeCount := utf8.RuneCountInString\(text\)/runeCount := len(text) + 0*utf8.RuneCountInString(text)/
+newline no longer forces placeholder	internal/app/bracketed_paste.go	s/lineCount == 0 \&\& runeCount/runeCount/
+partial match one byte shorter	internal/app/bracketed_paste.go	s/maxCheck := len\(seq\) - 1/maxCheck := len(seq) - 2/
+end marker never held across reads	internal/app/bracketed_paste.go	s/partialLen := r.partialMatchSuffix\(remaining, pasteEndSeq\)/partialLen := 0/
+empty paste kept as a segment	internal/app/bracketed_paste.go	s/if text == "" \{\n\t\treturn/if text == "" {\n\t\tr.segments = append(r.segments, text)\n\t\treturn/
+placeholder index off by one	internal/app/bracketed_paste.go	s/idx := len\(r.segments\)$/idx := len(r.segments) + 1/m
+Read skips buffered output	internal/app/bracketed_paste.go	s/if r.outBuf.Len\(\) > 0 \{/if false \&\& r.outBuf.Len() > 0 {/
+# equivalent mutant: processBytes empties seqBuf on entry, so finalizePaste never sees held bytes
+finalize ignores held bytes	internal/app/bracketed_paste.go	s/if len\(r.seqBuf\) > 0 \{\n\t\tr.pasteBuf.Write/if false \&\& len(r.seqBuf) > 0 {\n\t\tr.pasteBuf.Write/

@@ -301,11 +301,11 @@ func convertTools(tools map[message.ToolName]message.Tool) []responses.ToolUnion
 			false, // strict - set to false for now, could be configurable
 		)
 
-		// Set description if available
-		if desc := tool.Description().String(); desc != "" {
-			// Note: There doesn't seem to be a direct way to set description
-			// in the helper function, so we might need to set it after creation
-			// or use a more direct approach
+		// The description is how the model learns what the tool does and how to
+		// call it (units, formats, preconditions); without it the model sees
+		// only the name and the parameter names.
+		if desc := tool.Description().String(); desc != "" && toolParam.OfFunction != nil {
+			toolParam.OfFunction.Description = param.NewOpt(desc)
 		}
 
 		responsesTools = append(responsesTools, toolParam)

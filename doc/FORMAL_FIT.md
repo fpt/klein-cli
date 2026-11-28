@@ -1,6 +1,6 @@
 # Formal testing fit for klein (PBT / Lean)
 
-Survey date: 2026-11-23, at `a5b6318`. #1 and #2 are done (see their Status
+Survey date: 2026-11-23, at `a5b6318`. #1, #2 and #3 are done (see their Status
 lines). The workflow is in the `property-test` project skill
 (`.claude/skills/property-test/`).
 
@@ -18,7 +18,7 @@ bracketed-paste markers split across reads`), so the counts are a lower bound.
 |---|---|---|---|---|
 | 1 | `isSafeSplitPoint` / compaction split (`pkg/agent/state/compaction.go:448`) | PBT against a reference model | S | **Confirmed bug**: rejects every split once any tool call appears earlier in the history. Pure, ~50 lines, no tests at all |
 | 2 | `BracketedPasteReader.processBytes` (`internal/app/bracketed_paste.go:123`) | PBT (chunking invariance) | S | Has a past fix (`617ac31`) for a boundary bug. The invariant holds today, so the property test locks it in |
-| 3 | Review diff parser and commentable ranges (`internal/review/diff.go`, `enrich.go:88-112`) | PBT | M | Highest fix rate (66% / 57%). Pure. Needs a generator for well-formed diffs |
+| 3 | Review diff parser and commentable ranges (`internal/review/diff.go`, `enrich.go:88-112`) | PBT | M | **Done.** Highest fix rate (66% / 57%). Pure. D1 found an edge case (a final bare empty line is dropped) |
 | 4 | Grep/Glob fallback parity (`internal/tool/search_tool_manager.go`) | Differential PBT (rg vs grep/find) | M–L | 7 of 12 commits are fixes. Two implementations of one contract. Depends on external binaries and a temp FS |
 | 5 | Path allowlist containment (`filesystem_tool_manager.go`, `enrich.go:139`) | PBT on the lexical part | M | Security-relevant (`0550ea4`, `d0f5398`, `75e35fa`). The symlink half needs a real FS |
 | 6 | Command allowlist (`internal/agentbackend/autoapprove.go:99`, `pkg/agent/react/react.go:640`) | Differential PBT with a shell parser as oracle | M | Two implementations of one security rule. **Default-whitelist issue found** (see §6), which is a policy decision, not a test target |
@@ -142,9 +142,54 @@ changes nothing.
 4. `truncateAtLine(s, n)` is a prefix of `s`, has length at most `n`, and is either `s` itself or ends in `\n`. `applyByteBudget(out)` has length at most `maxBytes` whenever `maxBytes > 0`.
 5. `CommentableRanges` gives a deleted file an empty, non-nil entry.
 
-**Team decision**: decide what happens when a hunk header undercounts or
-overcounts its body. Today an undercount lets later `--- ` lines become headers,
-and an overcount swallows lines. Pin the chosen behavior in a test.
+**Status: done.** `internal/review/diff_property_test.go`, with the generator
+in `pkg/testhelper/diffgen` (git and plain `diff -u` output; header-forging
+contents, bare empty context lines, `\ No newline`, no trailing newline,
+omitted `,1` counts, zero-count sides, new/deleted/renamed/binary/empty files).
+The properties:
+- **D1**: round trip. Parsing gives back every path, flag, hunk header, line
+  kind, content and old/new number the model encodes (covers candidates 1–2).
+- **D3**: `Validate(path, line, end)` accepts exactly the ranges whose lines
+  are all added/context lines of one hunk, and rejects paths not in the diff,
+  a rename's old path included (candidate 3).
+- **D4 / D4b**: `truncateAtLine` is the longest line-boundary prefix within
+  `n` bytes, checked against a brute-force reference. `applyByteBudget` returns
+  the input unchanged when it fits, otherwise stays within budget and keeps the
+  marker whenever it fits (candidate 4).
+- **D5**: a deleted file has a present, empty entry (candidate 5).
+- **D6**: the guarantee stated on `diffParser.feed`. In git format, a
+  miscounted hunk header never swallows the next `diff --git` file.
+
+Mutation check: `.claude/skills/property-test/mutations/review_diff.tsv`. All
+19 mutations are caught by a property, including the reverses of `2bc7f11`,
+`7d84df7` and `5bcebad`. Six are caught *only* by a property, not by the
+example tests:
+- `diff --git` made conditional on the hunk (D6);
+- `\ No newline` read as context;
+- old-side numbering started from the new start;
+- every bare empty line dropped;
+- a timestamp left on a plain-format path;
+- `truncateAtLine` cutting at `n` inclusive.
+
+**Team decisions (pinned in `diff_property_test.go`, not changed)**:
+- `TestParseUnifiedDiff_DropsFinalBareEmptyContextLine` **[verified, found by
+  D1]**: when the text has no trailing newline and its last line is an empty
+  context line written bare (`""`), that line is taken for the end of the text
+  and dropped. The hunk ends up one line short of its header. A one-line fix
+  would be to drop the final `""` only when `!p.inHunkBody()`. Not reachable
+  from the GHA harness: git writes `" "`, and `jq --rawfile` keeps the trailing
+  newline. Unverified for other callers of `klein review --input`.
+- `TestParseUnifiedDiff_UndercountLetsBodyForgeHeader`: once a header's counts
+  run out, a later `+++ x` body line renames the *same* file to `x`, and a
+  `--- x` line starts a spurious file. The next git file is unaffected (D6).
+  Practical only for hand-edited or truncated diffs.
+- `TestParseUnifiedDiff_PlainOvercountSwallowsNextFile`: in plain format,
+  `--- ` is the only file separator, so an overcounting header swallows the next
+  file into the previous one. Git format is protected.
+- `TestParseUnifiedDiff_PlainDiffCommandLineIsContext`: GNU `diff -ruN` writes a
+  `diff -ruN a/y b/y` line before each file. After a hunk, the parser reads it as
+  one extra context line of that hunk. The diff harness produces git format, so
+  this only matters if plain diffs are ever fed in.
 
 ## 4. Grep/Glob fallback parity — `internal/tool/search_tool_manager.go`
 

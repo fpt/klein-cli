@@ -1,0 +1,23 @@
+# Mutations for internal/review diff parser, ranges and truncation (D1–D6 in diff_property_test.go).
+# name	file	perl substitution
+reverse 2bc7f11 (--- always a header)	internal/review/diff.go	s/case strings.HasPrefix\(line, "--- "\) && !p.inHunkBody\(\):/case strings.HasPrefix(line, "--- "):/
++++ always a header	internal/review/diff.go	s/case strings.HasPrefix\(line, "\+\+\+ "\) && !p.inHunkBody\(\):/case strings.HasPrefix(line, "+++ "):/
+diff --git asks about the hunk	internal/review/diff.go	s/case strings.HasPrefix\(line, "diff --git "\):/case strings.HasPrefix(line, "diff --git ") && !p.inHunkBody():/
+no-newline marker read as context	internal/review/diff.go	s/case strings.HasPrefix\(line, `\\`\):\n/case false:\n/
+context keeps its space marker	internal/review/diff.go	s/content := strings.TrimPrefix\(line, " "\)/content := line/
+# reaches the BareEmptyContext boundary
+every bare empty line dropped	internal/review/diff.go	s/if line == "" && isLast \{/if line == "" {/
+old numbering starts at new start	internal/review/diff.go	s/p.oldNo, p.newNo = h.OldStart, h.NewStart/p.oldNo, p.newNo = h.NewStart, h.NewStart/
+omitted count defaults to 0	internal/review/diff.go	s/\tcount = 1\n/\tcount = 0\n/
+# reaches the Timestamps boundary
+path keeps its timestamp	internal/review/diff.go	s/if tab := strings.IndexByte\(s, '\\t'\); tab >= 0 \{/if tab := strings.IndexByte(s, '\\t'); tab < -1 {/
+range end one too far	internal/review/diff.go	s/End: h.NewStart \+ h.NewLines - 1/End: h.NewStart + h.NewLines/
+range start one too late	internal/review/diff.go	s/Start: h.NewStart, End/Start: h.NewStart + 1, End/
+Validate checks start only	internal/review/diff.go	s/line >= r.Start && endLine <= r.End/line >= r.Start \&\& line <= r.End/
+Validate strict start	internal/review/diff.go	s/line >= r.Start && endLine/line > r.Start \&\& endLine/
+deleted file gets no entry	internal/review/diff.go	s/\t\t\trs\[f.Path\] = ranges\n\t\t\tcontinue/\t\t\tcontinue/
+truncate drops the newline	internal/review/enrich.go	s/return s\[:nl\+1\]/return s[:nl]/
+reverse 7d84df7 (partial line)	internal/review/enrich.go	s/return s\[:nl\+1\]\n\t\}\n\treturn ""/return s[:nl+1]\n\t}\n\treturn s[:n]/
+truncate at n inclusive	internal/review/enrich.go	s/LastIndexByte\(s\[:n\], '\\n'\)/LastIndexByte(s[:min(n+1, len(s))], '\\n')/
+reverse 5bcebad (tiny budget)	internal/review/enrich.go	s/\tif e.maxBytes < len\(truncationMarker\) \{\n\t\treturn truncateAtLine\(out, e.maxBytes\)\n\t\}\n//
+marker not reserved	internal/review/enrich.go	s/truncateAtLine\(out, e.maxBytes-len\(truncationMarker\)\) \+ truncationMarker/truncateAtLine(out, e.maxBytes) + truncationMarker/

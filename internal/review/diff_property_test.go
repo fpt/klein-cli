@@ -322,9 +322,19 @@ func TestApplyByteBudget_WithinBudget(t *testing.T) {
 // other callers of `klein review --input`.
 func TestParseUnifiedDiff_DropsFinalBareEmptyContextLine(t *testing.T) {
 	t.Parallel()
-	files := mustParse(t, "--- a/x.txt\n+++ b/x.txt\n@@ -1,2 +1,2 @@\n-a\n+b\n")
-	if got := len(files[0].Hunks[0].Lines); got != 2 {
-		t.Fatalf("expected the final bare empty line to be dropped (2 lines), got %d: %+v", got, files[0].Hunks[0].Lines)
+	const header = "--- a/x.txt\n+++ b/x.txt\n@@ -1,2 +1,2 @@\n"
+	// The header owes three body lines: "-a", "+b" and one empty context line
+	// (old 2, new 2). Written bare with no trailing newline, that last line is
+	// the "" after the final "\n" — the same text a trailing newline produces,
+	// which is why the parser cannot tell them apart.
+	h := mustParse(t, header+"-a\n+b\n"+"")[0].Hunks[0]
+	if h.OldLines != 2 || h.NewLines != 2 || len(h.Lines) != 2 {
+		t.Fatalf("expected the final bare context line dropped (header 2/2, 2 body lines), got %+v", h)
+	}
+	// Contrast: the same body followed by a trailing newline keeps it.
+	h = mustParse(t, header+"-a\n+b\n"+"\n")[0].Hunks[0]
+	if len(h.Lines) != 3 || h.Lines[2].Kind != LineContext || h.Lines[2].Content != "" || h.Lines[2].NewNumber != 2 {
+		t.Fatalf("with a trailing newline the empty context line should be kept, got %+v", h.Lines)
 	}
 }
 
